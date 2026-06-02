@@ -1,0 +1,15 @@
+[package]
+name = "devnote-p2p"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+libp2p = { version = "0.54", features = ["tokio", "tcp", "noise", "yamux", "kad", "gossipsub", "identify", "ping", "dns", "macros", "ed25519"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }

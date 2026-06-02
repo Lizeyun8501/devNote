@@ -1,6 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/core/constants/app_constants.dart';
+import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/core/persistence/folder_repository.dart';
+import 'package:devnote/core/persistence/note_repository.dart';
+import 'package:devnote/features/notes/bloc/notes_bloc.dart';
+import 'package:devnote/features/notes/bloc/notes_event.dart';
+import 'package:devnote/features/notes/bloc/folder_bloc.dart';
+import 'package:devnote/features/notes/bloc/folder_event.dart';
+import 'package:devnote/features/notes/bloc/folder_state.dart';
+import 'package:devnote/features/notes/widgets/folder_tree.dart';
+import 'package:devnote/features/notes/widgets/note_list.dart';
 
 class NotesPage extends StatelessWidget {
   const NotesPage({super.key, required this.child});
@@ -9,13 +20,24 @@ class NotesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Row(
-        children: [
-          const _DirectoryTreePanel(),
-          const VerticalDivider(width: 1),
-          Expanded(child: child),
-        ],
+    final dbHelper = DatabaseHelper();
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(
+          create: (_) => FolderBloc(SqliteFolderRepository(dbHelper))..add(const LoadFolders()),
+        ),
+        BlocProvider(
+          create: (_) => NotesBloc(SqliteNoteRepository(dbHelper)),
+        ),
+      ],
+      child: Scaffold(
+        body: Row(
+          children: [
+            const _DirectoryTreePanel(),
+            const VerticalDivider(width: 1),
+            Expanded(child: child),
+          ],
+        ),
       ),
     );
   }
@@ -36,7 +58,15 @@ class _DirectoryTreePanel extends StatelessWidget {
           children: [
             _buildHeader(context),
             const Divider(height: 1),
-            const Expanded(child: _DirectoryTreeView()),
+            Expanded(
+              child: Column(
+                children: [
+                  const Expanded(child: FolderTree()),
+                  const Divider(height: 1),
+                  _buildFolderActions(context),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -64,50 +94,56 @@ class _DirectoryTreePanel extends StatelessWidget {
       ),
     );
   }
-}
 
-class _DirectoryTreeView extends StatelessWidget {
-  const _DirectoryTreeView();
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      children: [
-        _DirectoryTile(title: '我的笔记', icon: Icons.folder_outlined, depth: 0),
-        _DirectoryTile(title: '工作', icon: Icons.folder_outlined, depth: 1),
-        _DirectoryTile(title: '项目文档', icon: Icons.folder_outlined, depth: 2),
-        _DirectoryTile(title: '会议记录', icon: Icons.folder_outlined, depth: 2),
-        _DirectoryTile(title: '个人', icon: Icons.folder_outlined, depth: 1),
-        _DirectoryTile(title: '日记', icon: Icons.folder_outlined, depth: 2),
-        _DirectoryTile(title: '收藏', icon: Icons.folder_special_outlined, depth: 0),
-      ],
+  Widget _buildFolderActions(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+            tooltip: '新建文件夹',
+            onPressed: () => _showCreateFolderDialog(context),
+          ),
+        ],
+      ),
     );
   }
-}
 
-class _DirectoryTile extends StatelessWidget {
-  const _DirectoryTile({
-    required this.title,
-    required this.icon,
-    required this.depth,
-  });
-
-  final String title;
-  final IconData icon;
-  final int depth;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(left: 16.0 + depth * 16.0),
-      child: ListTile(
-        dense: true,
-        leading: Icon(icon, size: 18),
-        title: Text(title),
-        titleTextStyle: Theme.of(context).textTheme.bodyMedium,
-        trailing: const Icon(Icons.chevron_right, size: 16),
-        onTap: () {},
+  void _showCreateFolderDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('新建文件夹'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '文件夹名称'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              if (controller.text.isNotEmpty) {
+                final currentState = context.read<FolderBloc>().state;
+                String? parentId;
+                if (currentState is FolderLoaded) {
+                  parentId = currentState.selectedFolderId;
+                }
+                context.read<FolderBloc>().add(
+                      CreateFolder(name: controller.text, parentId: parentId),
+                    );
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: const Text('创建'),
+          ),
+        ],
       ),
     );
   }
@@ -118,83 +154,37 @@ class NotesListPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('笔记列表'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () => context.go('/search'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () {},
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _NoteCard(title: '欢迎使用 DevNote', summary: '这是一篇示例笔记...', date: '2026-06-02'),
-          _NoteCard(title: '项目计划', summary: '第一阶段：基础架构搭建...', date: '2026-06-01'),
-          _NoteCard(title: '学习笔记', summary: 'Flutter 状态管理最佳实践...', date: '2026-05-30'),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {},
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-}
-
-class _NoteCard extends StatelessWidget {
-  const _NoteCard({
-    required this.title,
-    required this.summary,
-    required this.date,
-  });
-
-  final String title;
-  final String summary;
-  final String date;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () {},
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                summary,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                date,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-              ),
-            ],
-          ),
+    return BlocListener<FolderBloc, FolderState>(
+      listener: (context, folderState) {
+        if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
+          context.read<NotesBloc>().add(LoadNotes(folderState.selectedFolderId!));
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('笔记列表'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: () => context.go('/search'),
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: () => context.go('/settings'),
+            ),
+          ],
+        ),
+        body: const NoteList(),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () {
+            final folderState = context.read<FolderBloc>().state;
+            String folderId = '';
+            if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
+              folderId = folderState.selectedFolderId!;
+            }
+            context.read<NotesBloc>().add(CreateNote(title: '无标题', folderId: folderId));
+          },
+          child: const Icon(Icons.add),
         ),
       ),
     );

@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use thiserror::Error;
+use devnote_crdt::{
+    CRDTDocument, Operation, ConflictInfo,
+    detect_conflicts, merge_documents,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SyncStatus {
@@ -33,6 +37,34 @@ pub enum SyncError {
     ServerError(String),
     #[error("local error: {0}")]
     LocalError(String),
+    #[error("crdt error: {0}")]
+    CRDTError(String),
+}
+
+impl From<devnote_crdt::CRDTError> for SyncError {
+    fn from(err: devnote_crdt::CRDTError) -> Self {
+        SyncError::CRDTError(err.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalState {
+    pub document: CRDTDocument,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub pending_operations: Vec<Operation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteChanges {
+    pub operations: Vec<Operation>,
+    pub server_version: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    pub applied_operations: Vec<Operation>,
+    pub conflicts: Vec<ConflictInfo>,
+    pub has_conflicts: bool,
 }
 
 pub trait SyncEngine: Send + Sync {
@@ -41,4 +73,152 @@ pub trait SyncEngine: Send + Sync {
     fn resolve_conflict(&mut self, use_remote: bool) -> Result<(), SyncError>;
     fn push_changes(&mut self) -> Result<SyncInfo, SyncError>;
     fn pull_changes(&mut self) -> Result<SyncInfo, SyncError>;
+}
+
+pub struct ClientSyncEngine {
+    pub device_id: String,
+    pub local_state: LocalState,
+    pub status: SyncStatus,
+    pub conflicts: Vec<ConflictInfo>,
+}
+
+impl ClientSyncEngine {
+    pub fn new(document_id: String, device_id: String) -> Self {
+        Self {
+            device_id: device_id.clone(),
+            local_state: LocalState {
+                document: CRDTDocument::new(document_id, device_id),
+                last_synced_at: None,
+                pending_operations: Vec::new(),
+            },
+            status: SyncStatus::Idle,
+            conflicts: Vec::new(),
+        }
+    }
+
+    pub fn merge_with_crdt(
+        &mut self,
+        remote_changes: RemoteChanges,
+    ) -> Result<MergeResult, SyncError> {
+        let conflicts = detect_conflicts(&self.local_state.document, &remote_changes.operations);
+
+        let applied = merge_documents(
+            &mut self.local_state.document,
+            remote_changes.operations.clone(),
+        )?;
+
+        self.local_state.pending_operations.retain(|local_op| {
+            !remote_changes.operations.iter().any(|remote_op| {
+                remote_op.id() == local_op.id()
+            })
+        });
+
+        let has_conflicts = !conflicts.is_empty();
+        if has_conflicts {
+            self.status = SyncStatus::Conflict;
+            self.conflicts = conflicts.clone();
+        } else {
+            self.status = SyncStatus::Synced;
+            self.conflicts.clear();
+        }
+
+        self.local_state.last_synced_at = Some(Utc::now());
+
+        Ok(MergeResult {
+            applied_operations: applied,
+            conflicts,
+            has_conflicts,
+        })
+    }
+
+    pub fn get_pending_operations(&self) -> &[Operation] {
+        &self.local_state.pending_operations
+    }
+
+    pub fn record_operation(&mut self, op: Operation) {
+        self.local_state.pending_operations.push(op);
+        if self.status == SyncStatus::Synced || self.status == SyncStatus::Idle {
+            self.status = SyncStatus::Idle;
+        }
+    }
+
+    pub fn resolve_conflict_manual(
+        &mut self,
+        block_id: &str,
+        use_remote: bool,
+    ) -> Result<(), SyncError> {
+        let conflict = self.conflicts.iter().find(|c| c.block_id == block_id)
+            .ok_or_else(|| SyncError::LocalError(format!("no conflict for block {}", block_id)))?;
+
+        let content = if use_remote {
+            conflict.remote_content.clone()
+        } else {
+            conflict.local_content.clone()
+        };
+
+        self.local_state.document.replace_block(
+            block_id.to_string(),
+            conflict.local_content.clone(),
+            content,
+        );
+
+        self.conflicts.retain(|c| c.block_id != block_id);
+        if self.conflicts.is_empty() {
+            self.status = SyncStatus::Synced;
+        }
+
+        Ok(())
+    }
+}
+
+impl SyncEngine for ClientSyncEngine {
+    fn sync(&mut self) -> Result<SyncInfo, SyncError> {
+        self.status = SyncStatus::Syncing;
+        Ok(SyncInfo {
+            status: self.status.clone(),
+            last_synced_at: self.local_state.last_synced_at,
+            pending_changes: self.local_state.pending_operations.len() as u64,
+            server_version: None,
+            local_version: self.local_state.document.sequence,
+        })
+    }
+
+    fn get_status(&self) -> SyncStatus {
+        self.status.clone()
+    }
+
+    fn resolve_conflict(&mut self, use_remote: bool) -> Result<(), SyncError> {
+        if self.conflicts.is_empty() {
+            return Err(SyncError::LocalError("no conflicts to resolve".to_string()));
+        }
+
+        let block_ids: Vec<String> = self.conflicts.iter().map(|c| c.block_id.clone()).collect();
+        for block_id in block_ids {
+            self.resolve_conflict_manual(&block_id, use_remote)?;
+        }
+
+        Ok(())
+    }
+
+    fn push_changes(&mut self) -> Result<SyncInfo, SyncError> {
+        self.status = SyncStatus::Syncing;
+        Ok(SyncInfo {
+            status: self.status.clone(),
+            last_synced_at: self.local_state.last_synced_at,
+            pending_changes: self.local_state.pending_operations.len() as u64,
+            server_version: None,
+            local_version: self.local_state.document.sequence,
+        })
+    }
+
+    fn pull_changes(&mut self) -> Result<SyncInfo, SyncError> {
+        self.status = SyncStatus::Syncing;
+        Ok(SyncInfo {
+            status: self.status.clone(),
+            last_synced_at: self.local_state.last_synced_at,
+            pending_changes: self.local_state.pending_operations.len() as u64,
+            server_version: None,
+            local_version: self.local_state.document.sequence,
+        })
+    }
 }

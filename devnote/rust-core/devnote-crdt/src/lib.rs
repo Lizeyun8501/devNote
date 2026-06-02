@@ -1,0 +1,922 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use chrono::Utc;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum CRDTError {
+    #[error("operation conflict: {0}")]
+    Conflict(String),
+    #[error("invalid operation: {0}")]
+    InvalidOperation(String),
+    #[error("tombstone already deleted: {0}")]
+    TombstoneDeleted(String),
+    #[error("serialization error: {0}")]
+    SerializationError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct OperationId {
+    pub timestamp: i64,
+    pub device_id: String,
+    pub sequence: u64,
+}
+
+impl OperationId {
+    pub fn new(device_id: String) -> Self {
+        Self {
+            timestamp: Utc::now().timestamp_millis(),
+            device_id,
+            sequence: 0,
+        }
+    }
+
+    pub fn with_sequence(device_id: String, sequence: u64) -> Self {
+        Self {
+            timestamp: Utc::now().timestamp_millis(),
+            device_id,
+            sequence,
+        }
+    }
+}
+
+impl Ord for OperationId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.timestamp
+            .cmp(&other.timestamp)
+            .then_with(|| self.device_id.cmp(&other.device_id))
+            .then_with(|| self.sequence.cmp(&other.sequence))
+    }
+}
+
+impl PartialOrd for OperationId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VectorClock {
+    pub clocks: HashMap<String, u64>,
+}
+
+impl VectorClock {
+    pub fn new() -> Self {
+        Self {
+            clocks: HashMap::new(),
+        }
+    }
+
+    pub fn increment(&mut self, device_id: &str) -> u64 {
+        let counter = self.clocks.entry(device_id.to_string()).or_insert(0);
+        *counter += 1;
+        *counter
+    }
+
+    pub fn get(&self, device_id: &str) -> u64 {
+        *self.clocks.get(device_id).unwrap_or(&0)
+    }
+
+    pub fn merge(&mut self, other: &VectorClock) {
+        for (device_id, counter) in &other.clocks {
+            let current = self.clocks.entry(device_id.clone()).or_insert(0);
+            *current = (*current).max(*counter);
+        }
+    }
+
+    pub fn happens_before(&self, other: &VectorClock) -> bool {
+        let all_leq = self
+            .clocks
+            .iter()
+            .all(|(device_id, counter)| counter <= other.clocks.get(device_id).unwrap_or(&0));
+        let any_lt = self
+            .clocks
+            .iter()
+            .any(|(device_id, counter)| counter < other.clocks.get(device_id).unwrap_or(&0));
+        all_leq && any_lt
+    }
+
+    pub fn is_concurrent(&self, other: &VectorClock) -> bool {
+        !self.happens_before(other) && !other.happens_before(self) && self != other
+    }
+}
+
+impl Default for VectorClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Operation {
+    Insert {
+        id: OperationId,
+        block_id: String,
+        position: usize,
+        content: String,
+        vector_clock: VectorClock,
+    },
+    Delete {
+        id: OperationId,
+        block_id: String,
+        vector_clock: VectorClock,
+    },
+    Replace {
+        id: OperationId,
+        block_id: String,
+        old_content: String,
+        new_content: String,
+        vector_clock: VectorClock,
+    },
+    Move {
+        id: OperationId,
+        block_id: String,
+        from_position: usize,
+        to_position: usize,
+        vector_clock: VectorClock,
+    },
+}
+
+impl Operation {
+    pub fn id(&self) -> &OperationId {
+        match self {
+            Operation::Insert { id, .. } => id,
+            Operation::Delete { id, .. } => id,
+            Operation::Replace { id, .. } => id,
+            Operation::Move { id, .. } => id,
+        }
+    }
+
+    pub fn vector_clock(&self) -> &VectorClock {
+        match self {
+            Operation::Insert { vector_clock, .. } => vector_clock,
+            Operation::Delete { vector_clock, .. } => vector_clock,
+            Operation::Replace { vector_clock, .. } => vector_clock,
+            Operation::Move { vector_clock, .. } => vector_clock,
+        }
+    }
+
+    pub fn block_id(&self) -> &str {
+        match self {
+            Operation::Insert { block_id, .. } => block_id,
+            Operation::Delete { block_id, .. } => block_id,
+            Operation::Replace { block_id, .. } => block_id,
+            Operation::Move { block_id, .. } => block_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CRDTDocument {
+    pub id: String,
+    pub version: VectorClock,
+    pub blocks: Vec<BlockCRDT>,
+    pub operations: Vec<Operation>,
+    pub device_id: String,
+    pub sequence: u64,
+}
+
+impl CRDTDocument {
+    pub fn new(id: String, device_id: String) -> Self {
+        Self {
+            id,
+            version: VectorClock::new(),
+            blocks: Vec::new(),
+            operations: Vec::new(),
+            device_id,
+            sequence: 0,
+        }
+    }
+
+    pub fn next_operation_id(&mut self) -> OperationId {
+        self.sequence += 1;
+        self.version.increment(&self.device_id);
+        OperationId::with_sequence(self.device_id.clone(), self.sequence)
+    }
+
+    pub fn insert_block(&mut self, block_id: String, position: usize, content: String) -> Operation {
+        let id = self.next_operation_id();
+        let op = Operation::Insert {
+            id: id.clone(),
+            block_id,
+            position,
+            content: content.clone(),
+            vector_clock: self.version.clone(),
+        };
+        self.apply_operation(op.clone()).unwrap();
+        op
+    }
+
+    pub fn delete_block(&mut self, block_id: String) -> Operation {
+        let id = self.next_operation_id();
+        let op = Operation::Delete {
+            id: id.clone(),
+            block_id,
+            vector_clock: self.version.clone(),
+        };
+        self.apply_operation(op.clone()).unwrap();
+        op
+    }
+
+    pub fn replace_block(&mut self, block_id: String, old_content: String, new_content: String) -> Operation {
+        let id = self.next_operation_id();
+        let op = Operation::Replace {
+            id: id.clone(),
+            block_id,
+            old_content,
+            new_content,
+            vector_clock: self.version.clone(),
+        };
+        self.apply_operation(op.clone()).unwrap();
+        op
+    }
+
+    pub fn move_block(&mut self, block_id: String, from_position: usize, to_position: usize) -> Operation {
+        let id = self.next_operation_id();
+        let op = Operation::Move {
+            id: id.clone(),
+            block_id,
+            from_position,
+            to_position,
+            vector_clock: self.version.clone(),
+        };
+        self.apply_operation(op.clone()).unwrap();
+        op
+    }
+
+    pub fn merge(&mut self, remote_ops: Vec<Operation>) -> Result<Vec<Operation>, CRDTError> {
+        let mut applied_ops = Vec::new();
+        let local_ids: std::collections::HashSet<OperationId> = self
+            .operations
+            .iter()
+            .map(|op| op.id().clone())
+            .collect();
+
+        let mut new_ops: Vec<&Operation> = remote_ops
+            .iter()
+            .filter(|op| !local_ids.contains(op.id()))
+            .collect();
+
+        new_ops.sort_by_key(|op| op.id());
+
+        for op in new_ops {
+            let transformed = transform(op.clone(), &self.operations)?;
+            match self.apply_operation(transformed.clone()) {
+                Ok(()) => {
+                    applied_ops.push(transformed);
+                }
+                Err(CRDTError::TombstoneDeleted(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+
+        self.version.merge(
+            &remote_ops
+                .iter()
+                .fold(VectorClock::new(), |mut acc, op| {
+                    acc.merge(op.vector_clock());
+                    acc
+                }),
+        );
+
+        Ok(applied_ops)
+    }
+
+    pub fn apply_operation(&mut self, op: Operation) -> Result<(), CRDTError> {
+        match &op {
+            Operation::Insert {
+                id,
+                block_id,
+                position,
+                content,
+                ..
+            } => {
+                let block = BlockCRDT {
+                    id: block_id.clone(),
+                    position: *position,
+                    content: content.clone(),
+                    tombstone: false,
+                    last_modified_id: id.clone(),
+                    text_crdt: TextCRDT::new(content.clone()),
+                };
+                self.blocks.push(block);
+                self.blocks.sort_by(|a, b| a.last_modified_id.cmp(&b.last_modified_id));
+                self.reindex_positions();
+            }
+            Operation::Delete { block_id, .. } => {
+                let block = self
+                    .blocks
+                    .iter_mut()
+                    .find(|b| b.id == *block_id)
+                    .ok_or_else(|| {
+                        CRDTError::InvalidOperation(format!("block {} not found", block_id))
+                    })?;
+                if block.tombstone {
+                    return Err(CRDTError::TombstoneDeleted(block_id.clone()));
+                }
+                block.tombstone = true;
+            }
+            Operation::Replace {
+                id,
+                block_id,
+                new_content,
+                ..
+            } => {
+                let block = self
+                    .blocks
+                    .iter_mut()
+                    .find(|b| b.id == *block_id)
+                    .ok_or_else(|| {
+                        CRDTError::InvalidOperation(format!("block {} not found", block_id))
+                    })?;
+                if block.tombstone {
+                    return Err(CRDTError::TombstoneDeleted(block_id.clone()));
+                }
+                block.content = new_content.clone();
+                block.last_modified_id = id.clone();
+                block.text_crdt = TextCRDT::new(new_content.clone());
+            }
+            Operation::Move {
+                id,
+                block_id,
+                to_position,
+                ..
+            } => {
+                let block = self
+                    .blocks
+                    .iter_mut()
+                    .find(|b| b.id == *block_id)
+                    .ok_or_else(|| {
+                        CRDTError::InvalidOperation(format!("block {} not found", block_id))
+                    })?;
+                if block.tombstone {
+                    return Err(CRDTError::TombstoneDeleted(block_id.clone()));
+                }
+                block.position = *to_position;
+                block.last_modified_id = id.clone();
+                self.reindex_positions();
+            }
+        }
+        self.operations.push(op);
+        Ok(())
+    }
+
+    fn reindex_positions(&mut self) {
+        let mut active: Vec<&mut BlockCRDT> = self
+            .blocks
+            .iter_mut()
+            .filter(|b| !b.tombstone)
+            .collect();
+        active.sort_by_key(|b| b.position);
+        for (i, block) in active.iter_mut().enumerate() {
+            block.position = i;
+        }
+    }
+
+    pub fn active_blocks(&self) -> Vec<&BlockCRDT> {
+        let mut blocks: Vec<&BlockCRDT> = self.blocks.iter().filter(|b| !b.tombstone).collect();
+        blocks.sort_by_key(|b| b.position);
+        blocks
+    }
+}
+
+pub fn transform(op: Operation, existing_ops: &[Operation]) -> Result<Operation, CRDTError> {
+    let conflicting: Vec<&Operation> = existing_ops
+        .iter()
+        .filter(|existing| {
+            existing.block_id() == op.block_id()
+                && existing.vector_clock().is_concurrent(op.vector_clock())
+        })
+        .collect();
+
+    if conflicting.is_empty() {
+        return Ok(op);
+    }
+
+    match op {
+        Operation::Insert {
+            id,
+            block_id,
+            position,
+            content,
+            vector_clock,
+        } => {
+            let adjusted_position = conflicting
+                .iter()
+                .filter_map(|c| {
+                    if let Operation::Insert { id: cid, .. } = c {
+                        if cid < &id {
+                            Some(1usize)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .sum::<usize>();
+            Ok(Operation::Insert {
+                id,
+                block_id,
+                position: position + adjusted_position,
+                content,
+                vector_clock,
+            })
+        }
+        Operation::Delete { .. } => Ok(op),
+        Operation::Replace {
+            id,
+            block_id,
+            old_content,
+            new_content,
+            vector_clock,
+        } => {
+            let latest_conflict = conflicting.iter().max_by_key(|c| c.id());
+            if let Some(latest) = latest_conflict {
+                if latest.id() > &id {
+                    return Ok(Operation::Replace {
+                        id,
+                        block_id,
+                        old_content,
+                        new_content,
+                        vector_clock,
+                    });
+                }
+            }
+            Ok(Operation::Replace {
+                id,
+                block_id,
+                old_content,
+                new_content,
+                vector_clock,
+            })
+        }
+        Operation::Move {
+            id,
+            block_id,
+            from_position,
+            to_position,
+            vector_clock,
+        } => {
+            let latest_conflict = conflicting.iter().max_by_key(|c| c.id());
+            if let Some(latest) = latest_conflict {
+                if latest.id() > &id {
+                    return Ok(Operation::Move {
+                        id,
+                        block_id,
+                        from_position,
+                        to_position,
+                        vector_clock,
+                    });
+                }
+            }
+            Ok(Operation::Move {
+                id,
+                block_id,
+                from_position,
+                to_position,
+                vector_clock,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockCRDT {
+    pub id: String,
+    pub position: usize,
+    pub content: String,
+    pub tombstone: bool,
+    pub last_modified_id: OperationId,
+    pub text_crdt: TextCRDT,
+}
+
+impl BlockCRDT {
+    pub fn new(id: String, position: usize, content: String, device_id: String) -> Self {
+        let op_id = OperationId::new(device_id);
+        Self {
+            id,
+            position,
+            content: content.clone(),
+            tombstone: false,
+            last_modified_id: op_id,
+            text_crdt: TextCRDT::new(content),
+        }
+    }
+
+    pub fn insert_char(&mut self, index: usize, ch: char, op_id: OperationId) {
+        self.text_crdt.insert(index, ch, op_id.clone());
+        self.content = self.text_crdt.to_string();
+        self.last_modified_id = op_id;
+    }
+
+    pub fn delete_range(&mut self, start: usize, end: usize, op_id: OperationId) {
+        self.text_crdt.delete(start, end, op_id.clone());
+        self.content = self.text_crdt.to_string();
+        self.last_modified_id = op_id;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RGAChar {
+    pub ch: char,
+    pub id: OperationId,
+    pub left_id: Option<OperationId>,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextCRDT {
+    pub chars: Vec<RGAChar>,
+}
+
+impl TextCRDT {
+    pub fn new(content: String) -> Self {
+        let chars = content
+            .chars()
+            .enumerate()
+            .map(|(i, ch)| RGAChar {
+                ch,
+                id: OperationId {
+                    timestamp: 0,
+                    device_id: String::new(),
+                    sequence: i as u64,
+                },
+                left_id: if i > 0 {
+                    Some(OperationId {
+                        timestamp: 0,
+                        device_id: String::new(),
+                        sequence: (i - 1) as u64,
+                    })
+                } else {
+                    None
+                },
+                deleted: false,
+            })
+            .collect();
+        Self { chars }
+    }
+
+    pub fn insert(&mut self, index: usize, ch: char, op_id: OperationId) {
+        let left_id = if index > 0 && !self.chars.is_empty() {
+            let active: Vec<&RGAChar> = self.chars.iter().filter(|c| !c.deleted).collect();
+            if index > 0 && index <= active.len() {
+                Some(active[index - 1].id.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let rga_char = RGAChar {
+            ch,
+            id: op_id,
+            left_id,
+            deleted: false,
+        };
+
+        let insert_pos = self.find_insert_position(&rga_char);
+        self.chars.insert(insert_pos, rga_char);
+    }
+
+    fn find_insert_position(&self, new_char: &RGAChar) -> usize {
+        if self.chars.is_empty() {
+            return 0;
+        }
+
+        match &new_char.left_id {
+            Some(left_id) => {
+                for (i, c) in self.chars.iter().enumerate() {
+                    if c.id == *left_id {
+                        let mut pos = i + 1;
+                        while pos < self.chars.len()
+                            && self.chars[pos].left_id == Some(left_id.clone())
+                            && self.chars[pos].id < new_char.id
+                        {
+                            pos += 1;
+                        }
+                        return pos;
+                    }
+                }
+                self.chars.len()
+            }
+            None => {
+                let mut pos = 0;
+                while pos < self.chars.len() && self.chars[pos].left_id.is_none() && self.chars[pos].id < new_char.id {
+                    pos += 1;
+                }
+                pos
+            }
+        }
+    }
+
+    pub fn delete(&mut self, start: usize, end: usize, _op_id: OperationId) {
+        let active_indices: Vec<usize> = self
+            .chars
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.deleted)
+            .map(|(i, _)| i)
+            .collect();
+
+        for i in start..end {
+            if i < active_indices.len() {
+                self.chars[active_indices[i]].deleted = true;
+            }
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        self.chars
+            .iter()
+            .filter(|c| !c.deleted)
+            .map(|c| c.ch)
+            .collect()
+    }
+
+    pub fn merge(&mut self, remote: &TextCRDT) {
+        let local_ids: std::collections::HashSet<String> = self
+            .chars
+            .iter()
+            .map(|c| format!("{}:{}", c.id.device_id, c.id.sequence))
+            .collect();
+
+        for remote_char in &remote.chars {
+            let key = format!("{}:{}", remote_char.id.device_id, remote_char.id.sequence);
+            if !local_ids.contains(&key) {
+                let pos = self.find_insert_position(remote_char);
+                let mut new_char = remote_char.clone();
+                if remote_char.deleted {
+                    if let Some(local) = self.chars.iter().find(|c| c.id == remote_char.id) {
+                        new_char.deleted = local.deleted || remote_char.deleted;
+                    }
+                }
+                self.chars.insert(pos, new_char);
+            } else if remote_char.deleted {
+                if let Some(local) = self.chars.iter_mut().find(|c| {
+                    format!("{}:{}", c.id.device_id, c.id.sequence) == key
+                }) {
+                    local.deleted = local.deleted || remote_char.deleted;
+                }
+            }
+        }
+    }
+}
+
+pub fn merge_documents(local: &mut CRDTDocument, remote_ops: Vec<Operation>) -> Result<Vec<Operation>, CRDTError> {
+    local.merge(remote_ops)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictInfo {
+    pub block_id: String,
+    pub local_content: String,
+    pub remote_content: String,
+    pub local_operation_id: OperationId,
+    pub remote_operation_id: OperationId,
+    pub conflict_type: ConflictType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ConflictType {
+    ContentConflict,
+    MoveConflict,
+    DeleteModifyConflict,
+}
+
+pub fn detect_conflicts(local: &CRDTDocument, remote_ops: &[Operation]) -> Vec<ConflictInfo> {
+    let mut conflicts = Vec::new();
+    let local_op_ids: std::collections::HashSet<String> = local
+        .operations
+        .iter()
+        .map(|op| format!("{}:{}", op.id().device_id, op.id().sequence))
+        .collect();
+
+    for remote_op in remote_ops {
+        if local_op_ids.contains(&format!(
+            "{}:{}",
+            remote_op.id().device_id,
+            remote_op.id().sequence
+        )) {
+            continue;
+        }
+
+        match remote_op {
+            Operation::Replace {
+                id: remote_id,
+                block_id,
+                new_content: remote_content,
+                ..
+            } => {
+                if let Some(local_op) = local.operations.iter().rev().find(|op| {
+                    op.block_id() == block_id.as_str()
+                        && matches!(op, Operation::Replace { .. })
+                        && op.vector_clock().is_concurrent(remote_op.vector_clock())
+                }) {
+                    if let Operation::Replace {
+                        id: local_id,
+                        new_content: local_content,
+                        ..
+                    } = local_op
+                    {
+                        let local_block = local.blocks.iter().find(|b| b.id == *block_id);
+                        let current_local = local_block.map(|b| b.content.clone()).unwrap_or_default();
+                        if current_local != *remote_content {
+                            conflicts.push(ConflictInfo {
+                                block_id: block_id.clone(),
+                                local_content: local_content.clone(),
+                                remote_content: remote_content.clone(),
+                                local_operation_id: local_id.clone(),
+                                remote_operation_id: remote_id.clone(),
+                                conflict_type: ConflictType::ContentConflict,
+                            });
+                        }
+                    }
+                }
+            }
+            Operation::Move {
+                id: remote_id,
+                block_id,
+                to_position: remote_pos,
+                ..
+            } => {
+                if let Some(local_op) = local.operations.iter().rev().find(|op| {
+                    op.block_id() == block_id.as_str()
+                        && matches!(op, Operation::Move { .. })
+                        && op.vector_clock().is_concurrent(remote_op.vector_clock())
+                }) {
+                    if let Operation::Move {
+                        id: local_id,
+                        to_position: local_pos,
+                        ..
+                    } = local_op
+                    {
+                        if local_pos != remote_pos {
+                            conflicts.push(ConflictInfo {
+                                block_id: block_id.clone(),
+                                local_content: format!("position: {}", local_pos),
+                                remote_content: format!("position: {}", remote_pos),
+                                local_operation_id: local_id.clone(),
+                                remote_operation_id: remote_id.clone(),
+                                conflict_type: ConflictType::MoveConflict,
+                            });
+                        }
+                    }
+                }
+            }
+            Operation::Delete {
+                id: remote_id,
+                block_id,
+                ..
+            } => {
+                if let Some(local_op) = local.operations.iter().rev().find(|op| {
+                    op.block_id() == block_id.as_str()
+                        && matches!(op, Operation::Replace { .. })
+                        && op.vector_clock().is_concurrent(remote_op.vector_clock())
+                }) {
+                    if let Operation::Replace {
+                        id: local_id,
+                        new_content: local_content,
+                        ..
+                    } = local_op
+                    {
+                        conflicts.push(ConflictInfo {
+                            block_id: block_id.clone(),
+                            local_content: local_content.clone(),
+                            remote_content: String::new(),
+                            local_operation_id: local_id.clone(),
+                            remote_operation_id: remote_id.clone(),
+                            conflict_type: ConflictType::DeleteModifyConflict,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    conflicts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_operation_id_ordering() {
+        let id1 = OperationId {
+            timestamp: 1000,
+            device_id: "device_a".to_string(),
+            sequence: 1,
+        };
+        let id2 = OperationId {
+            timestamp: 1000,
+            device_id: "device_b".to_string(),
+            sequence: 1,
+        };
+        assert!(id1 < id2);
+    }
+
+    #[test]
+    fn test_vector_clock_happens_before() {
+        let mut vc1 = VectorClock::new();
+        vc1.increment("a");
+        let mut vc2 = VectorClock::new();
+        vc2.increment("a");
+        vc2.increment("a");
+        assert!(vc1.happens_before(&vc2));
+        assert!(!vc2.happens_before(&vc1));
+    }
+
+    #[test]
+    fn test_vector_clock_concurrent() {
+        let mut vc1 = VectorClock::new();
+        vc1.increment("a");
+        let mut vc2 = VectorClock::new();
+        vc2.increment("b");
+        assert!(vc1.is_concurrent(&vc2));
+    }
+
+    #[test]
+    fn test_vector_clock_merge() {
+        let mut vc1 = VectorClock::new();
+        vc1.increment("a");
+        let mut vc2 = VectorClock::new();
+        vc2.increment("b");
+        vc1.merge(&vc2);
+        assert_eq!(vc1.get("a"), 1);
+        assert_eq!(vc1.get("b"), 1);
+    }
+
+    #[test]
+    fn test_document_insert_and_delete() {
+        let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
+        doc.insert_block("block1".to_string(), 0, "Hello".to_string());
+        assert_eq!(doc.active_blocks().len(), 1);
+        doc.delete_block("block1".to_string());
+        assert_eq!(doc.active_blocks().len(), 0);
+    }
+
+    #[test]
+    fn test_document_replace() {
+        let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
+        doc.insert_block("block1".to_string(), 0, "Hello".to_string());
+        doc.replace_block("block1".to_string(), "Hello".to_string(), "World".to_string());
+        let blocks = doc.active_blocks();
+        assert_eq!(blocks[0].content, "World");
+    }
+
+    #[test]
+    fn test_document_move() {
+        let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
+        doc.insert_block("block1".to_string(), 0, "First".to_string());
+        doc.insert_block("block2".to_string(), 1, "Second".to_string());
+        doc.move_block("block1".to_string(), 0, 1);
+        let blocks = doc.active_blocks();
+        assert_eq!(blocks[0].content, "Second");
+        assert_eq!(blocks[1].content, "First");
+    }
+
+    #[test]
+    fn test_text_crdt_insert_and_delete() {
+        let mut text = TextCRDT::new("Hello".to_string());
+        assert_eq!(text.to_string(), "Hello");
+        let op_id = OperationId::new("device_a".to_string());
+        text.insert(5, '!', op_id);
+        assert_eq!(text.to_string(), "Hello!");
+    }
+
+    #[test]
+    fn test_text_crdt_merge() {
+        let mut local = TextCRDT::new("Hello".to_string());
+        let mut remote = TextCRDT::new("Hello".to_string());
+        let op_id = OperationId::with_sequence("device_b".to_string(), 100);
+        remote.insert(5, '!', op_id);
+        local.merge(&remote);
+        assert!(local.to_string().contains('!'));
+    }
+
+    #[test]
+    fn test_merge_documents() {
+        let mut doc1 = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
+        doc1.insert_block("block1".to_string(), 0, "Hello".to_string());
+
+        let mut doc2 = CRDTDocument::new("doc1".to_string(), "device_b".to_string());
+        let op = doc2.insert_block("block2".to_string(), 0, "World".to_string());
+
+        let result = doc1.merge(vec![op]);
+        assert!(result.is_ok());
+        assert_eq!(doc1.active_blocks().len(), 2);
+    }
+
+    #[test]
+    fn test_tombstone_delete() {
+        let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
+        doc.insert_block("block1".to_string(), 0, "Hello".to_string());
+        doc.delete_block("block1".to_string());
+        let block = doc.blocks.iter().find(|b| b.id == "block1").unwrap();
+        assert!(block.tombstone);
+        assert_eq!(doc.active_blocks().len(), 0);
+    }
+}

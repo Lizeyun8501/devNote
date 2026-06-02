@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
+import 'package:devnote/features/sync/p2p/p2p_settings_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -80,6 +81,17 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const CryptoSettingsPage()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.wifi_tethering),
+              title: const Text('P2P 同步'),
+              subtitle: const Text('设备间直接同步数据'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const P2PSettingsPage()),
                 );
               },
             ),

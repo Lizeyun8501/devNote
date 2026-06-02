@@ -10,6 +10,7 @@ devnote-editor = { workspace = true }
 devnote-crypto = { workspace = true }
 devnote-search = { workspace = true }
 devnote-sync = { workspace = true }
+devnote-crdt = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
