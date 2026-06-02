@@ -74,6 +74,15 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           _SettingsSection(title: '数据', children: [
             ListTile(
+              leading: const Icon(Icons.sync),
+              title: const Text('同步设置'),
+              subtitle: const Text('配置数据同步和冲突解决'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/settings/sync');
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.lock_outline),
               title: const Text('加密设置'),
               subtitle: const Text('管理笔记加密和密码'),
@@ -93,6 +102,24 @@ class _SettingsPageState extends State<SettingsPage> {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const P2PSettingsPage()),
                 );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.extension_outlined),
+              title: const Text('插件市场'),
+              subtitle: const Text('浏览和安装插件'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/plugins/marketplace');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.widgets_outlined),
+              title: const Text('插件管理'),
+              subtitle: const Text('管理已安装的插件'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/plugins/settings');
               },
             ),
             ListTile(

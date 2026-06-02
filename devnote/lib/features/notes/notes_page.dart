@@ -12,6 +12,10 @@ import 'package:devnote/features/notes/bloc/folder_event.dart';
 import 'package:devnote/features/notes/bloc/folder_state.dart';
 import 'package:devnote/features/notes/widgets/folder_tree.dart';
 import 'package:devnote/features/notes/widgets/note_list.dart';
+import 'package:devnote/features/sync/bloc/sync_bloc.dart';
+import 'package:devnote/features/sync/bloc/sync_event.dart';
+import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_status_widget.dart';
 
 class NotesPage extends StatelessWidget {
   const NotesPage({super.key, required this.child});
@@ -28,6 +32,9 @@ class NotesPage extends StatelessWidget {
         ),
         BlocProvider(
           create: (_) => NotesBloc(SqliteNoteRepository(dbHelper)),
+        ),
+        BlocProvider(
+          create: (_) => SyncBloc(SyncService.instance),
         ),
       ],
       child: Scaffold(
@@ -164,6 +171,7 @@ class NotesListPlaceholder extends StatelessWidget {
         appBar: AppBar(
           title: const Text('笔记列表'),
           actions: [
+            const SyncStatusWidget(),
             IconButton(
               icon: const Icon(Icons.search),
               onPressed: () => context.go('/search'),
