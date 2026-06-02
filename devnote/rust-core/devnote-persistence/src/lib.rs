@@ -1,11 +1,16 @@
 use devnote_core::models::{Attachment, Folder, Note, Tag};
 use devnote_core::traits::NoteRepository;
+use devnote_crypto::{CryptoEngine, DefaultCryptoEngine, CryptoConfig};
 use std::sync::Mutex;
 use thiserror::Error;
 use uuid::Uuid;
 use anyhow::Result;
 use chrono::Utc;
 use rusqlite::params;
+use sha2::{Sha256, Digest};
+use std::path::PathBuf;
+use std::fs;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 #[derive(Debug, Error)]
 pub enum PersistenceError {
@@ -629,5 +634,338 @@ impl NoteRepository for SqliteNoteRepository {
             .query_map(params![note_id_str], Self::row_to_attachment)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(attachments)
+    }
+}
+
+pub struct EncryptedNoteRepository {
+    inner: Mutex<SqliteNoteRepository>,
+    crypto: DefaultCryptoEngine,
+    key: Mutex<Option<Vec<u8>>>,
+    salt: Mutex<Option<Vec<u8>>>,
+}
+
+impl EncryptedNoteRepository {
+    pub fn new(repo: SqliteNoteRepository, config: CryptoConfig) -> Self {
+        Self {
+            inner: Mutex::new(repo),
+            crypto: DefaultCryptoEngine::new(config),
+            key: Mutex::new(None),
+            salt: Mutex::new(None),
+        }
+    }
+
+    pub fn set_password(&self, password: &str) -> Result<()> {
+        let salt = self.crypto.generate_salt();
+        let key = self.crypto.derive_key(password, &salt)?;
+        *self.key.lock().unwrap() = Some(key);
+        *self.salt.lock().unwrap() = Some(salt);
+        Ok(())
+    }
+
+    pub fn change_password(&self, old_password: &str, new_password: &str) -> Result<bool> {
+        let salt_guard = self.salt.lock().unwrap();
+        if let Some(ref salt) = *salt_guard {
+            let old_key = self.crypto.derive_key(old_password, salt)?;
+            let key_guard = self.key.lock().unwrap();
+            if let Some(ref current_key) = *key_guard {
+                if old_key != *current_key {
+                    return Ok(false);
+                }
+            }
+            drop(key_guard);
+        }
+        drop(salt_guard);
+
+        let new_salt = self.crypto.generate_salt();
+        let new_key = self.crypto.derive_key(new_password, &new_salt)?;
+        *self.key.lock().unwrap() = Some(new_key);
+        *self.salt.lock().unwrap() = Some(new_salt);
+        Ok(true)
+    }
+
+    pub fn clear_key(&self) {
+        *self.key.lock().unwrap() = None;
+        *self.salt.lock().unwrap() = None;
+    }
+
+    pub fn is_unlocked(&self) -> bool {
+        self.key.lock().unwrap().is_some()
+    }
+
+    fn encrypt_content(&self, plaintext: &str) -> Result<String> {
+        let key_guard = self.key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
+        let encrypted = self.crypto.encrypt(plaintext.as_bytes(), key)?;
+        Ok(BASE64.encode(&encrypted))
+    }
+
+    fn decrypt_content(&self, ciphertext: &str) -> Result<String> {
+        let key_guard = self.key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
+        let data = BASE64.decode(ciphertext).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let decrypted = self.crypto.decrypt(&data, key)?;
+        String::from_utf8(decrypted).map_err(|e| PersistenceError::SerializationError(e.to_string()).into())
+    }
+}
+
+impl NoteRepository for EncryptedNoteRepository {
+    fn create_note(&mut self, mut note: Note) -> Result<Note> {
+        let content = serde_json::to_string(&note.blocks)?;
+        let encrypted = self.encrypt_content(&content)?;
+        note.is_encrypted = true;
+        note.blocks = Vec::new();
+
+        let inner = self.inner.lock().unwrap();
+        let conn = inner.conn.lock().unwrap();
+        let id_str = note.id.to_string();
+        let folder_id_str = note.folder_id.to_string();
+        let created_at_str = note.created_at.to_rfc3339();
+        let updated_at_str = note.updated_at.to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO notes (id, title, content, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id_str, note.title, encrypted, folder_id_str, created_at_str, updated_at_str],
+        )?;
+
+        for tag_id in &note.tags {
+            let tag_id_str = tag_id.to_string();
+            conn.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                params![id_str, tag_id_str],
+            )?;
+        }
+
+        Ok(note)
+    }
+
+    fn get_note(&self, id: &Uuid) -> Result<Option<Note>> {
+        let inner = self.inner.lock().unwrap();
+        let result = NoteRepository::get_note(&*inner, id)?;
+        drop(inner);
+
+        match result {
+            Some(mut note) => {
+                if note.is_encrypted && self.is_unlocked() {
+                    let content = serde_json::to_string(&note.blocks)?;
+                    let decrypted = self.decrypt_content(&content).unwrap_or(content);
+                    note.blocks = serde_json::from_str(&decrypted).unwrap_or_default();
+                }
+                Ok(Some(note))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn update_note(&mut self, mut note: Note) -> Result<Note> {
+        let content = serde_json::to_string(&note.blocks)?;
+        let encrypted = self.encrypt_content(&content)?;
+        note.is_encrypted = true;
+
+        let inner = self.inner.lock().unwrap();
+        let conn = inner.conn.lock().unwrap();
+        let id_str = note.id.to_string();
+        let updated_at_str = note.updated_at.to_rfc3339();
+
+        conn.execute(
+            "UPDATE notes SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
+            params![note.title, encrypted, updated_at_str, id_str],
+        )?;
+
+        Ok(note)
+    }
+
+    fn delete_note(&mut self, id: &Uuid) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::delete_note(&mut *inner, id)
+    }
+
+    fn list_notes(&self, folder_id: Option<&Uuid>) -> Result<Vec<Note>> {
+        let inner = self.inner.lock().unwrap();
+        let notes = NoteRepository::list_notes(&*inner, folder_id)?;
+        drop(inner);
+
+        let mut result = Vec::new();
+        for mut note in notes {
+            if note.is_encrypted && self.is_unlocked() {
+                let content = serde_json::to_string(&note.blocks)?;
+                let decrypted = self.decrypt_content(&content).unwrap_or(content);
+                note.blocks = serde_json::from_str(&decrypted).unwrap_or_default();
+            }
+            result.push(note);
+        }
+        Ok(result)
+    }
+
+    fn create_folder(&mut self, folder: Folder) -> Result<Folder> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::create_folder(&mut *inner, folder)
+    }
+
+    fn get_folder(&self, id: &Uuid) -> Result<Option<Folder>> {
+        let inner = self.inner.lock().unwrap();
+        NoteRepository::get_folder(&*inner, id)
+    }
+
+    fn update_folder(&mut self, folder: Folder) -> Result<Folder> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::update_folder(&mut *inner, folder)
+    }
+
+    fn delete_folder(&mut self, id: &Uuid) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::delete_folder(&mut *inner, id)
+    }
+
+    fn list_folders(&self, parent_id: Option<&Uuid>) -> Result<Vec<Folder>> {
+        let inner = self.inner.lock().unwrap();
+        NoteRepository::list_folders(&*inner, parent_id)
+    }
+
+    fn create_tag(&mut self, tag: Tag) -> Result<Tag> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::create_tag(&mut *inner, tag)
+    }
+
+    fn delete_tag(&mut self, id: &Uuid) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::delete_tag(&mut *inner, id)
+    }
+
+    fn list_tags(&self) -> Result<Vec<Tag>> {
+        let inner = self.inner.lock().unwrap();
+        NoteRepository::list_tags(&*inner)
+    }
+
+    fn add_tag_to_note(&mut self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::add_tag_to_note(&mut *inner, note_id, tag_id)
+    }
+
+    fn remove_tag_from_note(&mut self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::remove_tag_from_note(&mut *inner, note_id, tag_id)
+    }
+
+    fn create_attachment(&mut self, attachment: Attachment) -> Result<Attachment> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::create_attachment(&mut *inner, attachment)
+    }
+
+    fn delete_attachment(&mut self, id: &Uuid) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        NoteRepository::delete_attachment(&mut *inner, id)
+    }
+
+    fn list_attachments(&self, note_id: &Uuid) -> Result<Vec<Attachment>> {
+        let inner = self.inner.lock().unwrap();
+        NoteRepository::list_attachments(&*inner, note_id)
+    }
+}
+
+pub struct EncryptedFileStorage {
+    base_dir: PathBuf,
+    crypto: DefaultCryptoEngine,
+    key: Mutex<Option<Vec<u8>>>,
+}
+
+impl EncryptedFileStorage {
+    pub fn new(base_dir: impl Into<PathBuf>, config: CryptoConfig) -> Self {
+        Self {
+            base_dir: base_dir.into(),
+            crypto: DefaultCryptoEngine::new(config),
+            key: Mutex::new(None),
+        }
+    }
+
+    pub fn set_key(&self, key: Vec<u8>) {
+        *self.key.lock().unwrap() = Some(key);
+    }
+
+    pub fn clear_key(&self) {
+        *self.key.lock().unwrap() = None;
+    }
+
+    pub fn write_file(&self, relative_path: &str, data: &[u8]) -> Result<()> {
+        let key_guard = self.key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
+
+        let encrypted = self.crypto.encrypt(data, key)?;
+        let hash = Self::compute_hash(data);
+
+        let file_path = self.base_dir.join(relative_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&hash);
+        combined.extend_from_slice(&encrypted);
+        fs::write(&file_path, &combined)?;
+        Ok(())
+    }
+
+    pub fn read_file(&self, relative_path: &str) -> Result<Vec<u8>> {
+        let key_guard = self.key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
+
+        let file_path = self.base_dir.join(relative_path);
+        let data = fs::read(&file_path)?;
+
+        if data.len() < 32 {
+            return Err(PersistenceError::DatabaseError("file too short".to_string()).into());
+        }
+
+        let stored_hash = &data[..32];
+        let encrypted = &data[32..];
+
+        let decrypted = self.crypto.decrypt(encrypted, key)?;
+        let computed_hash = Self::compute_hash(&decrypted);
+
+        if stored_hash != computed_hash.as_slice() {
+            return Err(PersistenceError::DatabaseError("file integrity check failed".to_string()).into());
+        }
+
+        Ok(decrypted)
+    }
+
+    pub fn delete_file(&self, relative_path: &str) -> Result<()> {
+        let file_path = self.base_dir.join(relative_path);
+        if file_path.exists() {
+            fs::remove_file(&file_path)?;
+        }
+        Ok(())
+    }
+
+    pub fn file_exists(&self, relative_path: &str) -> bool {
+        self.base_dir.join(relative_path).exists()
+    }
+
+    pub fn verify_integrity(&self, relative_path: &str) -> Result<bool> {
+        let key_guard = self.key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
+
+        let file_path = self.base_dir.join(relative_path);
+        let data = fs::read(&file_path)?;
+
+        if data.len() < 32 {
+            return Ok(false);
+        }
+
+        let stored_hash = &data[..32];
+        let encrypted = &data[32..];
+
+        let decrypted = match self.crypto.decrypt(encrypted, key) {
+            Ok(d) => d,
+            Err(_) => return Ok(false),
+        };
+
+        let computed_hash = Self::compute_hash(&decrypted);
+        Ok(stored_hash == computed_hash.as_slice())
+    }
+
+    fn compute_hash(data: &[u8]) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        hasher.finalize().to_vec()
     }
 }

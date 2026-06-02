@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -70,6 +72,25 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ]),
           _SettingsSection(title: '数据', children: [
+            ListTile(
+              leading: const Icon(Icons.lock_outline),
+              title: const Text('加密设置'),
+              subtitle: const Text('管理笔记加密和密码'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const CryptoSettingsPage()),
+                );
+              },
+            ),
+            ListTile(
+              title: const Text('导入导出'),
+              subtitle: const Text('导入或导出笔记数据'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/settings/import-export');
+              },
+            ),
             ListTile(
               title: const Text('数据备份'),
               subtitle: const Text('导出笔记数据'),

@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:devnote/features/editor/editor_page.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/settings/settings_page.dart';
+import 'package:devnote/features/settings/import_export/import_export_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -35,6 +36,12 @@ final appRouter = GoRouter(
           path: '/settings',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: SettingsPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/settings/import-export',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: ImportExportPage(),
           ),
         ),
       ],

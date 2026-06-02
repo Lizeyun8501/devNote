@@ -1,32 +1,50 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/features/editor/bloc/editor_bloc.dart';
+import 'package:devnote/features/editor/bloc/editor_event.dart';
+import 'package:devnote/features/editor/bloc/editor_state.dart';
+import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/services/editor_service.dart';
+import 'package:devnote/features/editor/widgets/block_widget.dart';
+import 'package:devnote/features/editor/widgets/block_toolbar.dart';
 
-class EditorPage extends StatefulWidget {
+class EditorPage extends StatelessWidget {
   const EditorPage({super.key, required this.noteId});
 
   final String noteId;
 
   @override
-  State<EditorPage> createState() => _EditorPageState();
+  Widget build(BuildContext context) {
+    return BlocProvider(
+      create: (context) => EditorBloc(EditorService())
+        ..add(LoadNote(noteId)),
+      child: const _EditorView(),
+    );
+  }
 }
 
-class _EditorPageState extends State<EditorPage> {
+class _EditorView extends StatefulWidget {
+  const _EditorView();
+
+  @override
+  State<_EditorView> createState() => _EditorViewState();
+}
+
+class _EditorViewState extends State<_EditorView> {
   late final TextEditingController _titleController;
-  late final TextEditingController _contentController;
-  late final FocusNode _contentFocusNode;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _titleController = TextEditingController();
-    _contentController = TextEditingController();
-    _contentFocusNode = FocusNode();
   }
 
   @override
   void dispose() {
     _titleController.dispose();
-    _contentController.dispose();
-    _contentFocusNode.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -38,8 +56,11 @@ class _EditorPageState extends State<EditorPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text(
-          widget.noteId.isEmpty ? '新建笔记' : '编辑笔记',
+        title: BlocBuilder<EditorBloc, EditorState>(
+          builder: (context, state) {
+            final title = state is EditorLoaded ? '编辑笔记' : '新建笔记';
+            return Text(title);
+          },
         ),
         actions: [
           IconButton(
@@ -48,125 +69,127 @@ class _EditorPageState extends State<EditorPage> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-        child: Column(
-          children: [
-            TextField(
-              controller: _titleController,
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+      body: BlocBuilder<EditorBloc, EditorState>(
+        builder: (context, state) {
+          if (state is EditorLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (state is EditorError) {
+            return Center(child: Text('Error: ${state.message}'));
+          }
+
+          if (state is EditorLoaded) {
+            return Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _titleController,
+                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                          decoration: const InputDecoration(
+                            hintText: '无标题',
+                            border: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            filled: false,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ...state.blocks.map((block) => _buildBlockWithKeyboard(
+                              context,
+                              block,
+                              state,
+                            )),
+                      ],
+                    ),
                   ),
-              decoration: const InputDecoration(
-                hintText: '无标题',
-                border: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                filled: false,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: TextField(
-                controller: _contentController,
-                focusNode: _contentFocusNode,
-                style: Theme.of(context).textTheme.bodyLarge,
-                maxLines: null,
-                expands: true,
-                textAlignVertical: TextAlignVertical.top,
-                decoration: const InputDecoration(
-                  hintText: '开始输入...',
-                  border: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  filled: false,
                 ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: _EditorToolbar(
-        onFormatToggle: (_) {},
-      ),
-    );
-  }
-}
+                BlockToolbar(
+                  onInsertParagraph: () => _insertBlock(context, state, BlockType.paragraph),
+                  onInsertHeading: () => _insertBlock(context, state, BlockType.heading1),
+                  onInsertCodeBlock: () => _insertBlock(context, state, BlockType.codeBlock),
+                  onInsertList: () => _insertBlock(context, state, BlockType.list),
+                  onInsertQuote: () => _insertBlock(context, state, BlockType.quote),
+                ),
+              ],
+            );
+          }
 
-class _EditorToolbar extends StatelessWidget {
-  const _EditorToolbar({required this.onFormatToggle});
-
-  final void Function(String format) onFormatToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 48,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-            width: 1,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          _ToolbarButton(
-            icon: Icons.format_bold,
-            tooltip: '粗体',
-            onPressed: () => onFormatToggle('bold'),
-          ),
-          _ToolbarButton(
-            icon: Icons.format_italic,
-            tooltip: '斜体',
-            onPressed: () => onFormatToggle('italic'),
-          ),
-          _ToolbarButton(
-            icon: Icons.format_underlined,
-            tooltip: '下划线',
-            onPressed: () => onFormatToggle('underline'),
-          ),
-          _ToolbarButton(
-            icon: Icons.code,
-            tooltip: '代码',
-            onPressed: () => onFormatToggle('code'),
-          ),
-          _ToolbarButton(
-            icon: Icons.format_list_bulleted,
-            tooltip: '列表',
-            onPressed: () => onFormatToggle('list'),
-          ),
-          _ToolbarButton(
-            icon: Icons.checklist,
-            tooltip: '待办',
-            onPressed: () => onFormatToggle('checklist'),
-          ),
-        ],
+          return const SizedBox.shrink();
+        },
       ),
     );
   }
-}
 
-class _ToolbarButton extends StatelessWidget {
-  const _ToolbarButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      icon: Icon(icon, size: 20),
-      tooltip: tooltip,
-      onPressed: onPressed,
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
+  Widget _buildBlockWithKeyboard(BuildContext context, BlockModel block, EditorLoaded state) {
+    return KeyboardListener(
+      focusNode: FocusNode(),
+      onKeyEvent: (event) {
+        if (event is KeyDownEvent) {
+          if (event.logicalKey == LogicalKeyboardKey.enter) {
+            final position = block.position + 1;
+            context.read<EditorBloc>().add(InsertBlock(
+                  noteId: state.noteId,
+                  blockType: BlockType.paragraph,
+                  content: '',
+                  position: position,
+                ));
+          } else if (event.logicalKey == LogicalKeyboardKey.backspace) {
+            if (block.content.isEmpty && state.blocks.length > 1) {
+              context.read<EditorBloc>().add(DeleteBlock(block.id));
+            }
+          }
+        }
+      },
+      child: BlockWidget(
+        block: block,
+        isActive: state.activeBlockId == block.id,
+        onContentChanged: (content) {
+          context.read<EditorBloc>().add(UpdateBlock(
+                blockId: block.id,
+                content: content,
+              ));
+        },
+        onDelete: () {
+          context.read<EditorBloc>().add(DeleteBlock(block.id));
+        },
+        onTypeChanged: (type) {
+          context.read<EditorBloc>().add(ToggleBlockType(
+                blockId: block.id,
+                newType: type,
+              ));
+        },
+        onEnterPressed: () {
+          final position = block.position + 1;
+          context.read<EditorBloc>().add(InsertBlock(
+                noteId: state.noteId,
+                blockType: BlockType.paragraph,
+                content: '',
+                position: position,
+              ));
+        },
+        onBackspaceAtStart: () {
+          if (block.content.isEmpty && state.blocks.length > 1) {
+            context.read<EditorBloc>().add(DeleteBlock(block.id));
+          }
+        },
+      ),
     );
+  }
+
+  void _insertBlock(BuildContext context, EditorLoaded state, BlockType type) {
+    context.read<EditorBloc>().add(InsertBlock(
+          noteId: state.noteId,
+          blockType: type,
+          content: '',
+          position: state.blocks.length,
+        ));
   }
 }

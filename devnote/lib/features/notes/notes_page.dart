@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:devnote/core/constants/app_constants.dart';
 
 class NotesPage extends StatelessWidget {
@@ -123,7 +124,7 @@ class NotesListPlaceholder extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
-            onPressed: () {},
+            onPressed: () => context.go('/search'),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),

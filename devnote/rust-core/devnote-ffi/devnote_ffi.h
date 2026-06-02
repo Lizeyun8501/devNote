@@ -22,4 +22,6 @@ void devnote_free_string(char *s);
 
 char *devnote_ping(void);
 
+char *devnote_dispatch(const char *request);
+
 #endif  /* DEVNOTE_FFI_H */

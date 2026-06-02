@@ -7,6 +7,7 @@ members = [
     "devnote-sync",
     "devnote-search",
     "devnote-editor",
+    "devnote-format",
 ]
 resolver = "2"
 
@@ -24,6 +25,7 @@ devnote-crypto = { path = "devnote-crypto" }
 devnote-sync = { path = "devnote-sync" }
 devnote-search = { path = "devnote-search" }
 devnote-editor = { path = "devnote-editor" }
+devnote-format = { path = "devnote-format" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
