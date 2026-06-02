@@ -31,7 +31,8 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+build/
+Flutter/build/
 
 # Symbolication related
 app.*.symbols
@@ -43,3 +44,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Rust
+rust-core/target/
+
+# Go
+sync-server/tmp/
+
+# Generated files
+*.g.dart
+*.freezed.dart

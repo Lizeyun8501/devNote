@@ -342,19 +342,58 @@ impl CRDTDocument {
                 to_position,
                 ..
             } => {
-                let block = self
+                // First, find the block and get its current position
+                let old_pos = self
                     .blocks
-                    .iter_mut()
+                    .iter()
                     .find(|b| b.id == *block_id)
                     .ok_or_else(|| {
                         CRDTError::InvalidOperation(format!("block {} not found", block_id))
-                    })?;
-                if block.tombstone {
+                    })?
+                    .position;
+
+                let is_tombstone = self
+                    .blocks
+                    .iter()
+                    .find(|b| b.id == *block_id)
+                    .map(|b| b.tombstone)
+                    .unwrap_or(true);
+
+                if is_tombstone {
                     return Err(CRDTError::TombstoneDeleted(block_id.clone()));
                 }
-                block.position = *to_position;
-                block.last_modified_id = id.clone();
-                self.reindex_positions();
+
+                let new_pos = *to_position;
+                if old_pos != new_pos {
+                    // Adjust positions of other blocks to make room
+                    if new_pos > old_pos {
+                        // Moving down: shift blocks between (old_pos, new_pos] up by 1
+                        for b in self.blocks.iter_mut() {
+                            if b.id != *block_id && !b.tombstone
+                                && b.position > old_pos && b.position <= new_pos
+                            {
+                                b.position -= 1;
+                            }
+                        }
+                    } else {
+                        // Moving up: shift blocks between [new_pos, old_pos) down by 1
+                        for b in self.blocks.iter_mut() {
+                            if b.id != *block_id && !b.tombstone
+                                && b.position >= new_pos && b.position < old_pos
+                            {
+                                b.position += 1;
+                            }
+                        }
+                    }
+                    // Now set the target block's position
+                    let block = self.blocks.iter_mut().find(|b| b.id == *block_id).unwrap();
+                    block.position = new_pos;
+                    block.last_modified_id = id.clone();
+                    self.reindex_positions();
+                } else {
+                    let block = self.blocks.iter_mut().find(|b| b.id == *block_id).unwrap();
+                    block.last_modified_id = id.clone();
+                }
             }
         }
         self.operations.push(op);

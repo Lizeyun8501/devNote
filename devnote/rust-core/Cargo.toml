@@ -12,6 +12,10 @@ members = [
     "devnote-p2p",
     "devnote-plugin",
     "devnote-canvas",
+    "devnote-workflow",
+    "devnote-graph",
+    "devnote-flashcard",
+    "devnote-perf",
 ]
 resolver = "2"
 
@@ -35,6 +39,10 @@ devnote-p2p = { path = "devnote-p2p" }
 devnote-database = { path = "devnote-database" }
 devnote-object = { path = "devnote-object" }
 devnote-canvas = { path = "devnote-canvas" }
+devnote-workflow = { path = "devnote-workflow" }
+devnote-graph = { path = "devnote-graph" }
+devnote-flashcard = { path = "devnote-flashcard" }
+devnote-perf = { path = "devnote-perf" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

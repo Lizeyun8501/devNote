@@ -8,6 +8,7 @@ import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
 import 'package:devnote/features/editor/widgets/block_widget.dart';
 import 'package:devnote/features/editor/widgets/block_toolbar.dart';
+import 'package:devnote/core/performance/virtual_scroll_controller.dart';
 
 class EditorPage extends StatelessWidget {
   const EditorPage({super.key, required this.noteId});
@@ -33,7 +34,8 @@ class _EditorView extends StatefulWidget {
 
 class _EditorViewState extends State<_EditorView> {
   late final TextEditingController _titleController;
-  final ScrollController _scrollController = ScrollController();
+  final VirtualScrollController _virtualScrollController = VirtualScrollController();
+  static const double _blockHeight = 80.0;
 
   @override
   void initState() {
@@ -44,7 +46,7 @@ class _EditorViewState extends State<_EditorView> {
   @override
   void dispose() {
     _titleController.dispose();
-    _scrollController.dispose();
+    _virtualScrollController.dispose();
     super.dispose();
   }
 
@@ -80,36 +82,15 @@ class _EditorViewState extends State<_EditorView> {
           }
 
           if (state is EditorLoaded) {
+            final blockCount = state.blocks.length;
+            final useVirtualScroll = blockCount > 50;
+
             return Column(
               children: [
                 Expanded(
-                  child: SingleChildScrollView(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                    child: Column(
-                      children: [
-                        TextField(
-                          controller: _titleController,
-                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                          decoration: const InputDecoration(
-                            hintText: '无标题',
-                            border: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            filled: false,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        ...state.blocks.map((block) => _buildBlockWithKeyboard(
-                              context,
-                              block,
-                              state,
-                            )),
-                      ],
-                    ),
-                  ),
+                  child: useVirtualScroll
+                      ? _buildVirtualScrollEditor(context, state)
+                      : _buildSimpleEditor(context, state),
                 ),
                 BlockToolbar(
                   onInsertParagraph: () => _insertBlock(context, state, BlockType.paragraph),
@@ -124,6 +105,71 @@ class _EditorViewState extends State<_EditorView> {
 
           return const SizedBox.shrink();
         },
+      ),
+    );
+  }
+
+  Widget _buildVirtualScrollEditor(BuildContext context, EditorLoaded state) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+      child: Column(
+        children: [
+          TextField(
+            controller: _titleController,
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+            decoration: const InputDecoration(
+              hintText: '无标题',
+              border: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              filled: false,
+            ),
+          ),
+          const SizedBox(height: 16),
+          VirtualScrollView(
+            controller: _virtualScrollController,
+            itemCount: state.blocks.length,
+            itemHeight: _blockHeight,
+            itemBuilder: (context, index) {
+              return _buildBlockWithKeyboard(
+                context,
+                state.blocks[index],
+                state,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSimpleEditor(BuildContext context, EditorLoaded state) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+      child: Column(
+        children: [
+          TextField(
+            controller: _titleController,
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+            decoration: const InputDecoration(
+              hintText: '无标题',
+              border: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              filled: false,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...state.blocks.map((block) => _buildBlockWithKeyboard(
+                context,
+                block,
+                state,
+              )),
+        ],
       ),
     );
   }
