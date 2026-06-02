@@ -1,0 +1,32 @@
+[workspace]
+members = [
+    "devnote-core",
+    "devnote-ffi",
+    "devnote-persistence",
+    "devnote-crypto",
+    "devnote-sync",
+    "devnote-search",
+    "devnote-editor",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["DevNote Team"]
+license = "MIT"
+
+[workspace.dependencies]
+devnote-core = { path = "devnote-core" }
+devnote-ffi = { path = "devnote-ffi" }
+devnote-persistence = { path = "devnote-persistence" }
+devnote-crypto = { path = "devnote-crypto" }
+devnote-sync = { path = "devnote-sync" }
+devnote-search = { path = "devnote-search" }
+devnote-editor = { path = "devnote-editor" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
