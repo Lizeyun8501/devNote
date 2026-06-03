@@ -31,6 +31,7 @@ dependencies:
   shared_preferences: ^2.3.4
   http: ^1.2.2
   diff_match_patch: ^0.4.1
+  get_it: ^8.0.0
 
 dev_dependencies:
   flutter_test:
@@ -42,3 +43,4 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  generate: true

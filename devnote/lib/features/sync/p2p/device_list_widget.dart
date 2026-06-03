@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-
+import 'package:devnote/core/di/injection.dart';
 import 'p2p_service.dart';
 
 class DeviceListWidget extends StatefulWidget {
@@ -10,7 +10,7 @@ class DeviceListWidget extends StatefulWidget {
 }
 
 class _DeviceListWidgetState extends State<DeviceListWidget> {
-  final P2PService _p2pService = P2PService.instance;
+  final P2PService _p2pService = getIt<P2PService>();
 
   @override
   void initState() {

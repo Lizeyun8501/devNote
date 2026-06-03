@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 class GitStatusModel {
   final List<String> modified;
@@ -140,7 +141,7 @@ List<T> _parseListResult<T>(
 }
 
 class GitService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<void> init(String repoPath) async {
     final payload = jsonEncode({'repo_path': repoPath});

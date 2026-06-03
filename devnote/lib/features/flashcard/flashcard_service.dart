@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 enum CardType { basic, cloze, reverse }
 
@@ -143,7 +144,7 @@ class ReviewStatsModel {
 }
 
 class FlashcardService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<FlashcardDeckModel> createDeck(String name, String description) async {
     final payload = jsonEncode({'name': name, 'description': description});

@@ -1,9 +1,7 @@
 import 'dart:typed_data';
 
 class MemoryManager {
-  static final MemoryManager _instance = MemoryManager._internal();
-  factory MemoryManager() => _instance;
-  MemoryManager._internal();
+  MemoryManager();
 
   final Map<String, _CacheEntry> _imageCache = {};
   final Map<String, int> _memoryUsage = {};

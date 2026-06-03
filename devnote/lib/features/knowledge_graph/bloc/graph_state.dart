@@ -1,4 +1,3 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/features/knowledge_graph/graph_service.dart';
 
 class NodePosition {
@@ -17,22 +16,19 @@ class NodePosition {
   }
 }
 
-abstract class GraphState extends Equatable {
+sealed class GraphState {
   const GraphState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class GraphInitial extends GraphState {
+final class GraphInitial extends GraphState {
   const GraphInitial();
 }
 
-class GraphLoading extends GraphState {
+final class GraphLoading extends GraphState {
   const GraphLoading();
 }
 
-class GraphLoaded extends GraphState {
+final class GraphLoaded extends GraphState {
   final GraphDataModel data;
   final List<NodePosition> positions;
   final String? selectedNodeId;
@@ -62,16 +58,10 @@ class GraphLoaded extends GraphState {
       clusters: clusters ?? this.clusters,
     );
   }
-
-  @override
-  List<Object?> get props => [data, positions, selectedNodeId, centrality, clusters];
 }
 
-class GraphError extends GraphState {
+final class GraphError extends GraphState {
   final String message;
 
   const GraphError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

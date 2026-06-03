@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'crypto_service.dart';
 import 'widgets/password_dialog.dart';
 import 'widgets/encryption_status_card.dart';
@@ -11,7 +12,7 @@ class CryptoSettingsPage extends StatefulWidget {
 }
 
 class _CryptoSettingsPageState extends State<CryptoSettingsPage> {
-  final CryptoService _cryptoService = CryptoService.instance;
+  final CryptoService _cryptoService = getIt<CryptoService>();
 
   @override
   void initState() {

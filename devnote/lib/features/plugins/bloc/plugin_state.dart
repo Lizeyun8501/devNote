@@ -1,18 +1,14 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/features/plugins/plugin_service.dart';
 
-abstract class PluginsState extends Equatable {
+sealed class PluginsState {
   const PluginsState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class PluginsInitial extends PluginsState {
+final class PluginsInitial extends PluginsState {
   const PluginsInitial();
 }
 
-class PluginsLoaded extends PluginsState {
+final class PluginsLoaded extends PluginsState {
   final List<PluginEntry> plugins;
   final List<MarketplacePlugin> marketplacePlugins;
 
@@ -30,16 +26,10 @@ class PluginsLoaded extends PluginsState {
       marketplacePlugins: marketplacePlugins ?? this.marketplacePlugins,
     );
   }
-
-  @override
-  List<Object?> get props => [plugins, marketplacePlugins];
 }
 
-class PluginError extends PluginsState {
+final class PluginError extends PluginsState {
   final String message;
 
   const PluginError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

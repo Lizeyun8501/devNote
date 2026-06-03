@@ -28,18 +28,15 @@ class FolderNode extends Equatable {
   List<Object?> get props => [folder, children, isExpanded];
 }
 
-abstract class FolderState extends Equatable {
+sealed class FolderState {
   const FolderState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class FolderInitial extends FolderState {
+final class FolderInitial extends FolderState {
   const FolderInitial();
 }
 
-class FolderLoaded extends FolderState {
+final class FolderLoaded extends FolderState {
   final List<FolderNode> rootNodes;
   final String? selectedFolderId;
   final Set<String> expandedFolderIds;
@@ -61,16 +58,10 @@ class FolderLoaded extends FolderState {
       expandedFolderIds: expandedFolderIds ?? this.expandedFolderIds,
     );
   }
-
-  @override
-  List<Object?> get props => [rootNodes, selectedFolderId, expandedFolderIds];
 }
 
-class FolderError extends FolderState {
+final class FolderError extends FolderState {
   final String message;
 
   const FolderError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

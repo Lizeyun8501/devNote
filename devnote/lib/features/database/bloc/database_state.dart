@@ -132,31 +132,25 @@ class FieldOrderModel extends Equatable {
   List<Object?> get props => [fieldId, position];
 }
 
-abstract class DatabaseState extends Equatable {
+sealed class DatabaseState {
   const DatabaseState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class DatabaseInitial extends DatabaseState {
+final class DatabaseInitial extends DatabaseState {
   const DatabaseInitial();
 }
 
-class DatabaseLoading extends DatabaseState {
+final class DatabaseLoading extends DatabaseState {
   const DatabaseLoading();
 }
 
-class DatabaseListLoaded extends DatabaseState {
+final class DatabaseListLoaded extends DatabaseState {
   final List<DatabaseModel> databases;
 
   const DatabaseListLoaded(this.databases);
-
-  @override
-  List<Object?> get props => [databases];
 }
 
-class DatabaseDetailLoaded extends DatabaseState {
+final class DatabaseDetailLoaded extends DatabaseState {
   final DatabaseModel database;
   final List<FilterModel> activeFilters;
   final List<SortModel> activeSorts;
@@ -178,16 +172,10 @@ class DatabaseDetailLoaded extends DatabaseState {
       activeSorts: activeSorts ?? this.activeSorts,
     );
   }
-
-  @override
-  List<Object?> get props => [database, activeFilters, activeSorts];
 }
 
-class DatabaseError extends DatabaseState {
+final class DatabaseError extends DatabaseState {
   final String message;
 
   const DatabaseError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

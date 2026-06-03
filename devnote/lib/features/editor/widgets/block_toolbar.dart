@@ -18,48 +18,56 @@ class BlockToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 48,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-            width: 1,
+    return Semantics(
+      label: '编辑器工具栏',
+      child: Container(
+        height: 48,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(
+            top: BorderSide(
+              color: Theme.of(context).dividerColor,
+              width: 1,
+            ),
           ),
         ),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: [
-            _ToolbarButton(
-              icon: Icons.text_fields,
-              tooltip: 'Paragraph',
-              onPressed: onInsertParagraph,
-            ),
-            _ToolbarButton(
-              icon: Icons.title,
-              tooltip: 'Heading',
-              onPressed: onInsertHeading,
-            ),
-            _ToolbarButton(
-              icon: Icons.code,
-              tooltip: 'Code Block',
-              onPressed: onInsertCodeBlock,
-            ),
-            _ToolbarButton(
-              icon: Icons.format_list_bulleted,
-              tooltip: 'Bullet List',
-              onPressed: onInsertList,
-            ),
-            _ToolbarButton(
-              icon: Icons.format_quote,
-              tooltip: 'Quote',
-              onPressed: onInsertQuote,
-            ),
-          ],
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              _ToolbarButton(
+                icon: Icons.text_fields,
+                tooltip: 'Paragraph',
+                label: '插入段落',
+                onPressed: onInsertParagraph,
+              ),
+              _ToolbarButton(
+                icon: Icons.title,
+                tooltip: 'Heading',
+                label: '插入标题',
+                onPressed: onInsertHeading,
+              ),
+              _ToolbarButton(
+                icon: Icons.code,
+                tooltip: 'Code Block',
+                label: '插入代码块',
+                onPressed: onInsertCodeBlock,
+              ),
+              _ToolbarButton(
+                icon: Icons.format_list_bulleted,
+                tooltip: 'Bullet List',
+                label: '插入列表',
+                onPressed: onInsertList,
+              ),
+              _ToolbarButton(
+                icon: Icons.format_quote,
+                tooltip: 'Quote',
+                label: '插入引用',
+                onPressed: onInsertQuote,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -69,21 +77,26 @@ class BlockToolbar extends StatelessWidget {
 class _ToolbarButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
+  final String label;
   final VoidCallback onPressed;
 
   const _ToolbarButton({
     required this.icon,
     required this.tooltip,
+    required this.label,
     required this.onPressed,
   });
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      icon: Icon(icon, size: 20),
-      tooltip: tooltip,
-      onPressed: onPressed,
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    return Semantics(
+      label: label,
+      child: IconButton(
+        icon: Icon(icon, size: 20),
+        tooltip: tooltip,
+        onPressed: onPressed,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     );
   }
 }

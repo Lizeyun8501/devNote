@@ -1,34 +1,18 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 
 enum NoteSortBy { updatedAt, createdAt, title }
 
 enum NoteViewMode { list, grid }
 
-abstract class NotesState extends Equatable {
+sealed class NotesState {
   const NotesState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class NotesInitial extends NotesState {
+final class NotesInitial extends NotesState {
   const NotesInitial();
 }
 
-class NotesLoaded extends NotesLoadedData {
-  const NotesLoaded({
-    required super.notes,
-    super.selectedNoteId,
-    super.searchQuery,
-    super.filterTagId,
-    super.filterFolderId,
-    super.sortBy,
-    super.viewMode,
-  });
-}
-
-abstract class NotesLoadedData extends NotesState {
+final class NotesLoaded extends NotesState {
   final List<NoteModel> notes;
   final String? selectedNoteId;
   final String? searchQuery;
@@ -37,7 +21,7 @@ abstract class NotesLoadedData extends NotesState {
   final NoteSortBy sortBy;
   final NoteViewMode viewMode;
 
-  const NotesLoadedData({
+  const NotesLoaded({
     required this.notes,
     this.selectedNoteId,
     this.searchQuery,
@@ -47,7 +31,7 @@ abstract class NotesLoadedData extends NotesState {
     this.viewMode = NoteViewMode.list,
   });
 
-  NotesLoadedData copyWith({
+  NotesLoaded copyWith({
     List<NoteModel>? notes,
     String? selectedNoteId,
     String? searchQuery,
@@ -66,24 +50,10 @@ abstract class NotesLoadedData extends NotesState {
       viewMode: viewMode ?? this.viewMode,
     );
   }
-
-  @override
-  List<Object?> get props => [
-        notes,
-        selectedNoteId,
-        searchQuery,
-        filterTagId,
-        filterFolderId,
-        sortBy,
-        viewMode,
-      ];
 }
 
-class NotesError extends NotesState {
+final class NotesError extends NotesState {
   final String message;
 
   const NotesError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

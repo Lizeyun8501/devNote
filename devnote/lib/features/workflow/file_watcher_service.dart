@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 enum FileChangeKind { create, modify, delete, rename }
 
@@ -27,7 +28,7 @@ class FileChangeEvent {
 }
 
 class FileWatcherService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
   StreamController<FileChangeEvent>? _controller;
 
   Stream<FileChangeEvent> get onFileChange {

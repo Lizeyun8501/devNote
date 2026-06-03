@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 class LearningGoal {
   final String id;
@@ -54,7 +55,7 @@ class KnowledgeMapData {
 }
 
 class KnowledgeMapService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<KnowledgeMapData> getKnowledgeMap() async {
     final result = await _dispatch.asyncRequest(

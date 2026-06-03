@@ -1,22 +1,18 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/features/search/search_service.dart';
 
-abstract class SearchState extends Equatable {
+sealed class SearchState {
   const SearchState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class SearchInitial extends SearchState {
+final class SearchInitial extends SearchState {
   const SearchInitial();
 }
 
-class SearchLoading extends SearchState {
+final class SearchLoading extends SearchState {
   const SearchLoading();
 }
 
-class SearchResults extends SearchState {
+final class SearchResults extends SearchState {
   final String query;
   final List<SearchResultModel> results;
   final List<String> searchHistory;
@@ -54,16 +50,10 @@ class SearchResults extends SearchState {
       endDate: endDate ?? this.endDate,
     );
   }
-
-  @override
-  List<Object?> get props => [query, results, searchHistory, folderId, tags, startDate, endDate];
 }
 
-class SearchError extends SearchState {
+final class SearchError extends SearchState {
   final String message;
 
   const SearchError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

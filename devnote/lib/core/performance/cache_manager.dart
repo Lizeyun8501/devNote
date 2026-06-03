@@ -16,9 +16,7 @@ class CacheEntry<T> {
 }
 
 class CacheManager {
-  static final CacheManager _instance = CacheManager._internal();
-  factory CacheManager() => _instance;
-  CacheManager._internal();
+  CacheManager();
 
   final Map<CacheType, LinkedHashMap<String, CacheEntry<dynamic>>> _caches = {};
   final Map<CacheType, int> _maxSizes = {};

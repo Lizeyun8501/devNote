@@ -1,0 +1,789 @@
+openapi: 3.0.3
+info:
+  title: DevNote Sync Server API
+  description: |
+    API for DevNote's sync server, providing user authentication (including SRP zero-knowledge auth),
+    note synchronization (push/pull), conflict resolution, and sync status management.
+  version: 1.0.0
+  contact:
+    name: DevNote Team
+servers:
+  - url: http://localhost:8080
+    description: Local development (HTTP)
+  - url: https://localhost:8443
+    description: Local development (HTTPS)
+
+tags:
+  - name: health
+    description: Health check and metrics
+  - name: auth
+    description: Standard username/password authentication
+  - name: srp-auth
+    description: SRP (Secure Remote Password) zero-knowledge authentication
+  - name: sync
+    description: Note synchronization operations (push, pull, status, conflict resolution)
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: devnote-sync-server
+
+  /metrics:
+    get:
+      tags:
+        - health
+      summary: Prometheus metrics
+      operationId: prometheusMetrics
+      description: Returns Prometheus-format metrics.
+      responses:
+        '200':
+          description: Prometheus metrics in text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/auth/register:
+    post:
+      tags:
+        - auth
+      summary: Register a new user
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  username:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/login:
+    post:
+      tags:
+        - auth
+      summary: Login with username and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - auth
+      summary: Refresh access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refresh_token
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: Tokens refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/logout:
+    post:
+      tags:
+        - auth
+      summary: Logout and revoke refresh token
+      operationId: logout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: logged out
+
+  /api/v1/auth/srp/register:
+    post:
+      tags:
+        - srp-auth
+      summary: Register with SRP zero-knowledge protocol
+      operationId: srpRegister
+      description: Register a new user using the Secure Remote Password (SRP) protocol.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SRPRegisterRequest'
+      responses:
+        '201':
+          description: User registered with SRP successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  username:
+                    type: string
+                  srp_enabled:
+                    type: boolean
+                    example: true
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/srp/init:
+    post:
+      tags:
+        - srp-auth
+      summary: Initiate SRP authentication
+      operationId: srpInit
+      description: Start the SRP authentication flow. Server returns salt and public ephemeral value B.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SRPInitRequest'
+      responses:
+        '200':
+          description: SRP challenge returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SRPInitResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/srp/verify:
+    post:
+      tags:
+        - srp-auth
+      summary: Verify SRP client proof
+      operationId: srpVerify
+      description: Submit client's public ephemeral A and proof M1. Server returns M2 proof and session token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SRPVerifyRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SRPVerifyResponse'
+        '400':
+          description: Invalid request or encoding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/push:
+    post:
+      tags:
+        - sync
+      summary: Push local changes to the server
+      operationId: pushChanges
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushRequest'
+      responses:
+        '200':
+          description: Changes pushed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/pull:
+    post:
+      tags:
+        - sync
+      summary: Pull remote changes from the server
+      operationId: pullChanges
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of records to return (1-1000, default 100)
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PullRequest'
+      responses:
+        '200':
+          description: Changes retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/status:
+    get:
+      tags:
+        - sync
+      summary: Get sync status for a device
+      operationId: getSyncStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: device_id
+          in: query
+          required: true
+          description: The device identifier
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Sync status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncStatus'
+        '400':
+          description: Missing device_id parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/resolve-conflict:
+    post:
+      tags:
+        - sync
+      summary: Resolve a sync conflict
+      operationId: resolveConflict
+      security:
+        - BearerAuth: []
+      description: Manually resolve a sync conflict by providing the chosen data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConflictResolution'
+      responses:
+        '200':
+          description: Conflict resolved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: resolved
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained from login or SRP verify endpoint.
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+          example: john_doe
+        password:
+          type: string
+          minLength: 6
+          example: secret123
+
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          example: john_doe
+        password:
+          type: string
+          example: secret123
+
+    LoginResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        token:
+          type: string
+          description: JWT access token
+        refresh_token:
+          type: string
+          description: JWT refresh token
+        expires_in:
+          type: integer
+          description: Token expiration time in seconds
+          example: 3600
+
+    RefreshResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: New JWT access token
+        refresh_token:
+          type: string
+          description: New JWT refresh token
+        expires_in:
+          type: integer
+          description: Token expiration time in seconds
+          example: 3600
+
+    SRPRegisterRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+          example: john_doe
+        password:
+          type: string
+          minLength: 6
+          example: secret123
+
+    SRPInitRequest:
+      type: object
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          example: john_doe
+
+    SRPInitResponse:
+      type: object
+      properties:
+        salt:
+          type: string
+          description: Base64-encoded SRP salt
+        B:
+          type: string
+          description: Base64-encoded server public ephemeral value
+
+    SRPVerifyRequest:
+      type: object
+      required:
+        - username
+        - A
+        - M1
+      properties:
+        username:
+          type: string
+          example: john_doe
+        A:
+          type: string
+          description: Base64-encoded client public ephemeral value
+        M1:
+          type: string
+          description: Base64-encoded client proof
+
+    SRPVerifyResponse:
+      type: object
+      properties:
+        M2:
+          type: string
+          description: Base64-encoded server proof
+        token:
+          type: string
+          description: JWT session token
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+
+    PushRequest:
+      type: object
+      required:
+        - device_id
+        - records
+      properties:
+        device_id:
+          type: string
+          format: uuid
+          description: Device identifier
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncRecordInput'
+          description: List of sync records to push
+
+    SyncRecordInput:
+      type: object
+      required:
+        - note_id
+        - action
+      properties:
+        note_id:
+          type: string
+          format: uuid
+          description: Note identifier
+        action:
+          type: string
+          enum:
+            - create
+            - update
+            - delete
+          description: Action type for this record
+        version:
+          type: integer
+          format: int64
+          description: Client-side version number
+        payload:
+          type: string
+          description: Note content payload (CRDT or plain text)
+
+    PushResponse:
+      type: object
+      properties:
+        processed:
+          type: integer
+          description: Number of records successfully processed
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conflict'
+          description: List of detected conflicts (if any)
+
+    PullRequest:
+      type: object
+      required:
+        - device_id
+      properties:
+        device_id:
+          type: string
+          format: uuid
+          description: Device identifier
+        since_version:
+          type: integer
+          format: int64
+          description: Pull records with version greater than this value
+
+    PullResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncRecord'
+          description: List of sync records
+        latest_version:
+          type: integer
+          format: int64
+          description: Latest version number on the server
+        has_more:
+          type: boolean
+          description: Whether more records are available
+        limit:
+          type: integer
+          description: Number of records returned in this response
+
+    SyncRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          format: uuid
+        note_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum:
+            - create
+            - update
+            - delete
+        version:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        payload:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SyncStatus:
+      type: object
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        last_sync_at:
+          type: string
+          format: date-time
+        last_sync_version:
+          type: integer
+          format: int64
+        latest_version:
+          type: integer
+          format: int64
+        pending_count:
+          type: integer
+          format: int64
+          description: Number of pending changes not yet synced to this device
+
+    Conflict:
+      type: object
+      properties:
+        record_id:
+          type: string
+          format: uuid
+        note_id:
+          type: string
+          format: uuid
+        local_version:
+          type: integer
+          format: int64
+        server_version:
+          type: integer
+          format: int64
+        local_data:
+          type: string
+        server_data:
+          type: string
+        strategy:
+          type: string
+          enum:
+            - last_write_wins
+            - manual
+
+    ConflictResolution:
+      type: object
+      required:
+        - note_id
+        - chosen_data
+        - version
+      properties:
+        note_id:
+          type: string
+          format: uuid
+        chosen_data:
+          type: string
+          description: The data chosen to resolve the conflict
+        version:
+          type: integer
+          format: int64
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error description

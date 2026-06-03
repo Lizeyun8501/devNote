@@ -35,10 +35,7 @@ final class FFIResponseC extends Struct {
 }
 
 class FFIBridge {
-  FFIBridge._();
-
-  static final FFIBridge _instance = FFIBridge._();
-  static FFIBridge get instance => _instance;
+  FFIBridge();
 
   DynamicLibrary? _dylib;
   bool _isAvailable = false;

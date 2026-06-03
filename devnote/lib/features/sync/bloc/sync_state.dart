@@ -1,7 +1,6 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 
-abstract class SyncState extends Equatable {
+sealed class SyncState {
   final bool autoSyncEnabled;
   final Duration syncInterval;
   final String? serverAddress;
@@ -11,12 +10,9 @@ abstract class SyncState extends Equatable {
     this.syncInterval = const Duration(minutes: 5),
     this.serverAddress,
   });
-
-  @override
-  List<Object?> get props => [autoSyncEnabled, syncInterval, serverAddress];
 }
 
-class SyncIdle extends SyncState {
+final class SyncIdle extends SyncState {
   const SyncIdle({
     super.autoSyncEnabled,
     super.syncInterval,
@@ -24,7 +20,7 @@ class SyncIdle extends SyncState {
   });
 }
 
-class SyncInProgress extends SyncState {
+final class SyncInProgress extends SyncState {
   final int pushCount;
   final int pullCount;
 
@@ -35,12 +31,9 @@ class SyncInProgress extends SyncState {
     super.syncInterval,
     super.serverAddress,
   });
-
-  @override
-  List<Object?> get props => [pushCount, pullCount, ...super.props];
 }
 
-class SyncCompleted extends SyncState {
+final class SyncCompleted extends SyncState {
   final DateTime lastSyncTime;
 
   const SyncCompleted({
@@ -49,12 +42,9 @@ class SyncCompleted extends SyncState {
     super.syncInterval,
     super.serverAddress,
   });
-
-  @override
-  List<Object?> get props => [lastSyncTime, ...super.props];
 }
 
-class SyncError extends SyncState {
+final class SyncError extends SyncState {
   final String message;
 
   const SyncError({
@@ -63,12 +53,9 @@ class SyncError extends SyncState {
     super.syncInterval,
     super.serverAddress,
   });
-
-  @override
-  List<Object?> get props => [message, ...super.props];
 }
 
-class SyncConflict extends SyncState {
+final class SyncConflict extends SyncState {
   final List<ConflictInfo> conflicts;
 
   const SyncConflict({
@@ -77,12 +64,9 @@ class SyncConflict extends SyncState {
     super.syncInterval,
     super.serverAddress,
   });
-
-  @override
-  List<Object?> get props => [conflicts, ...super.props];
 }
 
-class SyncRetrying extends SyncState {
+final class SyncRetrying extends SyncState {
   final int retryAttempt;
 
   const SyncRetrying({
@@ -91,7 +75,4 @@ class SyncRetrying extends SyncState {
     super.syncInterval,
     super.serverAddress,
   });
-
-  @override
-  List<Object?> get props => [retryAttempt, ...super.props];
 }

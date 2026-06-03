@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/core/di/injection.dart';
 import 'crypto/e2e_crypto_service.dart';
 
 enum SyncServiceStatus {
@@ -47,15 +48,12 @@ class SyncServiceState {
 }
 
 class SyncService {
-  SyncService._();
-
-  static final SyncService _instance = SyncService._();
-  static SyncService get instance => _instance;
+  SyncService();
 
   static const String _keyLastSyncTime = 'sync_last_sync_time';
   static const String _keyPendingChanges = 'sync_pending_changes';
 
-  final E2ECryptoService _cryptoService = E2ECryptoService.instance;
+  final E2ECryptoService _cryptoService = getIt<E2ECryptoService>();
 
   SyncServiceState _state = const SyncServiceState(
     status: SyncServiceStatus.idle,

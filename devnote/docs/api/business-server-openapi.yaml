@@ -1,0 +1,1807 @@
+openapi: 3.0.3
+info:
+  title: DevNote Business Server API
+  description: |
+    API for DevNote's business server, providing note metadata management, tag organization,
+    folder hierarchy management, knowledge graph operations, and validation rules.
+  version: 1.0.0
+  contact:
+    name: DevNote Team
+servers:
+  - url: http://localhost:8081
+    description: Local development
+
+tags:
+  - name: health
+    description: Health check
+  - name: metadata
+    description: Note metadata CRUD and search
+  - name: tags
+    description: Tag management, hierarchy, and note associations
+  - name: folders
+    description: Folder hierarchy, move/copy, and note associations
+  - name: knowledge
+    description: Knowledge graph relations, metrics, and suggestions
+  - name: validation
+    description: Validation and business rule management
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/v1/health:
+    get:
+      tags:
+        - health
+      summary: Health check
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ========================
+  # Metadata
+  # ========================
+
+  /api/v1/metadata:
+    post:
+      tags:
+        - metadata
+      summary: Create note metadata
+      operationId: createMetadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteMeta'
+      responses:
+        '201':
+          description: Metadata created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - metadata
+      summary: List note metadata with pagination
+      operationId: listMetadata
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated list of metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNoteMetaResponse'
+
+  /api/v1/metadata/filter:
+    get:
+      tags:
+        - metadata
+      summary: Filter note metadata by attributes
+      operationId: filterMetadata
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+        - name: author
+          in: query
+          schema:
+            type: string
+        - name: language
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Filtered metadata list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNoteMetaResponse'
+
+  /api/v1/metadata/batch:
+    post:
+      tags:
+        - metadata
+      summary: Batch create note metadata
+      operationId: batchCreateMetadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - items
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/NoteMeta'
+      responses:
+        '201':
+          description: Batch created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/metadata/batch-delete:
+    post:
+      tags:
+        - metadata
+      summary: Batch delete note metadata
+      operationId: batchDeleteMetadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: Batch deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/metadata/{id}:
+    get:
+      tags:
+        - metadata
+      summary: Get note metadata by ID
+      operationId: getMetadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Metadata retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - metadata
+      summary: Update note metadata
+      operationId: updateMetadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteMeta'
+      responses:
+        '200':
+          description: Metadata updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - metadata
+      summary: Delete note metadata
+      operationId: deleteMetadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Metadata deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ========================
+  # Validation
+  # ========================
+
+  /api/v1/validate/note/{id}:
+    get:
+      tags:
+        - validation
+      summary: Validate a note
+      operationId: validateNote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/validate/folder/{id}:
+    get:
+      tags:
+        - validation
+      summary: Validate a folder
+      operationId: validateFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/validate/tag/{id}:
+    get:
+      tags:
+        - validation
+      summary: Validate a tag
+      operationId: validateTag
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/validate/knowledge/{id}:
+    get:
+      tags:
+        - validation
+      summary: Validate a knowledge relation
+      operationId: validateKnowledgeRelation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/validate/rules:
+    post:
+      tags:
+        - validation
+      summary: Create a validation rule
+      operationId: createValidationRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRule'
+      responses:
+        '201':
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - validation
+      summary: List all validation rules
+      operationId: listValidationRules
+      responses:
+        '200':
+          description: List of validation rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/validate/rules/{id}:
+    put:
+      tags:
+        - validation
+      summary: Update a validation rule
+      operationId: updateValidationRule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRule'
+      responses:
+        '200':
+          description: Rule updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - validation
+      summary: Delete a validation rule
+      operationId: deleteValidationRule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Rule deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/validate/business-rules:
+    post:
+      tags:
+        - validation
+      summary: Create a business rule
+      operationId: createBusinessRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BusinessRule'
+      responses:
+        '201':
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - validation
+      summary: List all business rules
+      operationId: listBusinessRules
+      responses:
+        '200':
+          description: List of business rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/validate/business-rules/{id}:
+    put:
+      tags:
+        - validation
+      summary: Update a business rule
+      operationId: updateBusinessRule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BusinessRule'
+      responses:
+        '200':
+          description: Rule updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - validation
+      summary: Delete a business rule
+      operationId: deleteBusinessRule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Rule deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ========================
+  # Tags
+  # ========================
+
+  /api/v1/tags:
+    post:
+      tags:
+        - tags
+      summary: Create a tag
+      operationId: createTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagMeta'
+      responses:
+        '201':
+          description: Tag created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - tags
+      summary: List tags with pagination
+      operationId: listTags
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated list of tags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTagResponse'
+
+  /api/v1/tags/top:
+    get:
+      tags:
+        - tags
+      summary: Get most frequently used tags
+      operationId: getTopTags
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Top tags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/by-note/{noteId}:
+    get:
+      tags:
+        - tags
+      summary: Get all tags associated with a note
+      operationId: getTagsByNote
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tags for the note
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/{id}:
+    get:
+      tags:
+        - tags
+      summary: Get a tag by ID
+      operationId: getTag
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - tags
+      summary: Update a tag
+      operationId: updateTag
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagMeta'
+      responses:
+        '200':
+          description: Tag updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - tags
+      summary: Delete a tag
+      operationId: deleteTag
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/{id}/children:
+    get:
+      tags:
+        - tags
+      summary: Get direct children of a tag
+      operationId: getTagChildren
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Child tags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/{id}/hierarchy:
+    get:
+      tags:
+        - tags
+      summary: Get full tag hierarchy (ancestors and descendants)
+      operationId: getTagHierarchy
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag hierarchy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/{id}/stats:
+    get:
+      tags:
+        - tags
+      summary: Get tag statistics
+      operationId: getTagStats
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/{id}/notes:
+    get:
+      tags:
+        - tags
+      summary: Get all notes associated with a tag
+      operationId: getNotesByTag
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Paginated notes for the tag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNoteMetaResponse'
+
+  /api/v1/tags/{id}/notes/{noteId}:
+    post:
+      tags:
+        - tags
+      summary: Link a tag to a note
+      operationId: linkTagToNote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Tag ID
+          schema:
+            type: string
+            format: uuid
+        - name: noteId
+          in: path
+          required: true
+          description: Note ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag linked to note
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+    delete:
+      tags:
+        - tags
+      summary: Unlink a tag from a note
+      operationId: unlinkTagFromNote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Tag ID
+          schema:
+            type: string
+            format: uuid
+        - name: noteId
+          in: path
+          required: true
+          description: Note ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tag unlinked from note
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/tags/merge:
+    post:
+      tags:
+        - tags
+      summary: Merge two tags (source into target)
+      operationId: mergeTags
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - source_tag_id
+                - target_tag_id
+              properties:
+                source_tag_id:
+                  type: string
+                  format: uuid
+                target_tag_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Tags merged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tags/split:
+    post:
+      tags:
+        - tags
+      summary: Split a tag, creating a new tag for selected notes
+      operationId: splitTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - source_tag_id
+                - new_tag_name
+                - note_ids
+              properties:
+                source_tag_id:
+                  type: string
+                  format: uuid
+                new_tag_name:
+                  type: string
+                note_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: Tag split
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========================
+  # Folders
+  # ========================
+
+  /api/v1/folders:
+    post:
+      tags:
+        - folders
+      summary: Create a folder
+      operationId: createFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FolderMeta'
+      responses:
+        '201':
+          description: Folder created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - folders
+      summary: List folders by parent
+      operationId: listFolders
+      parameters:
+        - name: parent_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+            description: Filter by parent folder ID (empty for root folders)
+      responses:
+        '200':
+          description: List of folders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/folders/tree:
+    get:
+      tags:
+        - folders
+      summary: Get folder tree structure
+      operationId: getFolderTree
+      parameters:
+        - name: parent_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+            description: Root parent ID (empty for full tree from root)
+      responses:
+        '200':
+          description: Folder tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/folders/{id}:
+    get:
+      tags:
+        - folders
+      summary: Get a folder by ID
+      operationId: getFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Folder retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - folders
+      summary: Update a folder
+      operationId: updateFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FolderMeta'
+      responses:
+        '200':
+          description: Folder updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - folders
+      summary: Delete a folder
+      operationId: deleteFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cascade
+          in: query
+          description: Delete child folders recursively
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Folder deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/folders/{id}/path:
+    get:
+      tags:
+        - folders
+      summary: Resolve the full path of a folder
+      operationId: resolveFolderPath
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Folder path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/folders/{id}/notes:
+    get:
+      tags:
+        - folders
+      summary: Get all notes in a folder
+      operationId: getNotesByFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Paginated notes in the folder
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNoteMetaResponse'
+
+  /api/v1/folders/{id}/move:
+    post:
+      tags:
+        - folders
+      summary: Move a folder to a new parent
+      operationId: moveFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - new_parent_id
+              properties:
+                new_parent_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Folder moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/folders/{id}/copy:
+    post:
+      tags:
+        - folders
+      summary: Copy a folder to a new parent
+      operationId: copyFolder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - new_parent_id
+              properties:
+                new_parent_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Folder copied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========================
+  # Knowledge Graph
+  # ========================
+
+  /api/v1/knowledge/relations:
+    post:
+      tags:
+        - knowledge
+      summary: Create a knowledge relation between two notes
+      operationId: createKnowledgeRelation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - source_note_id
+                - target_note_id
+              properties:
+                source_note_id:
+                  type: string
+                  format: uuid
+                target_note_id:
+                  type: string
+                  format: uuid
+                relation_type:
+                  type: string
+                  default: link
+                weight:
+                  type: number
+                  format: double
+                  default: 1.0
+      responses:
+        '201':
+          description: Relation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/knowledge/relations/{id}:
+    delete:
+      tags:
+        - knowledge
+      summary: Delete a knowledge relation
+      operationId: deleteKnowledgeRelation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Relation deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/knowledge/notes/{noteId}/relations:
+    get:
+      tags:
+        - knowledge
+      summary: Get all knowledge relations for a note
+      operationId: getKnowledgeRelations
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Knowledge relations for the note
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/knowledge/graph/edges:
+    get:
+      tags:
+        - knowledge
+      summary: Compute all graph edges
+      operationId: computeGraphEdges
+      responses:
+        '200':
+          description: Graph edges
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/knowledge/graph/metrics:
+    get:
+      tags:
+        - knowledge
+      summary: Compute knowledge graph metrics
+      operationId: computeGraphMetrics
+      responses:
+        '200':
+          description: Graph metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GraphMetrics'
+
+  /api/v1/knowledge/graph/orphans:
+    get:
+      tags:
+        - knowledge
+      summary: Find orphan notes (no relations)
+      operationId: findOrphanNotes
+      responses:
+        '200':
+          description: List of orphan note IDs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/knowledge/graph/coverage:
+    get:
+      tags:
+        - knowledge
+      summary: Compute graph coverage statistics
+      operationId: computeCoverage
+      responses:
+        '200':
+          description: Coverage statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/knowledge/suggest/{noteId}:
+    get:
+      tags:
+        - knowledge
+      summary: Suggest related notes
+      operationId: suggestRelatedNotes
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Suggested related notes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/knowledge/path:
+    get:
+      tags:
+        - knowledge
+      summary: Find shortest path between two notes
+      operationId: findShortestPath
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: Source note ID
+          schema:
+            type: string
+            format: uuid
+        - name: to
+          in: query
+          required: true
+          description: Target note ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Shortest path found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShortestPathResponse'
+        '400':
+          description: Missing from/to parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No path found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token (obtained from sync-server auth endpoints).
+
+  schemas:
+    SuccessResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          description: Response payload (varies by endpoint)
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: HTTP status code
+          example: 400
+        message:
+          type: string
+          description: Error message
+          example: invalid request body
+        detail:
+          type: string
+          description: Detailed error information
+
+    PaginatedNoteMetaResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoteMeta'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_pages:
+          type: integer
+
+    PaginatedTagResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TagMeta'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_pages:
+          type: integer
+
+    NoteMeta:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        author:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        modified_at:
+          type: string
+          format: date-time
+        word_count:
+          type: integer
+        char_count:
+          type: integer
+        format:
+          type: string
+          description: Note format (e.g., markdown, html)
+        excerpt:
+          type: string
+        language:
+          type: string
+        is_encrypted:
+          type: boolean
+        content_hash:
+          type: string
+        custom_fields:
+          type: string
+          description: JSON-encoded custom fields
+
+    FolderMeta:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        path:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+        color:
+          type: string
+        sort_order:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        modified_at:
+          type: string
+          format: date-time
+        note_count:
+          type: integer
+        child_count:
+          type: integer
+
+    TagMeta:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        color:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        use_count:
+          type: integer
+
+    TagRelation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tag_id:
+          type: string
+          format: uuid
+        note_id:
+          type: string
+          format: uuid
+        linked_at:
+          type: string
+          format: date-time
+
+    KnowledgeRelation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_note_id:
+          type: string
+          format: uuid
+        target_note_id:
+          type: string
+          format: uuid
+        weight:
+          type: number
+          format: double
+        reference_count:
+          type: integer
+        relation_type:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ValidationRule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        rule_type:
+          type: string
+        pattern:
+          type: string
+        severity:
+          type: string
+        is_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BusinessRule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        expression:
+          type: string
+        action:
+          type: string
+        priority:
+          type: integer
+        is_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    GraphMetrics:
+      type: object
+      properties:
+        total_nodes:
+          type: integer
+        total_edges:
+          type: integer
+        density:
+          type: number
+          format: double
+        orphan_count:
+          type: integer
+        cluster_count:
+          type: integer
+        avg_degree:
+          type: number
+          format: double
+        degree_centrality:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+        page_rank:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+        betweenness:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+        clusters:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+
+    ValidationResult:
+      type: object
+      properties:
+        rule_id:
+          type: string
+          format: uuid
+        rule_name:
+          type: string
+        passed:
+          type: boolean
+        message:
+          type: string
+        severity:
+          type: string
+
+    ValidationReport:
+      type: object
+      properties:
+        target_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          description: Type of validated entity (note, folder, tag, knowledge)
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationResult'
+        passed:
+          type: boolean
+          description: Overall validation pass status
+
+    ShortestPathResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: array
+              items:
+                type: string
+                format: uuid
+              description: Sequence of note IDs forming the shortest path
+            distance:
+              type: integer
+              description: Number of hops in the shortest path

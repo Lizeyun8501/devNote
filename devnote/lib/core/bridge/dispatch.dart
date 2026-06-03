@@ -6,6 +6,7 @@ import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/ffi_request.dart';
 import 'package:devnote/core/bridge/grpc_bridge.dart';
 import 'package:devnote/core/bridge/websocket_bridge.dart';
+import 'package:devnote/core/di/injection.dart';
 
 enum NoteEvent {
   createNote('NoteEvent.CreateNote'),
@@ -64,14 +65,11 @@ enum DispatchMode {
 }
 
 class Dispatch {
-  Dispatch._();
+  Dispatch();
 
-  static final Dispatch _instance = Dispatch._();
-  static Dispatch get instance => _instance;
-
-  final FFIBridge _bridge = FFIBridge.instance;
-  final GrpcBridge _grpcBridge = GrpcBridge.instance;
-  final WebSocketBridge _wsBridge = WebSocketBridge.instance;
+  final FFIBridge _bridge = getIt<FFIBridge>();
+  final GrpcBridge _grpcBridge = getIt<GrpcBridge>();
+  final WebSocketBridge _wsBridge = getIt<WebSocketBridge>();
 
   DispatchMode _mode = DispatchMode.local;
 

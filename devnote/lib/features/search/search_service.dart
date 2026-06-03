@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 class HighlightModel {
   final int start;
@@ -77,7 +78,7 @@ List<SearchResultModel> _parseSearchResults(FlowyResult<Uint8List, FlowyInternal
 }
 
 class SearchService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
   final List<String> _searchHistory = [];
   static const int _maxHistory = 20;
 

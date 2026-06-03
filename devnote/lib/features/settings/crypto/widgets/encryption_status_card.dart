@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import '../crypto_service.dart';
 
 class EncryptionStatusCard extends StatelessWidget {
@@ -6,7 +7,7 @@ class EncryptionStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cryptoService = CryptoService.instance;
+    final cryptoService = getIt<CryptoService>();
     final state = cryptoService.state;
 
     final isEnabled = state.isEnabled;

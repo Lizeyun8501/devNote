@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'e2e_crypto_service.dart';
 
 class E2ESetupPage extends StatefulWidget {
@@ -70,7 +71,7 @@ class _E2ESetupPageState extends State<E2ESetupPage> {
       _errorText = null;
     });
 
-    final success = await E2ECryptoService.instance.generateKeyPair(
+    final success = await getIt<E2ECryptoService>().generateKeyPair(
       _passwordController.text,
     );
 
@@ -96,7 +97,7 @@ class _E2ESetupPageState extends State<E2ESetupPage> {
       _errorText = null;
     });
 
-    final backup = await E2ECryptoService.instance.exportKeyBackup(
+    final backup = await getIt<E2ECryptoService>().exportKeyBackup(
       _backupPasswordController.text,
     );
 

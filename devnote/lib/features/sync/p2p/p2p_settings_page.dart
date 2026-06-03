@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 
 import 'p2p_service.dart';
 import 'device_list_widget.dart';
@@ -11,7 +12,7 @@ class P2PSettingsPage extends StatefulWidget {
 }
 
 class _P2PSettingsPageState extends State<P2PSettingsPage> {
-  final P2PService _p2pService = P2PService.instance;
+  final P2PService _p2pService = getIt<P2PService>();
   final TextEditingController _signalingServerController = TextEditingController();
 
   @override

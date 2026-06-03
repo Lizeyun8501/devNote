@@ -9,7 +9,9 @@ class FolderTree extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<FolderBloc, FolderState>(
+    return Semantics(
+      label: '文件夹树',
+      child: BlocBuilder<FolderBloc, FolderState>(
       builder: (context, state) {
         if (state is FolderLoaded) {
           if (state.rootNodes.isEmpty) {
@@ -33,6 +35,7 @@ class FolderTree extends StatelessWidget {
         }
         return const Center(child: CircularProgressIndicator());
       },
+    ),
     );
   }
 }
@@ -105,16 +108,20 @@ class _FolderTile extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (hasChildren)
-              GestureDetector(
-                onTap: () => context.read<FolderBloc>().add(
-                      ExpandFolder(
-                        folderId: node.folder.id,
-                        isExpanded: !isExpanded,
+              Semantics(
+                label: isExpanded ? '收起文件夹' : '展开文件夹',
+                hint: '展开或收起文件夹内容',
+                child: GestureDetector(
+                  onTap: () => context.read<FolderBloc>().add(
+                        ExpandFolder(
+                          folderId: node.folder.id,
+                          isExpanded: !isExpanded,
+                        ),
                       ),
-                    ),
-                child: Icon(
-                  isExpanded ? Icons.expand_more : Icons.chevron_right,
-                  size: 16,
+                  child: Icon(
+                    isExpanded ? Icons.expand_more : Icons.chevron_right,
+                    size: 16,
+                  ),
                 ),
               )
             else
@@ -128,12 +135,15 @@ class _FolderTile extends StatelessWidget {
             ),
           ],
         ),
-        title: Text(
-          node.folder.name,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: isSelected ? Theme.of(context).colorScheme.primary : null,
-                fontWeight: isSelected ? FontWeight.w600 : null,
-              ),
+        title: Semantics(
+          label: '文件夹: ${node.folder.name}',
+          child: Text(
+            node.folder.name,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                  fontWeight: isSelected ? FontWeight.w600 : null,
+                ),
+          ),
         ),
         onTap: () => context.read<FolderBloc>().add(SelectFolder(node.folder.id)),
         onLongPress: () => _showContextMenu(context),

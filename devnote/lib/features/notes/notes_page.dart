@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/core/constants/app_constants.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
@@ -34,7 +35,7 @@ class NotesPage extends StatelessWidget {
           create: (_) => NotesBloc(SqliteNoteRepository(dbHelper)),
         ),
         BlocProvider(
-          create: (_) => SyncBloc(SyncService.instance),
+          create: (_) => SyncBloc(getIt<SyncService>()),
         ),
       ],
       child: Scaffold(
@@ -85,10 +86,13 @@ class _DirectoryTreePanel extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       child: Row(
         children: [
-          Icon(
-            Icons.description_outlined,
-            size: 20,
-            color: Theme.of(context).colorScheme.primary,
+          Semantics(
+            label: '笔记列表',
+            child: Icon(
+              Icons.description_outlined,
+              size: 20,
+              color: Theme.of(context).colorScheme.primary,
+            ),
           ),
           const SizedBox(width: 8),
           Text(
@@ -108,10 +112,14 @@ class _DirectoryTreePanel extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          IconButton(
-            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-            tooltip: '新建文件夹',
-            onPressed: () => _showCreateFolderDialog(context),
+          Semantics(
+            label: '新建文件夹',
+            hint: '创建新的文件夹',
+            child: IconButton(
+              icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+              tooltip: '新建文件夹',
+              onPressed: () => _showCreateFolderDialog(context),
+            ),
           ),
         ],
       ),
@@ -172,27 +180,39 @@ class NotesListPlaceholder extends StatelessWidget {
           title: const Text('笔记列表'),
           actions: [
             const SyncStatusWidget(),
-            IconButton(
-              icon: const Icon(Icons.search),
-              onPressed: () => context.go('/search'),
+            Semantics(
+              label: '搜索笔记',
+              hint: '搜索你的笔记',
+              child: IconButton(
+                icon: const Icon(Icons.search),
+                onPressed: () => context.go('/search'),
+              ),
             ),
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              onPressed: () => context.go('/settings'),
+            Semantics(
+              label: '设置',
+              hint: '打开设置页面',
+              child: IconButton(
+                icon: const Icon(Icons.settings_outlined),
+                onPressed: () => context.go('/settings'),
+              ),
             ),
           ],
         ),
         body: const NoteList(),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () {
-            final folderState = context.read<FolderBloc>().state;
-            String folderId = '';
-            if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
-              folderId = folderState.selectedFolderId!;
-            }
-            context.read<NotesBloc>().add(CreateNote(title: '无标题', folderId: folderId));
-          },
-          child: const Icon(Icons.add),
+        floatingActionButton: Semantics(
+          label: '新建笔记',
+          hint: '创建一条新的笔记',
+          child: FloatingActionButton(
+            onPressed: () {
+              final folderState = context.read<FolderBloc>().state;
+              String folderId = '';
+              if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
+                folderId = folderState.selectedFolderId!;
+              }
+              context.read<NotesBloc>().add(CreateNote(title: '无标题', folderId: folderId));
+            },
+            child: const Icon(Icons.add),
+          ),
         ),
       ),
     );

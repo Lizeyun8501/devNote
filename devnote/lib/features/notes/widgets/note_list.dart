@@ -35,39 +35,51 @@ class NoteList extends StatelessWidget {
 
   Widget _buildListView(BuildContext context, List<NoteModel> notes, String? selectedNoteId) {
     if (notes.isEmpty) {
-      return const Center(child: Text('暂无笔记'));
+      return Semantics(
+        label: '暂无笔记',
+        child: const Center(child: Text('暂无笔记')),
+      );
     }
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: notes.length,
-      itemBuilder: (context, index) {
-        return NoteCard(
-          note: notes[index],
-          isSelected: notes[index].id == selectedNoteId,
-        );
-      },
+    return Semantics(
+      label: '笔记列表',
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: notes.length,
+        itemBuilder: (context, index) {
+          return NoteCard(
+            note: notes[index],
+            isSelected: notes[index].id == selectedNoteId,
+          );
+        },
+      ),
     );
   }
 
   Widget _buildGridView(BuildContext context, List<NoteModel> notes, String? selectedNoteId) {
     if (notes.isEmpty) {
-      return const Center(child: Text('暂无笔记'));
+      return Semantics(
+        label: '暂无笔记',
+        child: const Center(child: Text('暂无笔记')),
+      );
     }
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 280,
-        childAspectRatio: 1.4,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
+    return Semantics(
+      label: '笔记网格',
+      child: GridView.builder(
+        padding: const EdgeInsets.all(16),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 280,
+          childAspectRatio: 1.4,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+        ),
+        itemCount: notes.length,
+        itemBuilder: (context, index) {
+          return NoteCard(
+            note: notes[index],
+            isSelected: notes[index].id == selectedNoteId,
+          );
+        },
       ),
-      itemCount: notes.length,
-      itemBuilder: (context, index) {
-        return NoteCard(
-          note: notes[index],
-          isSelected: notes[index].id == selectedNoteId,
-        );
-      },
     );
   }
 }
@@ -87,29 +99,36 @@ class _NoteListToolbar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          IconButton(
-            icon: Icon(viewMode == NoteViewMode.list ? Icons.view_list : Icons.grid_view),
-            onPressed: () {
-              final newMode = viewMode == NoteViewMode.list
-                  ? NoteViewMode.grid
-                  : NoteViewMode.list;
-              context.read<NotesBloc>().add(ChangeViewMode(newMode));
-            },
-            tooltip: viewMode == NoteViewMode.list ? '网格视图' : '列表视图',
+          Semantics(
+            label: viewMode == NoteViewMode.list ? '切换为网格视图' : '切换为列表视图',
+            child: IconButton(
+              icon: Icon(viewMode == NoteViewMode.list ? Icons.view_list : Icons.grid_view),
+              onPressed: () {
+                final newMode = viewMode == NoteViewMode.list
+                    ? NoteViewMode.grid
+                    : NoteViewMode.list;
+                context.read<NotesBloc>().add(ChangeViewMode(newMode));
+              },
+              tooltip: viewMode == NoteViewMode.list ? '网格视图' : '列表视图',
+            ),
           ),
           const SizedBox(width: 4),
-          PopupMenuButton<NoteSortBy>(
-            icon: const Icon(Icons.sort),
-            tooltip: '排序',
-            initialValue: sortBy,
-            onSelected: (value) {
-              context.read<NotesBloc>().add(ChangeSortBy(value));
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: NoteSortBy.updatedAt, child: Text('按修改时间')),
-              const PopupMenuItem(value: NoteSortBy.createdAt, child: Text('按创建时间')),
-              const PopupMenuItem(value: NoteSortBy.title, child: Text('按标题')),
-            ],
+          Semantics(
+            label: '排序',
+            hint: '选择笔记排序方式',
+            child: PopupMenuButton<NoteSortBy>(
+              icon: const Icon(Icons.sort),
+              tooltip: '排序',
+              initialValue: sortBy,
+              onSelected: (value) {
+                context.read<NotesBloc>().add(ChangeSortBy(value));
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: NoteSortBy.updatedAt, child: Text('按修改时间')),
+                const PopupMenuItem(value: NoteSortBy.createdAt, child: Text('按创建时间')),
+                const PopupMenuItem(value: NoteSortBy.title, child: Text('按标题')),
+              ],
+            ),
           ),
         ],
       ),

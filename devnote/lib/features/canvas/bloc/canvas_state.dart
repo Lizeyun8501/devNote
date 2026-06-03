@@ -1,18 +1,14 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/features/canvas/canvas_service.dart';
 
-abstract class CanvasState extends Equatable {
+sealed class CanvasState {
   const CanvasState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class CanvasInitial extends CanvasState {
+final class CanvasInitial extends CanvasState {
   const CanvasInitial();
 }
 
-class CanvasLoaded extends CanvasState {
+final class CanvasLoaded extends CanvasState {
   final String canvasId;
   final List<CanvasNodeModel> nodes;
   final List<CanvasEdgeModel> edges;
@@ -38,16 +34,10 @@ class CanvasLoaded extends CanvasState {
       selectedNodeId: selectedNodeId ?? this.selectedNodeId,
     );
   }
-
-  @override
-  List<Object?> get props => [canvasId, nodes, edges, selectedNodeId];
 }
 
-class CanvasError extends CanvasState {
+final class CanvasError extends CanvasState {
   final String message;
 
   const CanvasError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

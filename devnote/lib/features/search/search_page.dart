@@ -92,37 +92,48 @@ class _SearchViewState extends State<_SearchView> {
       child: Row(
         children: [
           Expanded(
-            child: TextField(
-              controller: _searchController,
-              onChanged: _onSearchChanged,
-              onSubmitted: _onSearchSubmitted,
-              autofocus: true,
-              decoration: InputDecoration(
-                hintText: '搜索笔记...',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          context.read<SearchBloc>().add(const SearchQueryChanged(''));
-                        },
-                      )
-                    : null,
+            child: Semantics(
+              label: '搜索框',
+              hint: '输入搜索内容',
+              child: TextField(
+                controller: _searchController,
+                onChanged: _onSearchChanged,
+                onSubmitted: _onSearchSubmitted,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: '搜索笔记...',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? Semantics(
+                          label: '清除搜索',
+                          child: IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              context.read<SearchBloc>().add(const SearchQueryChanged(''));
+                            },
+                          ),
+                        )
+                      : null,
+                ),
               ),
             ),
           ),
           const SizedBox(width: 8),
-          IconButton(
-            icon: Icon(
-              Icons.tune,
-              color: _showFilter ? Theme.of(context).colorScheme.primary : null,
+          Semantics(
+            label: _showFilter ? '隐藏筛选条件' : '显示筛选条件',
+            hint: '切换搜索筛选面板',
+            child: IconButton(
+              icon: Icon(
+                Icons.tune,
+                color: _showFilter ? Theme.of(context).colorScheme.primary : null,
+              ),
+              onPressed: () {
+                setState(() {
+                  _showFilter = !_showFilter;
+                });
+              },
             ),
-            onPressed: () {
-              setState(() {
-                _showFilter = !_showFilter;
-              });
-            },
           ),
         ],
       ),
@@ -287,16 +298,22 @@ class _SearchViewState extends State<_SearchView> {
                 SearchService().clearSearchHistory();
                 context.read<SearchBloc>().add(const SearchHistoryRequested());
               },
-              child: const Text('清除'),
+              child: Semantics(
+                label: '清除搜索历史',
+                child: const Text('清除'),
+              ),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        ...history.map((query) => ListTile(
-              leading: const Icon(Icons.history, size: 20),
-              title: Text(query),
-              dense: true,
-              onTap: () => _onHistoryItemTap(query),
+        ...history.map((query) => Semantics(
+              label: '搜索历史: $query',
+              child: ListTile(
+                leading: const Icon(Icons.history, size: 20),
+                title: Text(query),
+                dense: true,
+                onTap: () => _onHistoryItemTap(query),
+              ),
             )),
       ],
     );

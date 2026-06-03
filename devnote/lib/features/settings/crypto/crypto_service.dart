@@ -41,10 +41,7 @@ class CryptoState {
 }
 
 class CryptoService {
-  CryptoService._();
-
-  static final CryptoService _instance = CryptoService._();
-  static CryptoService get instance => _instance;
+  CryptoService();
 
   static const String _keyEnabled = 'crypto_enabled';
   static const String _keyStrength = 'crypto_strength';

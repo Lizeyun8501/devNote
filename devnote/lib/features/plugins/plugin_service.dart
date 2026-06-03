@@ -146,10 +146,7 @@ class MarketplacePlugin {
 }
 
 class PluginService {
-  PluginService._();
-
-  static final PluginService _instance = PluginService._();
-  static PluginService get instance => _instance;
+  PluginService();
 
   final Map<String, PluginEntry> _plugins = {};
   final Map<String, List<int>> _wasmBytes = {};

@@ -21,10 +21,7 @@ typedef DevnoteWsSendDart = Pointer<FFIResponseC> Function(Pointer<Utf8>);
 
 /// WebSocket bridge that wraps the Rust FFI WebSocket client
 class WebSocketBridge {
-  WebSocketBridge._();
-
-  static final WebSocketBridge _instance = WebSocketBridge._();
-  static WebSocketBridge get instance => _instance;
+  WebSocketBridge();
 
   DynamicLibrary? _dylib;
 

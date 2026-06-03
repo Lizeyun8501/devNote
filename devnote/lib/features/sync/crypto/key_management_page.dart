@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'e2e_crypto_service.dart';
 
 class KeyManagementPage extends StatefulWidget {
@@ -10,7 +11,7 @@ class KeyManagementPage extends StatefulWidget {
 }
 
 class _KeyManagementPageState extends State<KeyManagementPage> {
-  final E2ECryptoService _cryptoService = E2ECryptoService.instance;
+  final E2ECryptoService _cryptoService = getIt<E2ECryptoService>();
   bool _isExporting = false;
   bool _isImporting = false;
 

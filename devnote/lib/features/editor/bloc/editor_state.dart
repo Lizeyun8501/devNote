@@ -1,22 +1,18 @@
-import 'package:equatable/equatable.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
 
-abstract class EditorState extends Equatable {
+sealed class EditorState {
   const EditorState();
-
-  @override
-  List<Object?> get props => [];
 }
 
-class EditorInitial extends EditorState {
+final class EditorInitial extends EditorState {
   const EditorInitial();
 }
 
-class EditorLoading extends EditorState {
+final class EditorLoading extends EditorState {
   const EditorLoading();
 }
 
-class EditorLoaded extends EditorState {
+final class EditorLoaded extends EditorState {
   final String noteId;
   final List<BlockModel> blocks;
   final String? activeBlockId;
@@ -74,16 +70,10 @@ class EditorLoaded extends EditorState {
       maxUndoLevels: maxUndoLevels ?? this.maxUndoLevels,
     );
   }
-
-  @override
-  List<Object?> get props => [noteId, blocks, activeBlockId, undoStack, redoStack, maxUndoLevels];
 }
 
-class EditorError extends EditorState {
+final class EditorError extends EditorState {
   final String message;
 
   const EditorError(this.message);
-
-  @override
-  List<Object?> get props => [message];
 }

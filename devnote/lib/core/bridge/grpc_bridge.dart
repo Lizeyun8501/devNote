@@ -23,10 +23,7 @@ typedef DevnoteGrpcDispatchDart = Pointer<FFIResponseC> Function(
 
 /// gRPC bridge that wraps the Rust FFI gRPC client
 class GrpcBridge {
-  GrpcBridge._();
-
-  static final GrpcBridge _instance = GrpcBridge._();
-  static GrpcBridge get instance => _instance;
+  GrpcBridge();
 
   DynamicLibrary? _dylib;
 

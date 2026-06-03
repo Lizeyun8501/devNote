@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 enum GraphNodeType { note, tag, folder, canvas }
 
@@ -191,7 +192,7 @@ GraphDataModel _parseGraphData(FlowyResult<Uint8List, FlowyInternalError> result
 }
 
 class GraphService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<GraphDataModel> buildGraph() async {
     final result = await _dispatch.asyncRequest(

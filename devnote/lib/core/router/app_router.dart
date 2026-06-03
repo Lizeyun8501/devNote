@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/editor_page.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/settings/settings_page.dart';
@@ -73,7 +74,7 @@ final appRouter = GoRouter(
           path: '/settings/sync',
           pageBuilder: (context, state) => NoTransitionPage(
             child: BlocProvider(
-              create: (_) => SyncBloc(SyncService.instance)..add(const StartSync()),
+              create: (_) => SyncBloc(getIt<SyncService>())..add(const StartSync()),
               child: const SyncSettingsPage(),
             ),
           ),
@@ -82,7 +83,7 @@ final appRouter = GoRouter(
           path: '/sync/conflicts',
           pageBuilder: (context, state) => NoTransitionPage(
             child: BlocProvider(
-              create: (_) => SyncBloc(SyncService.instance),
+              create: (_) => SyncBloc(getIt<SyncService>()),
               child: const ConflictResolutionPage(),
             ),
           ),
@@ -97,7 +98,7 @@ final appRouter = GoRouter(
           path: '/plugins/marketplace',
           pageBuilder: (context, state) => NoTransitionPage(
             child: BlocProvider(
-              create: (_) => PluginBloc(PluginService.instance),
+              create: (_) => PluginBloc(getIt<PluginService>()),
               child: const PluginMarketplacePage(),
             ),
           ),
@@ -106,7 +107,7 @@ final appRouter = GoRouter(
           path: '/plugins/settings',
           pageBuilder: (context, state) => NoTransitionPage(
             child: BlocProvider(
-              create: (_) => PluginBloc(PluginService.instance),
+              create: (_) => PluginBloc(getIt<PluginService>()),
               child: const PluginSettingsPage(),
             ),
           ),

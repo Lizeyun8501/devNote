@@ -80,10 +80,7 @@ class P2PState {
 }
 
 class P2PService {
-  P2PService._();
-
-  static final P2PService _instance = P2PService._();
-  static P2PService get instance => _instance;
+  P2PService();
 
   static const String _keyEnabled = 'p2p_enabled';
   static const String _keySignalingServer = 'p2p_signaling_server';

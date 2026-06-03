@@ -74,7 +74,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           _SettingsSection(title: '数据', children: [
             ListTile(
-              leading: const Icon(Icons.sync),
+              leading: Semantics(
+                label: '同步设置',
+                child: const Icon(Icons.sync),
+              ),
               title: const Text('同步设置'),
               subtitle: const Text('配置数据同步和冲突解决'),
               trailing: const Icon(Icons.chevron_right),
@@ -83,7 +86,10 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.lock_outline),
+              leading: Semantics(
+                label: '加密设置',
+                child: const Icon(Icons.lock_outline),
+              ),
               title: const Text('加密设置'),
               subtitle: const Text('管理笔记加密和密码'),
               trailing: const Icon(Icons.chevron_right),
@@ -94,7 +100,10 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.wifi_tethering),
+              leading: Semantics(
+                label: 'P2P 同步',
+                child: const Icon(Icons.wifi_tethering),
+              ),
               title: const Text('P2P 同步'),
               subtitle: const Text('设备间直接同步数据'),
               trailing: const Icon(Icons.chevron_right),
@@ -105,7 +114,10 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.extension_outlined),
+              leading: Semantics(
+                label: '插件市场',
+                child: const Icon(Icons.extension_outlined),
+              ),
               title: const Text('插件市场'),
               subtitle: const Text('浏览和安装插件'),
               trailing: const Icon(Icons.chevron_right),

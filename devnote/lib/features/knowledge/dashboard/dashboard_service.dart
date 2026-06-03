@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 
 class DashboardCardData {
   final String id;
@@ -41,7 +42,7 @@ class DashboardStats {
 }
 
 class DashboardService {
-  final Dispatch _dispatch = Dispatch.instance;
+  final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<List<DashboardCardData>> getDashboardCards() async {
     final result = await _dispatch.asyncRequest(

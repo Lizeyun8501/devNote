@@ -73,9 +73,13 @@ class _EditorViewState extends State<_EditorView> {
       },
       child: Scaffold(
         appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.of(context).pop(),
+          leading: Semantics(
+            label: '返回',
+            hint: '返回上一页',
+            child: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
           ),
           title: BlocBuilder<EditorBloc, EditorState>(
             builder: (context, state) {
@@ -84,9 +88,13 @@ class _EditorViewState extends State<_EditorView> {
             },
           ),
           actions: [
-            IconButton(
-              icon: const Icon(Icons.more_vert),
-              onPressed: () {},
+            Semantics(
+              label: '更多选项',
+              hint: '显示更多操作',
+              child: IconButton(
+                icon: const Icon(Icons.more_vert),
+                onPressed: () {},
+              ),
             ),
           ],
         ),
@@ -134,17 +142,20 @@ class _EditorViewState extends State<_EditorView> {
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
       child: Column(
         children: [
-          TextField(
-            controller: _titleController,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-            decoration: const InputDecoration(
-              hintText: '无标题',
-              border: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              filled: false,
+          Semantics(
+            label: '笔记标题',
+            child: TextField(
+              controller: _titleController,
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+              decoration: const InputDecoration(
+                hintText: '无标题',
+                border: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                filled: false,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -170,17 +181,20 @@ class _EditorViewState extends State<_EditorView> {
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
       child: Column(
         children: [
-          TextField(
-            controller: _titleController,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-            decoration: const InputDecoration(
-              hintText: '无标题',
-              border: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              filled: false,
+          Semantics(
+            label: '笔记标题',
+            child: TextField(
+              controller: _titleController,
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+              decoration: const InputDecoration(
+                hintText: '无标题',
+                border: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                filled: false,
+              ),
             ),
           ),
           const SizedBox(height: 16),

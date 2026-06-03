@@ -63,10 +63,7 @@ class E2ECryptoState {
 }
 
 class E2ECryptoService {
-  E2ECryptoService._();
-
-  static final E2ECryptoService _instance = E2ECryptoService._();
-  static E2ECryptoService get instance => _instance;
+  E2ECryptoService();
 
   static const String _keyE2EEnabled = 'e2e_crypto_enabled';
   static const String _keyCurrentKeyId = 'e2e_current_key_id';
