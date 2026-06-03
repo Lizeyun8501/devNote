@@ -6,6 +6,8 @@ use devnote_crdt::{
     CRDTDocument, Operation, ConflictInfo,
     detect_conflicts, merge_documents,
 };
+use rusqlite::Connection;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SyncStatus {
@@ -40,11 +42,19 @@ pub enum SyncError {
     LocalError(String),
     #[error("crdt error: {0}")]
     CRDTError(String),
+    #[error("database error: {0}")]
+    DatabaseError(String),
 }
 
 impl From<devnote_crdt::CRDTError> for SyncError {
     fn from(err: devnote_crdt::CRDTError) -> Self {
         SyncError::CRDTError(err.to_string())
+    }
+}
+
+impl From<rusqlite::Error> for SyncError {
+    fn from(err: rusqlite::Error) -> Self {
+        SyncError::DatabaseError(err.to_string())
     }
 }
 
@@ -82,10 +92,30 @@ pub struct ClientSyncEngine {
     pub local_state: LocalState,
     pub status: SyncStatus,
     pub conflicts: Vec<ConflictInfo>,
+    db: Mutex<Connection>,
 }
 
 impl ClientSyncEngine {
     pub fn new(document_id: String, device_id: String) -> Self {
+        let db = Connection::open_in_memory()
+            .expect("Failed to open in-memory database");
+
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS sync_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        ).expect("Failed to create sync_state table");
+
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS operations (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            )",
+            [],
+        ).expect("Failed to create operations table");
+
         Self {
             device_id: device_id.clone(),
             local_state: LocalState {
@@ -95,6 +125,7 @@ impl ClientSyncEngine {
             },
             status: SyncStatus::Idle,
             conflicts: Vec::new(),
+            db: Mutex::new(db),
         }
     }
 
@@ -172,11 +203,8 @@ impl ClientSyncEngine {
 
         Ok(())
     }
-}
 
-impl SyncEngine for ClientSyncEngine {
-    #[instrument]
-    fn sync(&mut self) -> Result<SyncInfo, SyncError> {
+    fn sync_inner(&mut self) -> Result<SyncInfo, SyncError> {
         info!("sync: starting sync with {} pending changes", self.local_state.pending_operations.len());
         self.status = SyncStatus::Syncing;
         Ok(SyncInfo {
@@ -184,8 +212,55 @@ impl SyncEngine for ClientSyncEngine {
             last_synced_at: self.local_state.last_synced_at,
             pending_changes: self.local_state.pending_operations.len() as u64,
             server_version: None,
-            local_version: self.local_state.document.sequence,
+            local_version: self.local_state.document.hlc.logical as u64,
         })
+    }
+
+    fn push_changes_inner(&mut self) -> Result<SyncInfo, SyncError> {
+        info!("push_changes: {} pending operations", self.local_state.pending_operations.len());
+        self.status = SyncStatus::Syncing;
+        Ok(SyncInfo {
+            status: self.status.clone(),
+            last_synced_at: self.local_state.last_synced_at,
+            pending_changes: self.local_state.pending_operations.len() as u64,
+            server_version: None,
+            local_version: self.local_state.document.hlc.logical as u64,
+        })
+    }
+
+    fn pull_changes_inner(&mut self) -> Result<SyncInfo, SyncError> {
+        info!("pull_changes: local_version={}", self.local_state.document.hlc.logical);
+        self.status = SyncStatus::Syncing;
+        Ok(SyncInfo {
+            status: self.status.clone(),
+            last_synced_at: self.local_state.last_synced_at,
+            pending_changes: self.local_state.pending_operations.len() as u64,
+            server_version: None,
+            local_version: self.local_state.document.hlc.logical as u64,
+        })
+    }
+}
+
+impl SyncEngine for ClientSyncEngine {
+    #[instrument]
+    fn sync(&mut self) -> Result<SyncInfo, SyncError> {
+        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+        db.execute("BEGIN TRANSACTION", [])?;
+        drop(db);
+
+        let result = self.sync_inner();
+
+        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+        match result {
+            Ok(info) => {
+                db.execute("COMMIT", [])?;
+                Ok(info)
+            }
+            Err(e) => {
+                db.execute("ROLLBACK", [])?;
+                Err(e)
+            }
+        }
     }
 
     fn get_status(&self) -> SyncStatus {
@@ -207,27 +282,43 @@ impl SyncEngine for ClientSyncEngine {
 
     #[instrument]
     fn push_changes(&mut self) -> Result<SyncInfo, SyncError> {
-        info!("push_changes: {} pending operations", self.local_state.pending_operations.len());
-        self.status = SyncStatus::Syncing;
-        Ok(SyncInfo {
-            status: self.status.clone(),
-            last_synced_at: self.local_state.last_synced_at,
-            pending_changes: self.local_state.pending_operations.len() as u64,
-            server_version: None,
-            local_version: self.local_state.document.sequence,
-        })
+        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+        db.execute("BEGIN TRANSACTION", [])?;
+        drop(db);
+
+        let result = self.push_changes_inner();
+
+        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+        match result {
+            Ok(info) => {
+                db.execute("COMMIT", [])?;
+                Ok(info)
+            }
+            Err(e) => {
+                db.execute("ROLLBACK", [])?;
+                Err(e)
+            }
+        }
     }
 
     #[instrument]
     fn pull_changes(&mut self) -> Result<SyncInfo, SyncError> {
-        info!("pull_changes: local_version={}", self.local_state.document.sequence);
-        self.status = SyncStatus::Syncing;
-        Ok(SyncInfo {
-            status: self.status.clone(),
-            last_synced_at: self.local_state.last_synced_at,
-            pending_changes: self.local_state.pending_operations.len() as u64,
-            server_version: None,
-            local_version: self.local_state.document.sequence,
-        })
+        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+        db.execute("BEGIN TRANSACTION", [])?;
+        drop(db);
+
+        let result = self.pull_changes_inner();
+
+        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
+        match result {
+            Ok(info) => {
+                db.execute("COMMIT", [])?;
+                Ok(info)
+            }
+            Err(e) => {
+                db.execute("ROLLBACK", [])?;
+                Err(e)
+            }
+        }
     }
 }

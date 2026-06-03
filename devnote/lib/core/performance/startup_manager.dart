@@ -1,7 +1,11 @@
 import 'dart:async';
 
+import 'package:devnote/core/performance/cache_manager.dart';
+import 'package:devnote/core/performance/memory_manager.dart';
+
 class StartupManager {
   static final StartupManager _instance = StartupManager._internal();
+  static StartupManager get instance => _instance;
   factory StartupManager() => _instance;
   StartupManager._internal();
 
@@ -13,6 +17,29 @@ class StartupManager {
 
   Map<String, Duration> get taskDurations => Map.unmodifiable(_taskDurations);
   Duration? get totalStartupTime => _startupTime != null ? DateTime.now().difference(_startupTime!) : null;
+
+  Future<void> initialize() async {
+    registerCritical('initTheme', () async {
+      // Theme initialization happens on first access
+    });
+
+    registerCritical('initRouter', () async {
+      // Router initialization happens on first access
+    });
+
+    registerNormal('initCache', () async {
+      final cacheManager = CacheManager();
+      cacheManager.configure(CacheType.noteContent, maxSize: 50, ttl: const Duration(minutes: 30));
+      cacheManager.configure(CacheType.image, maxSize: 100, ttl: const Duration(hours: 1));
+      cacheManager.configure(CacheType.searchResult, maxSize: 30, ttl: const Duration(minutes: 10));
+    });
+
+    registerLazy('initMemoryManager', () async {
+      MemoryManager().setMemoryLimit(100 * 1024 * 1024);
+    });
+
+    await runStartup();
+  }
 
   void registerCritical(String name, Future<void> Function() task) {
     _criticalTasks.add(StartupTask(name: name, task: task));

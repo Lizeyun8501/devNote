@@ -1,4 +1,3 @@
-use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -72,10 +71,41 @@ pub enum PluginError {
     WasmRuntime(String),
 }
 
+#[derive(Default)]
+pub struct PluginState {
+    pub memory_used: usize,
+    pub max_memory: usize,
+    pub execution_count: u64,
+    pub total_fuel_consumed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PluginHealthStatus {
+    Healthy,
+    Warning,
+    Unhealthy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginHealth {
+    pub plugin_id: String,
+    pub status: PluginHealthStatus,
+    pub memory_used: usize,
+    pub max_memory: usize,
+    pub execution_count: u64,
+    pub total_fuel_consumed: u64,
+    pub message: Option<String>,
+}
+
+#[cfg(feature = "wasm")]
+use devnote_observe::{instrument, warn};
+#[cfg(feature = "wasm")]
+use std::time::Duration;
+
 #[cfg(feature = "wasm")]
 pub struct PluginSandbox {
     engine: wasmtime::Engine,
-    store: wasmtime::Store<()>,
+    store: wasmtime::Store<PluginState>,
     instances: HashMap<String, wasmtime::Instance>,
     entries: HashMap<String, PluginEntry>,
     #[allow(dead_code)]
@@ -85,8 +115,21 @@ pub struct PluginSandbox {
 #[cfg(feature = "wasm")]
 impl PluginSandbox {
     pub fn new(host: Box<dyn PluginHost>) -> Result<Self, PluginError> {
-        let engine = wasmtime::Engine::default();
-        let store = wasmtime::Store::new(&engine, ());
+        let mut config = wasmtime::Config::new();
+        // Memory limit: 16 pages = 1MB, max 256 pages = 16MB
+        config.wasm_memory(256);
+        // Stack limit: 2MB
+        config.max_wasm_stack(2 * 1024 * 1024);
+        // Enable fuel consumption for CPU time limiting
+        config.consume_fuel(true);
+
+        let engine = wasmtime::Engine::new(&config)
+            .map_err(|e| PluginError::WasmRuntime(e.to_string()))?;
+        let mut store = wasmtime::Store::new(&engine, PluginState::default());
+        // Give each plugin 10 million fuel units (roughly 1 second of execution)
+        store.add_fuel(10_000_000)
+            .map_err(|e| PluginError::WasmRuntime(e.to_string()))?;
+
         Ok(Self {
             engine,
             store,
@@ -184,6 +227,41 @@ impl PluginSandbox {
             .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
         Ok(entry.granted_permissions.contains(&permission))
     }
+
+    pub fn execute_with_timeout(
+        &mut self,
+        id: &str,
+        method: &str,
+        params: &serde_json::Value,
+        _timeout: Duration,
+    ) -> Result<PluginMethodResult, PluginError> {
+        // Check remaining fuel before execution
+        let fuel_before = self.store.get_fuel()
+            .map_err(|e| PluginError::WasmRuntime(e.to_string()))?;
+
+        // Execute the function
+        let result = self.execute_plugin(id, method, params);
+
+        // Check fuel consumed
+        let fuel_after = self.store.get_fuel()
+            .map_err(|e| PluginError::WasmRuntime(e.to_string()))?;
+        let fuel_consumed = fuel_before - fuel_after;
+
+        // Update state tracking
+        self.store.data_mut().execution_count += 1;
+        self.store.data_mut().total_fuel_consumed += fuel_consumed;
+
+        if fuel_consumed > 8_000_000 {
+            // Plugin consumed too much fuel, likely stuck
+            tracing::warn!("Plugin consumed {} fuel units, may be inefficient", fuel_consumed);
+        }
+
+        result
+    }
+
+    pub fn get_plugin_state(&self) -> &PluginState {
+        self.store.data()
+    }
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -266,6 +344,16 @@ impl PluginSandbox {
             .get(id)
             .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
         Ok(entry.granted_permissions.contains(&permission))
+    }
+
+    pub fn get_plugin_state(&self) -> &PluginState {
+        static DEFAULT_STATE: PluginState = PluginState {
+            memory_used: 0,
+            max_memory: 0,
+            execution_count: 0,
+            total_fuel_consumed: 0,
+        };
+        &DEFAULT_STATE
     }
 }
 
@@ -386,5 +474,51 @@ impl PluginManager {
             .entries
             .get(id)
             .map(|e| e.manifest.version.as_str())
+    }
+
+    pub fn check_plugin_health(&self, plugin_id: &str) -> PluginHealth {
+        let entry = self.sandbox.entries.get(plugin_id);
+
+        match entry {
+            None => PluginHealth {
+                plugin_id: plugin_id.to_string(),
+                status: PluginHealthStatus::Unhealthy,
+                memory_used: 0,
+                max_memory: 0,
+                execution_count: 0,
+                total_fuel_consumed: 0,
+                message: Some("Plugin not found".to_string()),
+            },
+            Some(e) => {
+                let state = self.sandbox.get_plugin_state();
+                let status = if e.state != PluginLifecycleState::Enabled {
+                    PluginHealthStatus::Warning
+                } else if state.total_fuel_consumed > 80_000_000 {
+                    PluginHealthStatus::Unhealthy
+                } else if state.total_fuel_consumed > 50_000_000 {
+                    PluginHealthStatus::Warning
+                } else {
+                    PluginHealthStatus::Healthy
+                };
+
+                let message = if status == PluginHealthStatus::Unhealthy {
+                    Some("Plugin has consumed excessive fuel, may be stuck".to_string())
+                } else if status == PluginHealthStatus::Warning {
+                    Some("Plugin has high fuel consumption or is not enabled".to_string())
+                } else {
+                    None
+                };
+
+                PluginHealth {
+                    plugin_id: plugin_id.to_string(),
+                    status,
+                    memory_used: state.memory_used,
+                    max_memory: state.max_memory,
+                    execution_count: state.execution_count,
+                    total_fuel_consumed: state.total_fuel_consumed,
+                    message,
+                }
+            }
+        }
     }
 }

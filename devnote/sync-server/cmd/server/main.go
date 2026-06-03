@@ -75,8 +75,8 @@ func main() {
 		Logger:  logger,
 		Metrics: metrics,
 	}))
-	r.Use(middleware.CORS())
-	r.Use(middleware.RateLimit(cfg.RateLimit))
+	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	r.Use(middleware.RateLimitMiddleware(cfg.RateLimit))
 
 	// Health check
 	r.GET("/health", healthHandler.Check)
@@ -92,6 +92,8 @@ func main() {
 		{
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
+			auth.POST("/refresh", authHandler.RefreshToken)
+			auth.POST("/logout", authHandler.Logout)
 
 			// SRP authentication routes
 			srp := auth.Group("/srp")

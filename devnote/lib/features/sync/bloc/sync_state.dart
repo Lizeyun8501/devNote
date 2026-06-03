@@ -81,3 +81,17 @@ class SyncConflict extends SyncState {
   @override
   List<Object?> get props => [conflicts, ...super.props];
 }
+
+class SyncRetrying extends SyncState {
+  final int retryAttempt;
+
+  const SyncRetrying({
+    required this.retryAttempt,
+    super.autoSyncEnabled,
+    super.syncInterval,
+    super.serverAddress,
+  });
+
+  @override
+  List<Object?> get props => [retryAttempt, ...super.props];
+}

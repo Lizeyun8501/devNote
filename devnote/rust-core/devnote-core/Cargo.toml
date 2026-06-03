@@ -9,8 +9,8 @@ license.workspace = true
 devnote-editor = { workspace = true }
 devnote-crypto = { workspace = true }
 devnote-search = { workspace = true }
-# FIXME: pre-existing cyclic dependency devnote-core <-> devnote-sync
-# devnote-sync = { workspace = true }
+devnote-events = { workspace = true }
+devnote-sync = { workspace = true }
 devnote-crdt = { workspace = true }
 devnote-observe = { workspace = true }
 tracing = { workspace = true }

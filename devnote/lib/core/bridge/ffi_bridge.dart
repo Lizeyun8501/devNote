@@ -41,26 +41,52 @@ class FFIBridge {
   static FFIBridge get instance => _instance;
 
   DynamicLibrary? _dylib;
+  bool _isAvailable = false;
+  bool get isAvailable => _isAvailable;
 
-  late final DevnoteInitDart devnoteInit;
-  late final DevnoteDestroyDart devnoteDestroy;
-  late final DevnotePingDart devnotePing;
-  late final DevnoteDispatchDart devnoteDispatch;
+  DevnoteInitDart? devnoteInit;
+  DevnoteDestroyDart? devnoteDestroy;
+  DevnotePingDart? devnotePing;
+  DevnoteDispatchDart? devnoteDispatch;
 
-  void init() {
-    _dylib = _loadDynamicLibrary();
-    devnoteInit = _dylib!.lookupFunction<DevnoteInitNative, DevnoteInitDart>(
-      'devnote_init',
-    );
-    devnoteDestroy = _dylib!.lookupFunction<DevnoteDestroyNative, DevnoteDestroyDart>(
-      'devnote_destroy',
-    );
-    devnotePing = _dylib!.lookupFunction<DevnotePingNative, DevnotePingDart>(
-      'devnote_ping',
-    );
-    devnoteDispatch = _dylib!.lookupFunction<DevnoteDispatchNative, DevnoteDispatchDart>(
-      'devnote_dispatch',
-    );
+  Future<void> init() async {
+    try {
+      _dylib = _loadDynamicLibrary();
+      devnoteInit = _dylib!.lookupFunction<DevnoteInitNative, DevnoteInitDart>(
+        'devnote_init',
+      );
+      devnoteDestroy = _dylib!.lookupFunction<DevnoteDestroyNative, DevnoteDestroyDart>(
+        'devnote_destroy',
+      );
+      devnotePing = _dylib!.lookupFunction<DevnotePingNative, DevnotePingDart>(
+        'devnote_ping',
+      );
+      devnoteDispatch = _dylib!.lookupFunction<DevnoteDispatchNative, DevnoteDispatchDart>(
+        'devnote_dispatch',
+      );
+
+      // Call devnote_init() via FFI to initialize the Rust runtime
+      final initResult = devnoteInit!();
+      try {
+        if (initResult.code == 0) {
+          _isAvailable = true;
+        } else {
+          _isAvailable = false;
+        }
+      } finally {
+        if (devnoteDestroy != null) {
+          devnoteDestroy!(initResult);
+        }
+      }
+    } catch (e) {
+      _isAvailable = false;
+      _dylib = null;
+      devnoteInit = null;
+      devnoteDestroy = null;
+      devnotePing = null;
+      devnoteDispatch = null;
+      rethrow;
+    }
   }
 
   DynamicLibrary _loadDynamicLibrary() {
@@ -83,6 +109,9 @@ class FFIBridge {
   }
 
   FFIResponse invoke(FFIRequest request) {
+    if (!_isAvailable || devnoteDispatch == null) {
+      return const FFIResponse(code: -1, message: 'FFI bridge not available');
+    }
     final requestBuffer = request.toBuffer();
     final requestPtr = malloc<Uint8>(requestBuffer.length + 1);
     try {
@@ -91,7 +120,7 @@ class FFIBridge {
       }
       requestPtr[requestBuffer.length] = 0;
 
-      final responsePtr = devnoteDispatch(requestPtr.cast<Utf8>());
+      final responsePtr = devnoteDispatch!(requestPtr.cast<Utf8>());
       try {
         final responseStr = responsePtr.toDartString();
         return FFIResponse.fromBuffer(Uint8List.fromList(responseStr.codeUnits));
@@ -104,7 +133,10 @@ class FFIBridge {
   }
 
   String ping() {
-    final ptr = devnotePing();
+    if (!_isAvailable || devnotePing == null) {
+      return 'FFI not available';
+    }
+    final ptr = devnotePing!();
     try {
       return ptr.toDartString();
     } finally {

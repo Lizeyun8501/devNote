@@ -131,6 +131,10 @@ class Dispatch {
     String event, {
     Uint8List? payload,
   }) async {
+    // Check if FFI bridge is available before making FFI calls
+    if (!_bridge.isAvailable) {
+      return _localFallback(event, payload: payload);
+    }
     try {
       final request = FFIRequest(
         event: event,
@@ -152,6 +156,35 @@ class Dispatch {
         message: e.toString(),
       ));
     }
+  }
+
+  /// Local Dart fallback when FFI is not available
+  Future<FlowyResult<Uint8List, FlowyInternalError>> _localFallback(
+    String event, {
+    Uint8List? payload,
+  }) async {
+    try {
+      final result = _handleLocalEvent(event, payload);
+      return Success(result);
+    } catch (e) {
+      return Failure(FlowyInternalError(
+        code: FFIStatusCode.internal.index,
+        message: e.toString(),
+      ));
+    }
+  }
+
+  /// Handle events locally in Dart when FFI is not available
+  Uint8List _handleLocalEvent(String event, Uint8List? payload) {
+    final payloadJson = payload != null
+        ? jsonDecode(utf8.decode(payload)) as Map<String, dynamic>
+        : <String, dynamic>{};
+    final response = <String, dynamic>{
+      'code': 0,
+      'message': 'ok (local fallback)',
+      'data': payloadJson,
+    };
+    return utf8.encode(jsonEncode(response));
   }
 
   Future<FlowyResult<Uint8List, FlowyInternalError>> _grpcRequest(
@@ -241,7 +274,7 @@ class Dispatch {
     }
   }
 
-  String ping() => _bridge.ping();
+  String ping() => _bridge.isAvailable ? _bridge.ping() : 'FFI not available';
 }
 
 extension _FlowyResultWhen<S, F> on FlowyResult<S, F> {

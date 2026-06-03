@@ -44,6 +44,8 @@ type PullRequest struct {
 type PullResponse struct {
 	Records     []model.SyncRecord `json:"records"`
 	LatestVer   int64              `json:"latest_version"`
+	HasMore     bool               `json:"has_more"`
+	Limit       int                `json:"limit"`
 }
 
 type SyncStatus struct {
@@ -119,21 +121,28 @@ func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, erro
 	}, nil
 }
 
-func (s *SyncService) Pull(userID string, req *PullRequest) (*PullResponse, error) {
+func (s *SyncService) Pull(userID string, req *PullRequest, limit int) (*PullResponse, error) {
 	var records []model.SyncRecord
 	query := s.db.Where("user_id = ? AND version > ?", userID, req.SinceVer)
-	if err := query.Order("version ASC").Find(&records).Error; err != nil {
+	if err := query.Order("version ASC").Limit(limit + 1).Find(&records).Error; err != nil {
 		return nil, err
 	}
 
 	var latestVer int64
 	s.db.Model(&model.SyncRecord{}).Where("user_id = ?", userID).Select("COALESCE(MAX(version), 0)").Scan(&latestVer)
 
+	hasMore := len(records) > limit
+	if hasMore {
+		records = records[:limit]
+	}
+
 	s.updateDeviceSync(userID, req.DeviceID)
 
 	return &PullResponse{
 		Records:   records,
 		LatestVer: latestVer,
+		HasMore:   hasMore,
+		Limit:     limit,
 	}, nil
 }
 

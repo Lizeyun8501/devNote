@@ -10,7 +10,7 @@ services:
     environment:
       - PORT=8081
       - DB_PATH=/app/data/business.db
-      - JWT_SECRET=${JWT_SECRET:-devnote-business-secret-key}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - MAX_TAG_DEPTH=5
       - MAX_FOLDER_DEPTH=10
@@ -30,7 +30,7 @@ services:
     environment:
       - PORT=8080
       - DB_PATH=/app/data/sync.db
-      - JWT_SECRET=${JWT_SECRET:-devnote-sync-secret-key}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - S3_ENDPOINT=minio:9000
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}

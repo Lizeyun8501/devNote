@@ -1,7 +1,8 @@
-use devnote_core::models::{Attachment, Folder, Note, Tag};
+use devnote_core::models::{Attachment, Folder, Note, Tag, Permission, ResourceACL, Workspace, WorkspaceMember};
 use devnote_observe::{instrument, warn};
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoEngine, DefaultCryptoEngine, CryptoConfig};
+use serde::{Serialize, Deserialize};
 use std::sync::Mutex;
 use thiserror::Error;
 use uuid::Uuid;
@@ -25,7 +26,26 @@ pub enum PersistenceError {
     SerializationError(String),
 }
 
-const _DB_VERSION: i32 = 1;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id: String,
+    pub user_id: String,
+    pub action: String,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub timestamp: i64,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureFlag {
+    pub key: String,
+    pub enabled: bool,
+    pub description: String,
+    pub updated_at: i64,
+}
+
+const _DB_VERSION: i32 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS notes (
@@ -99,6 +119,68 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 "#;
 
+const SCHEMA_V2: &str = r#"
+CREATE TABLE IF NOT EXISTS resource_acls (
+    id TEXT PRIMARY KEY,
+    resource_id TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_acls_resource ON resource_acls(resource_id, resource_type);
+CREATE INDEX IF NOT EXISTS idx_resource_acls_user ON resource_acls(user_id);
+
+CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_id);
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace ON workspace_members(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
+"#;
+
+const SCHEMA_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS audit_log (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    metadata TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_log(resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
+"#;
+
+const SCHEMA_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS feature_flags (
+    key TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+"#;
+
 pub struct SqliteNoteRepository {
     conn: Mutex<rusqlite::Connection>,
 }
@@ -153,6 +235,30 @@ impl SqliteNoteRepository {
             conn.execute(
                 "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
                 params![1],
+            )?;
+        }
+
+        if current_version < 2 {
+            conn.execute_batch(SCHEMA_V2)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
+                params![2],
+            )?;
+        }
+
+        if current_version < 3 {
+            conn.execute_batch(SCHEMA_V3)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
+                params![3],
+            )?;
+        }
+
+        if current_version < 4 {
+            conn.execute_batch(SCHEMA_V4)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
+                params![4],
             )?;
         }
 
@@ -471,6 +577,137 @@ impl SqliteNoteRepository {
 
     pub fn add_tag_to_note(&self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
         self.link_tag_to_note(note_id, tag_id)
+    }
+
+    // ---- Audit Log CRUD ----
+
+    pub fn log_audit(&self, entry: AuditEntry) -> Result<(), PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO audit_log (id, user_id, action, resource_type, resource_id, timestamp, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![entry.id, entry.user_id, entry.action, entry.resource_type, entry.resource_id, entry.timestamp, entry.metadata],
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_audit_log(&self, user_id: &str, limit: usize, offset: usize) -> Result<Vec<AuditEntry>, PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, action, resource_type, resource_id, timestamp, metadata FROM audit_log WHERE user_id = ?1 ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let entries = stmt.query_map(params![user_id, limit as i64, offset as i64], |row| {
+            Ok(AuditEntry {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                action: row.get(2)?,
+                resource_type: row.get(3)?,
+                resource_id: row.get(4)?,
+                timestamp: row.get(5)?,
+                metadata: row.get(6)?,
+            })
+        }).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(entries)
+    }
+
+    pub fn get_resource_audit(&self, resource_type: &str, resource_id: &str) -> Result<Vec<AuditEntry>, PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, action, resource_type, resource_id, timestamp, metadata FROM audit_log WHERE resource_type = ?1 AND resource_id = ?2 ORDER BY timestamp DESC",
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let entries = stmt.query_map(params![resource_type, resource_id], |row| {
+            Ok(AuditEntry {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                action: row.get(2)?,
+                resource_type: row.get(3)?,
+                resource_id: row.get(4)?,
+                timestamp: row.get(5)?,
+                metadata: row.get(6)?,
+            })
+        }).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(entries)
+    }
+
+    pub fn purge_audit_log(&self, before_timestamp: i64) -> Result<usize, PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute(
+            "DELETE FROM audit_log WHERE timestamp < ?1",
+            params![before_timestamp],
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(count)
+    }
+
+    // ---- Feature Flag CRUD ----
+
+    pub fn set_feature_flag(&self, flag: FeatureFlag) -> Result<(), PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        let enabled_int = if flag.enabled { 1 } else { 0 };
+        conn.execute(
+            "INSERT OR REPLACE INTO feature_flags (key, enabled, description, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![flag.key, enabled_int, flag.description, flag.updated_at],
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_feature_flag(&self, key: &str) -> Result<Option<FeatureFlag>, PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT key, enabled, description, updated_at FROM feature_flags WHERE key = ?1",
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let result = stmt.query_row(params![key], |row| {
+            let enabled_int: i32 = row.get(1)?;
+            Ok(FeatureFlag {
+                key: row.get(0)?,
+                enabled: enabled_int != 0,
+                description: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        });
+        match result {
+            Ok(flag) => Ok(Some(flag)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(PersistenceError::DatabaseError(e.to_string())),
+        }
+    }
+
+    pub fn list_feature_flags(&self) -> Result<Vec<FeatureFlag>, PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT key, enabled, description, updated_at FROM feature_flags ORDER BY key",
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let flags = stmt.query_map([], |row| {
+            let enabled_int: i32 = row.get(1)?;
+            Ok(FeatureFlag {
+                key: row.get(0)?,
+                enabled: enabled_int != 0,
+                description: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        }).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(flags)
+    }
+
+    pub fn is_feature_enabled(&self, key: &str) -> bool {
+        self.get_feature_flag(key)
+            .ok()
+            .flatten()
+            .map(|f| f.enabled)
+            .unwrap_or(false)
+    }
+
+    pub fn delete_feature_flag(&self, key: &str) -> Result<(), PersistenceError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM feature_flags WHERE key = ?1",
+            params![key],
+        ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        Ok(())
     }
 }
 
@@ -992,6 +1229,271 @@ impl EncryptedFileStorage {
         let mut hasher = Sha256::new();
         hasher.update(data);
         hasher.finalize().to_vec()
+    }
+}
+
+// ============================================================================
+// RBAC Repository
+// ============================================================================
+
+fn permission_to_str(p: &Permission) -> &'static str {
+    match p {
+        Permission::Read => "Read",
+        Permission::Write => "Write",
+        Permission::Admin => "Admin",
+    }
+}
+
+fn str_to_permission(s: &str) -> Permission {
+    match s {
+        "Write" => Permission::Write,
+        "Admin" => Permission::Admin,
+        _ => Permission::Read,
+    }
+}
+
+impl SqliteNoteRepository {
+    // ---- ResourceACL CRUD ----
+
+    pub fn create_resource_acl(&self, acl: ResourceACL) -> Result<ResourceACL> {
+        let conn = self.conn.lock().unwrap();
+        let permission_str = permission_to_str(&acl.permission);
+        let granted_at_str = acl.granted_at.to_rfc3339();
+        conn.execute(
+            "INSERT INTO resource_acls (id, resource_id, resource_type, user_id, permission, granted_by, granted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![acl.id, acl.resource_id, acl.resource_type, acl.user_id, permission_str, acl.granted_by, granted_at_str],
+        )?;
+        Ok(acl)
+    }
+
+    pub fn get_resource_acl(&self, id: &str) -> Result<Option<ResourceACL>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, resource_id, resource_type, user_id, permission, granted_by, granted_at FROM resource_acls WHERE id = ?1",
+        )?;
+        let result = stmt.query_row(params![id], |row| {
+            Ok(ResourceACL {
+                id: row.get(0)?,
+                resource_id: row.get(1)?,
+                resource_type: row.get(2)?,
+                user_id: row.get(3)?,
+                permission: str_to_permission(&row.get::<_, String>(4)?),
+                granted_by: row.get(5)?,
+                granted_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        });
+        match result {
+            Ok(acl) => Ok(Some(acl)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_resource_acls_for_resource(&self, resource_id: &str) -> Result<Vec<ResourceACL>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, resource_id, resource_type, user_id, permission, granted_by, granted_at FROM resource_acls WHERE resource_id = ?1",
+        )?;
+        let acls = stmt.query_map(params![resource_id], |row| {
+            Ok(ResourceACL {
+                id: row.get(0)?,
+                resource_id: row.get(1)?,
+                resource_type: row.get(2)?,
+                user_id: row.get(3)?,
+                permission: str_to_permission(&row.get::<_, String>(4)?),
+                granted_by: row.get(5)?,
+                granted_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(acls)
+    }
+
+    pub fn list_resource_acls_for_user(&self, user_id: &str) -> Result<Vec<ResourceACL>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, resource_id, resource_type, user_id, permission, granted_by, granted_at FROM resource_acls WHERE user_id = ?1",
+        )?;
+        let acls = stmt.query_map(params![user_id], |row| {
+            Ok(ResourceACL {
+                id: row.get(0)?,
+                resource_id: row.get(1)?,
+                resource_type: row.get(2)?,
+                user_id: row.get(3)?,
+                permission: str_to_permission(&row.get::<_, String>(4)?),
+                granted_by: row.get(5)?,
+                granted_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(6)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(acls)
+    }
+
+    pub fn update_resource_acl(&self, acl: ResourceACL) -> Result<ResourceACL> {
+        let conn = self.conn.lock().unwrap();
+        let permission_str = permission_to_str(&acl.permission);
+        conn.execute(
+            "UPDATE resource_acls SET permission = ?1 WHERE id = ?2",
+            params![permission_str, acl.id],
+        )?;
+        Ok(acl)
+    }
+
+    pub fn delete_resource_acl(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM resource_acls WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // ---- Workspace CRUD ----
+
+    pub fn create_workspace(&self, workspace: Workspace) -> Result<Workspace> {
+        let conn = self.conn.lock().unwrap();
+        let created_at_str = workspace.created_at.to_rfc3339();
+        let updated_at_str = workspace.updated_at.to_rfc3339();
+        conn.execute(
+            "INSERT INTO workspaces (id, name, owner_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![workspace.id, workspace.name, workspace.owner_id, created_at_str, updated_at_str],
+        )?;
+        Ok(workspace)
+    }
+
+    pub fn get_workspace(&self, id: &str) -> Result<Option<Workspace>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, owner_id, created_at, updated_at FROM workspaces WHERE id = ?1",
+        )?;
+        let result = stmt.query_row(params![id], |row| {
+            Ok(Workspace {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                owner_id: row.get(2)?,
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        });
+        match result {
+            Ok(ws) => Ok(Some(ws)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_workspaces_for_owner(&self, owner_id: &str) -> Result<Vec<Workspace>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, owner_id, created_at, updated_at FROM workspaces WHERE owner_id = ?1 ORDER BY name",
+        )?;
+        let workspaces = stmt.query_map(params![owner_id], |row| {
+            Ok(Workspace {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                owner_id: row.get(2)?,
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(workspaces)
+    }
+
+    pub fn update_workspace(&self, workspace: Workspace) -> Result<Workspace> {
+        let conn = self.conn.lock().unwrap();
+        let updated_at_str = workspace.updated_at.to_rfc3339();
+        conn.execute(
+            "UPDATE workspaces SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![workspace.name, updated_at_str, workspace.id],
+        )?;
+        Ok(workspace)
+    }
+
+    pub fn delete_workspace(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // ---- WorkspaceMember CRUD ----
+
+    pub fn create_workspace_member(&self, member: WorkspaceMember) -> Result<WorkspaceMember> {
+        let conn = self.conn.lock().unwrap();
+        let role_str = permission_to_str(&member.role);
+        let joined_at_str = member.joined_at.to_rfc3339();
+        conn.execute(
+            "INSERT INTO workspace_members (id, workspace_id, user_id, role, joined_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![member.id, member.workspace_id, member.user_id, role_str, joined_at_str],
+        )?;
+        Ok(member)
+    }
+
+    pub fn get_workspace_member(&self, id: &str) -> Result<Option<WorkspaceMember>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, user_id, role, joined_at FROM workspace_members WHERE id = ?1",
+        )?;
+        let result = stmt.query_row(params![id], |row| {
+            Ok(WorkspaceMember {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                user_id: row.get(2)?,
+                role: str_to_permission(&row.get::<_, String>(3)?),
+                joined_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        });
+        match result {
+            Ok(m) => Ok(Some(m)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_workspace_members(&self, workspace_id: &str) -> Result<Vec<WorkspaceMember>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, user_id, role, joined_at FROM workspace_members WHERE workspace_id = ?1 ORDER BY joined_at",
+        )?;
+        let members = stmt.query_map(params![workspace_id], |row| {
+            Ok(WorkspaceMember {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                user_id: row.get(2)?,
+                role: str_to_permission(&row.get::<_, String>(3)?),
+                joined_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                    .to_utc(),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(members)
+    }
+
+    pub fn update_workspace_member(&self, member: WorkspaceMember) -> Result<WorkspaceMember> {
+        let conn = self.conn.lock().unwrap();
+        let role_str = permission_to_str(&member.role);
+        conn.execute(
+            "UPDATE workspace_members SET role = ?1 WHERE id = ?2",
+            params![role_str, member.id],
+        )?;
+        Ok(member)
+    }
+
+    pub fn delete_workspace_member(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM workspace_members WHERE id = ?1", params![id])?;
+        Ok(())
     }
 }
 

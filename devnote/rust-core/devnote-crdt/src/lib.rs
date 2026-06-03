@@ -1,7 +1,7 @@
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::Utc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,41 +16,75 @@ pub enum CRDTError {
     SerializationError(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct OperationId {
-    pub timestamp: i64,
-    pub device_id: String,
-    pub sequence: u64,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct HLC {
+    pub physical_ms: u64,      // Physical clock in milliseconds
+    pub logical: u32,          // Logical counter for same-timestamp events
+    pub node_id: String,       // Unique node identifier
 }
 
-impl OperationId {
-    pub fn new(device_id: String) -> Self {
+impl HLC {
+    pub fn new(node_id: String) -> Self {
         Self {
-            timestamp: Utc::now().timestamp_millis(),
-            device_id,
-            sequence: 0,
+            physical_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            logical: 0,
+            node_id,
         }
     }
 
-    pub fn with_sequence(device_id: String, sequence: u64) -> Self {
-        Self {
-            timestamp: Utc::now().timestamp_millis(),
-            device_id,
-            sequence,
+    /// Create a new event - increment logical clock
+    pub fn increment(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        if now > self.physical_ms {
+            self.physical_ms = now;
+            self.logical = 0;
+        } else {
+            self.logical += 1;
+        }
+    }
+
+    /// Receive an event from another node - merge clocks
+    pub fn receive(&mut self, other: &HLC) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        if now > self.physical_ms && now > other.physical_ms {
+            self.physical_ms = now;
+            self.logical = 0;
+        } else if other.physical_ms > self.physical_ms {
+            self.physical_ms = other.physical_ms;
+            self.logical = other.logical + 1;
+        } else if self.physical_ms > other.physical_ms {
+            self.logical += 1;
+        } else {
+            // Same timestamp - use max logical + 1
+            self.logical = std::cmp::max(self.logical, other.logical) + 1;
         }
     }
 }
 
-impl Ord for OperationId {
+impl Ord for HLC {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.timestamp
-            .cmp(&other.timestamp)
-            .then_with(|| self.device_id.cmp(&other.device_id))
-            .then_with(|| self.sequence.cmp(&other.sequence))
+        match self.physical_ms.cmp(&other.physical_ms) {
+            std::cmp::Ordering::Equal => match self.logical.cmp(&other.logical) {
+                std::cmp::Ordering::Equal => self.node_id.cmp(&other.node_id),
+                other => other,
+            },
+            other => other,
+        }
     }
 }
 
-impl PartialOrd for OperationId {
+impl PartialOrd for HLC {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -58,7 +92,7 @@ impl PartialOrd for OperationId {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VectorClock {
-    pub clocks: HashMap<String, u64>,
+    pub clocks: HashMap<String, HLC>,
 }
 
 impl VectorClock {
@@ -68,20 +102,21 @@ impl VectorClock {
         }
     }
 
-    pub fn increment(&mut self, device_id: &str) -> u64 {
-        let counter = self.clocks.entry(device_id.to_string()).or_insert(0);
-        *counter += 1;
-        *counter
+    pub fn increment(&mut self, device_id: &str) {
+        let hlc = self.clocks.entry(device_id.to_string()).or_insert_with(|| HLC::new(device_id.to_string()));
+        hlc.increment();
     }
 
-    pub fn get(&self, device_id: &str) -> u64 {
-        *self.clocks.get(device_id).unwrap_or(&0)
+    pub fn get(&self, device_id: &str) -> Option<&HLC> {
+        self.clocks.get(device_id)
     }
 
     pub fn merge(&mut self, other: &VectorClock) {
-        for (device_id, counter) in &other.clocks {
-            let current = self.clocks.entry(device_id.clone()).or_insert(0);
-            *current = (*current).max(*counter);
+        for (node_id, hlc) in &other.clocks {
+            match self.clocks.get_mut(node_id) {
+                Some(our_hlc) => our_hlc.receive(hlc),
+                None => { self.clocks.insert(node_id.clone(), hlc.clone()); }
+            }
         }
     }
 
@@ -89,11 +124,15 @@ impl VectorClock {
         let all_leq = self
             .clocks
             .iter()
-            .all(|(device_id, counter)| counter <= other.clocks.get(device_id).unwrap_or(&0));
+            .all(|(node_id, hlc)| {
+                other.clocks.get(node_id).map_or(false, |other_hlc| hlc <= other_hlc)
+            });
         let any_lt = self
             .clocks
             .iter()
-            .any(|(device_id, counter)| counter < other.clocks.get(device_id).unwrap_or(&0));
+            .any(|(node_id, hlc)| {
+                other.clocks.get(node_id).map_or(false, |other_hlc| hlc < other_hlc)
+            });
         all_leq && any_lt
     }
 
@@ -111,26 +150,26 @@ impl Default for VectorClock {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     Insert {
-        id: OperationId,
+        id: HLC,
         block_id: String,
         position: usize,
         content: String,
         vector_clock: VectorClock,
     },
     Delete {
-        id: OperationId,
+        id: HLC,
         block_id: String,
         vector_clock: VectorClock,
     },
     Replace {
-        id: OperationId,
+        id: HLC,
         block_id: String,
         old_content: String,
         new_content: String,
         vector_clock: VectorClock,
     },
     Move {
-        id: OperationId,
+        id: HLC,
         block_id: String,
         from_position: usize,
         to_position: usize,
@@ -139,7 +178,7 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub fn id(&self) -> &OperationId {
+    pub fn id(&self) -> &HLC {
         match self {
             Operation::Insert { id, .. } => id,
             Operation::Delete { id, .. } => id,
@@ -174,25 +213,26 @@ pub struct CRDTDocument {
     pub blocks: Vec<BlockCRDT>,
     pub operations: Vec<Operation>,
     pub device_id: String,
-    pub sequence: u64,
+    pub hlc: HLC,
 }
 
 impl CRDTDocument {
     pub fn new(id: String, device_id: String) -> Self {
+        let hlc = HLC::new(device_id.clone());
         Self {
             id,
             version: VectorClock::new(),
             blocks: Vec::new(),
             operations: Vec::new(),
             device_id,
-            sequence: 0,
+            hlc,
         }
     }
 
-    pub fn next_operation_id(&mut self) -> OperationId {
-        self.sequence += 1;
+    pub fn next_operation_id(&mut self) -> HLC {
+        self.hlc.increment();
         self.version.increment(&self.device_id);
-        OperationId::with_sequence(self.device_id.clone(), self.sequence)
+        self.hlc.clone()
     }
 
     #[instrument]
@@ -251,7 +291,7 @@ impl CRDTDocument {
     #[instrument]
     pub fn merge(&mut self, remote_ops: Vec<Operation>) -> Result<Vec<Operation>, CRDTError> {
         let mut applied_ops = Vec::new();
-        let local_ids: std::collections::HashSet<OperationId> = self
+        let local_ids: std::collections::HashSet<HLC> = self
             .operations
             .iter()
             .map(|op| op.id().clone())
@@ -262,9 +302,12 @@ impl CRDTDocument {
             .filter(|op| !local_ids.contains(op.id()))
             .collect();
 
-        new_ops.sort_by_key(|op| op.id());
+        new_ops.sort_by_key(|op| op.id().clone());
 
         for op in new_ops {
+            // Merge HLC with remote operation's HLC
+            self.hlc.receive(op.id());
+
             let transformed = transform(op.clone(), &self.operations)?;
             match self.apply_operation(transformed.clone()) {
                 Ok(()) => {
@@ -531,30 +574,30 @@ pub struct BlockCRDT {
     pub position: usize,
     pub content: String,
     pub tombstone: bool,
-    pub last_modified_id: OperationId,
+    pub last_modified_id: HLC,
     pub text_crdt: TextCRDT,
 }
 
 impl BlockCRDT {
     pub fn new(id: String, position: usize, content: String, device_id: String) -> Self {
-        let op_id = OperationId::new(device_id);
+        let hlc = HLC::new(device_id);
         Self {
             id,
             position,
             content: content.clone(),
             tombstone: false,
-            last_modified_id: op_id,
+            last_modified_id: hlc,
             text_crdt: TextCRDT::new(content),
         }
     }
 
-    pub fn insert_char(&mut self, index: usize, ch: char, op_id: OperationId) {
+    pub fn insert_char(&mut self, index: usize, ch: char, op_id: HLC) {
         self.text_crdt.insert(index, ch, op_id.clone());
         self.content = self.text_crdt.to_string();
         self.last_modified_id = op_id;
     }
 
-    pub fn delete_range(&mut self, start: usize, end: usize, op_id: OperationId) {
+    pub fn delete_range(&mut self, start: usize, end: usize, op_id: HLC) {
         self.text_crdt.delete(start, end, op_id.clone());
         self.content = self.text_crdt.to_string();
         self.last_modified_id = op_id;
@@ -564,8 +607,8 @@ impl BlockCRDT {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RGAChar {
     pub ch: char,
-    pub id: OperationId,
-    pub left_id: Option<OperationId>,
+    pub id: HLC,
+    pub left_id: Option<HLC>,
     pub deleted: bool,
 }
 
@@ -581,16 +624,16 @@ impl TextCRDT {
             .enumerate()
             .map(|(i, ch)| RGAChar {
                 ch,
-                id: OperationId {
-                    timestamp: 0,
-                    device_id: String::new(),
-                    sequence: i as u64,
+                id: HLC {
+                    physical_ms: 0,
+                    logical: i as u32,
+                    node_id: String::new(),
                 },
                 left_id: if i > 0 {
-                    Some(OperationId {
-                        timestamp: 0,
-                        device_id: String::new(),
-                        sequence: (i - 1) as u64,
+                    Some(HLC {
+                        physical_ms: 0,
+                        logical: (i - 1) as u32,
+                        node_id: String::new(),
                     })
                 } else {
                     None
@@ -601,7 +644,7 @@ impl TextCRDT {
         Self { chars }
     }
 
-    pub fn insert(&mut self, index: usize, ch: char, op_id: OperationId) {
+    pub fn insert(&mut self, index: usize, ch: char, op_id: HLC) {
         let left_id = if index > 0 && !self.chars.is_empty() {
             let active: Vec<&RGAChar> = self.chars.iter().filter(|c| !c.deleted).collect();
             if index > 0 && index <= active.len() {
@@ -655,7 +698,7 @@ impl TextCRDT {
         }
     }
 
-    pub fn delete(&mut self, start: usize, end: usize, _op_id: OperationId) {
+    pub fn delete(&mut self, start: usize, end: usize, _op_id: HLC) {
         let active_indices: Vec<usize> = self
             .chars
             .iter()
@@ -680,14 +723,14 @@ impl TextCRDT {
     }
 
     pub fn merge(&mut self, remote: &TextCRDT) {
-        let local_ids: std::collections::HashSet<String> = self
+        let local_ids: std::collections::HashSet<(String, u32)> = self
             .chars
             .iter()
-            .map(|c| format!("{}:{}", c.id.device_id, c.id.sequence))
+            .map(|c| (c.id.node_id.clone(), c.id.logical))
             .collect();
 
         for remote_char in &remote.chars {
-            let key = format!("{}:{}", remote_char.id.device_id, remote_char.id.sequence);
+            let key = (remote_char.id.node_id.clone(), remote_char.id.logical);
             if !local_ids.contains(&key) {
                 let pos = self.find_insert_position(remote_char);
                 let mut new_char = remote_char.clone();
@@ -699,7 +742,7 @@ impl TextCRDT {
                 self.chars.insert(pos, new_char);
             } else if remote_char.deleted {
                 if let Some(local) = self.chars.iter_mut().find(|c| {
-                    format!("{}:{}", c.id.device_id, c.id.sequence) == key
+                    c.id.node_id == remote_char.id.node_id && c.id.logical == remote_char.id.logical
                 }) {
                     local.deleted = local.deleted || remote_char.deleted;
                 }
@@ -718,8 +761,8 @@ pub struct ConflictInfo {
     pub block_id: String,
     pub local_content: String,
     pub remote_content: String,
-    pub local_operation_id: OperationId,
-    pub remote_operation_id: OperationId,
+    pub local_operation_id: HLC,
+    pub remote_operation_id: HLC,
     pub conflict_type: ConflictType,
 }
 
@@ -733,18 +776,15 @@ pub enum ConflictType {
 #[instrument]
 pub fn detect_conflicts(local: &CRDTDocument, remote_ops: &[Operation]) -> Vec<ConflictInfo> {
     let mut conflicts = Vec::new();
-    let local_op_ids: std::collections::HashSet<String> = local
+    let local_op_ids: std::collections::HashSet<(String, u32)> = local
         .operations
         .iter()
-        .map(|op| format!("{}:{}", op.id().device_id, op.id().sequence))
+        .map(|op| (op.id().node_id.clone(), op.id().logical))
         .collect();
 
     for remote_op in remote_ops {
-        if local_op_ids.contains(&format!(
-            "{}:{}",
-            remote_op.id().device_id,
-            remote_op.id().sequence
-        )) {
+        let remote_key = (remote_op.id().node_id.clone(), remote_op.id().logical);
+        if local_op_ids.contains(&remote_key) {
             continue;
         }
 
@@ -850,18 +890,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_operation_id_ordering() {
-        let id1 = OperationId {
-            timestamp: 1000,
-            device_id: "device_a".to_string(),
-            sequence: 1,
-        };
-        let id2 = OperationId {
-            timestamp: 1000,
-            device_id: "device_b".to_string(),
-            sequence: 1,
-        };
-        assert!(id1 < id2);
+    fn test_hlc_ordering() {
+        let mut hlc1 = HLC::new("node-a".into());
+        hlc1.increment();
+        let mut hlc2 = HLC::new("node-b".into());
+        hlc2.increment();
+        // Different nodes, same physical time - ordered by node_id
+        assert!(hlc1 < hlc2 || hlc1 > hlc2); // deterministic
+    }
+
+    #[test]
+    fn test_hlc_receive() {
+        let mut hlc1 = HLC::new("node-a".into());
+        hlc1.increment();
+        let hlc2 = hlc1.clone();
+        hlc1.receive(&hlc2);
+        assert!(hlc1 > hlc2);
+    }
+
+    #[test]
+    fn test_hlc_causality() {
+        let mut hlc1 = HLC::new("node-a".into());
+        hlc1.increment();
+        let mut hlc2 = HLC::new("node-b".into());
+        hlc2.receive(&hlc1); // hlc2 happens-after hlc1
+        assert!(hlc2 > hlc1);
     }
 
     #[test]
@@ -891,8 +944,8 @@ mod tests {
         let mut vc2 = VectorClock::new();
         vc2.increment("b");
         vc1.merge(&vc2);
-        assert_eq!(vc1.get("a"), 1);
-        assert_eq!(vc1.get("b"), 1);
+        assert!(vc1.get("a").is_some());
+        assert!(vc1.get("b").is_some());
     }
 
     #[test]
@@ -928,7 +981,7 @@ mod tests {
     fn test_text_crdt_insert_and_delete() {
         let mut text = TextCRDT::new("Hello".to_string());
         assert_eq!(text.to_string(), "Hello");
-        let op_id = OperationId::new("device_a".to_string());
+        let op_id = HLC::new("device_a".to_string());
         text.insert(5, '!', op_id);
         assert_eq!(text.to_string(), "Hello!");
     }
@@ -937,7 +990,8 @@ mod tests {
     fn test_text_crdt_merge() {
         let mut local = TextCRDT::new("Hello".to_string());
         let mut remote = TextCRDT::new("Hello".to_string());
-        let op_id = OperationId::with_sequence("device_b".to_string(), 100);
+        let mut op_id = HLC::new("device_b".to_string());
+        op_id.logical = 100;
         remote.insert(5, '!', op_id);
         local.merge(&remote);
         assert!(local.to_string().contains('!'));

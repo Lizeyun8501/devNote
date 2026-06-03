@@ -10,15 +10,31 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 devnote-core = { workspace = true }
+devnote-events = { workspace = true }
 devnote-grpc = { workspace = true }
 devnote-websocket = { workspace = true }
 devnote-observe = { workspace = true }
+devnote-persistence = { workspace = true }
+devnote-crypto = { workspace = true }
+devnote-editor = { workspace = true }
+devnote-search = { workspace = true }
+devnote-sync = { workspace = true }
+devnote-format = { workspace = true }
+devnote-canvas = { workspace = true }
+devnote-database = { workspace = true }
+devnote-object = { workspace = true }
+devnote-graph = { workspace = true }
+devnote-flashcard = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 uuid = { workspace = true }
+chrono = { workspace = true }
+base64 = "0.22"
+parking_lot = "0.12"
+lazy_static = "1"
 
 [build-dependencies]
 cbindgen = "0.27"

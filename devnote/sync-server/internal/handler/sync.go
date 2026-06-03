@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
@@ -42,7 +43,12 @@ func (h *SyncHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.syncService.Pull(userID, &req)
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 100 // Default page size
+	}
+
+	resp, err := h.syncService.Pull(userID, &req, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

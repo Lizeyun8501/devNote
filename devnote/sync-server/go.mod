@@ -1,6 +1,6 @@
 module github.com/devnote/sync-server
 
-go 1.22
+go 1.25.0
 
 require (
 	github.com/gin-contrib/cors v1.5.0
@@ -54,6 +54,7 @@ require (
 	golang.org/x/arch v0.5.0 // indirect
 	golang.org/x/sys v0.17.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

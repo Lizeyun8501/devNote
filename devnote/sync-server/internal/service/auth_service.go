@@ -1,7 +1,9 @@
 package service
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"math/big"
 	"sync"
@@ -218,4 +220,72 @@ func computeSRPX(username, password string, salt []byte) *big.Int {
 	xBytes := outer.Sum(nil)
 
 	return new(big.Int).SetBytes(xBytes)
+}
+
+func generateRandomToken(length int) string {
+	b := make([]byte, length)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
+	token := generateRandomToken(32)
+	refreshToken := &model.RefreshToken{
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		Token:     token,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour), // 30 days
+		CreatedAt: time.Now(),
+		Revoked:   false,
+	}
+	if err := s.db.Create(refreshToken).Error; err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, error) {
+	var rt model.RefreshToken
+	if err := s.db.Where("token = ?", refreshToken).First(&rt).Error; err != nil {
+		return "", "", errors.New("invalid refresh token")
+	}
+
+	if rt.Revoked {
+		return "", "", errors.New("refresh token has been revoked")
+	}
+
+	if time.Now().After(rt.ExpiresAt) {
+		return "", "", errors.New("refresh token has expired")
+	}
+
+	// Revoke old refresh token (rotation)
+	s.db.Model(&rt).Update("revoked", true)
+
+	// Find user
+	var user model.User
+	if err := s.db.Where("id = ?", rt.UserID).First(&user).Error; err != nil {
+		return "", "", errors.New("user not found")
+	}
+
+	// Generate new access token
+	accessToken, err := s.generateToken(&user)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Generate new refresh token
+	newRefreshToken, err := s.GenerateRefreshToken(user.ID)
+	if err != nil {
+		return "", "", err
+	}
+
+	return accessToken, newRefreshToken, nil
+}
+
+func (s *AuthService) RevokeRefreshToken(token string) error {
+	return s.db.Model(&model.RefreshToken{}).Where("token = ?", token).Update("revoked", true).Error
+}
+
+func (s *AuthService) RevokeAllUserTokens(userID string) error {
+	return s.db.Model(&model.RefreshToken{}).Where("user_id = ? AND revoked = ?", userID, false).Update("revoked", true).Error
 }

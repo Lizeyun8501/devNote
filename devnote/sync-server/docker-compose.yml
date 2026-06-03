@@ -10,7 +10,7 @@ services:
     environment:
       - PORT=8080
       - DB_PATH=/app/data/sync.db
-      - JWT_SECRET=${JWT_SECRET:-devnote-sync-secret-key}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - S3_ENDPOINT=minio:9000
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}

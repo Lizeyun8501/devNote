@@ -7,6 +7,7 @@ import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/bloc/sync_state.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
+import 'package:devnote/features/sync/retry_policy.dart';
 
 class SyncBloc extends Bloc<SyncEvent, SyncState> {
   final SyncService _syncService;
@@ -64,8 +65,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
 
     try {
-      await _syncService.initialize();
-      final pullResult = await _syncService.pullChanges();
+      await _withRetry(() => _syncService.initialize());
+      final pullResult = await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
       if (serviceState.status == SyncServiceStatus.conflict) {
@@ -121,7 +122,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
 
     try {
-      final result = await _syncService.pushChanges(event.data);
+      final result = await _withRetry(() => _syncService.pushChanges(event.data));
       if (result.status == SyncServiceStatus.synced) {
         emit(SyncCompleted(
           lastSyncTime: result.lastSyncedAt ?? DateTime.now(),
@@ -157,7 +158,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
 
     try {
-      final result = await _syncService.pullChanges();
+      final result = await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
       if (serviceState.status == SyncServiceStatus.conflict) {
@@ -317,12 +318,40 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         syncInterval: interval,
         serverAddress: server,
       );
+    } else if (base is SyncRetrying) {
+      return SyncRetrying(
+        retryAttempt: base.retryAttempt,
+        autoSyncEnabled: autoSync,
+        syncInterval: interval,
+        serverAddress: server,
+      );
     }
     return SyncIdle(
       autoSyncEnabled: autoSync,
       syncInterval: interval,
       serverAddress: server,
     );
+  }
+
+  Future<T> _withRetry<T>(Future<T> Function() operation, {RetryPolicy? policy}) async {
+    policy ??= const RetryPolicy();
+    int attempt = 0;
+    while (true) {
+      try {
+        return await operation();
+      } catch (e) {
+        attempt++;
+        if (attempt >= policy.maxRetries) rethrow;
+        final delay = policy.delayForAttempt(attempt - 1);
+        emit(SyncRetrying(
+          retryAttempt: attempt,
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+        await Future.delayed(delay);
+      }
+    }
   }
 
   @override

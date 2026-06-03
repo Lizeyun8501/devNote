@@ -8,6 +8,7 @@ import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
 import 'package:devnote/features/editor/widgets/block_widget.dart';
 import 'package:devnote/features/editor/widgets/block_toolbar.dart';
+import 'package:devnote/features/editor/widgets/editor_shortcuts.dart';
 import 'package:devnote/core/performance/virtual_scroll_controller.dart';
 
 class EditorPage extends StatelessWidget {
@@ -52,59 +53,78 @@ class _EditorViewState extends State<_EditorView> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
+    return EditorShortcuts(
+      onSave: () {
+        // Save is handled automatically by the bloc on each change
+      },
+      onUndo: () => context.read<EditorBloc>().add(const UndoEvent()),
+      onRedo: () => context.read<EditorBloc>().add(const RedoEvent()),
+      onBold: () {
+        // Bold formatting placeholder
+      },
+      onItalic: () {
+        // Italic formatting placeholder
+      },
+      onLink: () {
+        // Link insertion placeholder
+      },
+      onSearch: () {
+        // Search placeholder
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          title: BlocBuilder<EditorBloc, EditorState>(
+            builder: (context, state) {
+              final title = state is EditorLoaded ? '编辑笔记' : '新建笔记';
+              return Text(title);
+            },
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.more_vert),
+              onPressed: () {},
+            ),
+          ],
         ),
-        title: BlocBuilder<EditorBloc, EditorState>(
+        body: BlocBuilder<EditorBloc, EditorState>(
           builder: (context, state) {
-            final title = state is EditorLoaded ? '编辑笔记' : '新建笔记';
-            return Text(title);
+            if (state is EditorLoading) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (state is EditorError) {
+              return Center(child: Text('Error: ${state.message}'));
+            }
+
+            if (state is EditorLoaded) {
+              final blockCount = state.blocks.length;
+              final useVirtualScroll = blockCount > 50;
+
+              return Column(
+                children: [
+                  Expanded(
+                    child: useVirtualScroll
+                        ? _buildVirtualScrollEditor(context, state)
+                        : _buildSimpleEditor(context, state),
+                  ),
+                  BlockToolbar(
+                    onInsertParagraph: () => _insertBlock(context, state, BlockType.paragraph),
+                    onInsertHeading: () => _insertBlock(context, state, BlockType.heading1),
+                    onInsertCodeBlock: () => _insertBlock(context, state, BlockType.codeBlock),
+                    onInsertList: () => _insertBlock(context, state, BlockType.list),
+                    onInsertQuote: () => _insertBlock(context, state, BlockType.quote),
+                  ),
+                ],
+              );
+            }
+
+            return const SizedBox.shrink();
           },
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert),
-            onPressed: () {},
-          ),
-        ],
-      ),
-      body: BlocBuilder<EditorBloc, EditorState>(
-        builder: (context, state) {
-          if (state is EditorLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (state is EditorError) {
-            return Center(child: Text('Error: ${state.message}'));
-          }
-
-          if (state is EditorLoaded) {
-            final blockCount = state.blocks.length;
-            final useVirtualScroll = blockCount > 50;
-
-            return Column(
-              children: [
-                Expanded(
-                  child: useVirtualScroll
-                      ? _buildVirtualScrollEditor(context, state)
-                      : _buildSimpleEditor(context, state),
-                ),
-                BlockToolbar(
-                  onInsertParagraph: () => _insertBlock(context, state, BlockType.paragraph),
-                  onInsertHeading: () => _insertBlock(context, state, BlockType.heading1),
-                  onInsertCodeBlock: () => _insertBlock(context, state, BlockType.codeBlock),
-                  onInsertList: () => _insertBlock(context, state, BlockType.list),
-                  onInsertQuote: () => _insertBlock(context, state, BlockType.quote),
-                ),
-              ],
-            );
-          }
-
-          return const SizedBox.shrink();
-        },
       ),
     );
   }

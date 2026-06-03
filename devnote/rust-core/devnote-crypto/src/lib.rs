@@ -14,6 +14,8 @@ pub enum CryptoError {
     DecryptionFailed(String),
     #[error("key derivation failed: {0}")]
     KeyDerivationFailed(String),
+    #[error("key derivation error: {0}")]
+    KeyDerivationError(String),
     #[error("invalid key")]
     InvalidKey,
     #[error("authentication failed")]
@@ -120,6 +122,36 @@ impl DefaultCryptoEngine {
     pub fn verify_password(&self, password: &str, salt: &[u8], hash: &[u8]) -> Result<bool, CryptoError> {
         let computed = self.hash_password(password, salt)?;
         Ok(computed == hash)
+    }
+
+    /// Generate a 24-word BIP-39 mnemonic for key recovery
+    pub fn generate_recovery_phrase() -> Result<String, CryptoError> {
+        let mut entropy = [0u8; 32]; // 32 bytes = 256 bits = 24 words
+        OsRng.fill_bytes(&mut entropy);
+        let mnemonic = bip39::Mnemonic::from_entropy(&entropy)
+            .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
+        Ok(mnemonic.to_string())
+    }
+
+    /// Derive master key from recovery phrase
+    pub fn key_from_recovery_phrase(phrase: &str, salt: &[u8]) -> Result<[u8; 32], CryptoError> {
+        let mnemonic = bip39::Mnemonic::parse_normalized(phrase)
+            .map_err(|e| CryptoError::KeyDerivationError(format!("Invalid recovery phrase: {}", e)))?;
+        let seed = mnemonic.to_seed("");
+        // Derive key using Argon2id from seed
+        let params = argon2::Params::new(8192, 2, 1, Some(32))
+            .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
+        let mut key = [0u8; 32];
+        argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+            .hash_password_into(&seed, salt, &mut key)
+            .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
+        Ok(key)
+    }
+
+    /// Verify a recovery phrase matches the stored key
+    pub fn verify_recovery_phrase(phrase: &str, salt: &[u8], expected_key: &[u8; 32]) -> Result<bool, CryptoError> {
+        let derived = Self::key_from_recovery_phrase(phrase, salt)?;
+        Ok(derived == *expected_key)
     }
 
     pub fn encrypt_structured(&self, plaintext: &[u8], key: &[u8]) -> Result<EncryptedData, CryptoError> {

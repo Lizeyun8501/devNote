@@ -9,7 +9,6 @@ import (
 	"github.com/devnote/business-server/internal/middleware"
 	"github.com/devnote/business-server/internal/service"
 	"github.com/devnote/business-server/internal/storage"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -65,14 +64,7 @@ func main() {
 	// Middleware
 	r.Use(middleware.Recovery(logger))
 	r.Use(middleware.Logger(logger))
-	r.Use(cors.New(cors.Config{
-		AllowAllOrigins:  true,
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
-		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
-		AllowCredentials: true,
-		MaxAge:           86400,
-	}))
+	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
 
 	// Health check
 	r.GET("/api/v1/health", healthHandler.Check)

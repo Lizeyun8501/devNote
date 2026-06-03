@@ -14,6 +14,8 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<DeleteBlock>(_onDeleteBlock);
     on<MoveBlock>(_onMoveBlock);
     on<ToggleBlockType>(_onToggleBlockType);
+    on<UndoEvent>(_onUndo);
+    on<RedoEvent>(_onRedo);
   }
 
   Future<void> _onLoadNote(LoadNote event, Emitter<EditorState> emit) async {
@@ -51,7 +53,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         for (var i = event.position + 1; i < blocks.length; i++) {
           blocks[i] = blocks[i].copyWith(position: i);
         }
-        emit(state.copyWith(blocks: blocks, activeBlockId: newBlock.id));
+        emit(state.pushUndo(state.blocks).copyWith(blocks: blocks, activeBlockId: newBlock.id));
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -69,7 +71,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           }
           return b;
         }).toList();
-        emit(state.copyWith(blocks: blocks));
+        emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -92,9 +94,9 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
             content: '',
             position: 0,
           );
-          emit(state.copyWith(blocks: [newBlock], activeBlockId: newBlock.id));
+          emit(state.pushUndo(state.blocks).copyWith(blocks: [newBlock], activeBlockId: newBlock.id));
         } else {
-          emit(state.copyWith(blocks: blocks));
+          emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
         }
       }
     } catch (e) {
@@ -117,7 +119,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
             blocks[i] = blocks[i].copyWith(position: i);
           }
         }
-        emit(state.copyWith(blocks: blocks));
+        emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -134,10 +136,24 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           }
           return b;
         }).toList();
-        emit(state.copyWith(blocks: blocks));
+        emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
       }
     } catch (e) {
       emit(EditorError(e.toString()));
+    }
+  }
+
+  void _onUndo(UndoEvent event, Emitter<EditorState> emit) {
+    final state = this.state;
+    if (state is EditorLoaded) {
+      emit(state.undo(state.blocks));
+    }
+  }
+
+  void _onRedo(RedoEvent event, Emitter<EditorState> emit) {
+    final state = this.state;
+    if (state is EditorLoaded) {
+      emit(state.redo(state.blocks));
     }
   }
 }

@@ -84,6 +84,62 @@ END;
 CREATE INDEX IF NOT EXISTS idx_search_content_note_id ON notes_search_content(note_id);
 "#;
 
+fn parse_filter(input: &str) -> (Vec<(String, String)>, String) {
+    let mut filters = Vec::new();
+    let mut text_parts: Vec<String> = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if i + 1 < chars.len() && chars[i + 1] == ':' {
+            // Found a filter key
+            let key_start = i;
+            i += 2; // skip key and colon
+
+            let value = if i < chars.len() && (chars[i] == '"' || chars[i] == '\'') {
+                // Quoted value
+                let quote = chars[i];
+                i += 1;
+                let value_start = i;
+                while i < chars.len() && chars[i] != quote {
+                    i += 1;
+                }
+                let value: String = chars[value_start..i].iter().collect();
+                if i < chars.len() {
+                    i += 1; // skip closing quote
+                }
+                value
+            } else {
+                // Unquoted value - read until space
+                let value_start = i;
+                while i < chars.len() && chars[i] != ' ' {
+                    i += 1;
+                }
+                chars[value_start..i].iter().collect()
+            };
+
+            let key: String = chars[key_start..key_start+1].iter().collect();
+            filters.push((key.to_lowercase(), value));
+        } else {
+            // Text search part
+            let start = i;
+            while i < chars.len() && chars[i] != ' ' && (i + 1 >= chars.len() || chars[i + 1] != ':') {
+                i += 1;
+            }
+            if i > start {
+                text_parts.push(chars[start..i].iter().collect());
+            }
+        }
+
+        // Skip whitespace
+        while i < chars.len() && chars[i] == ' ' {
+            i += 1;
+        }
+    }
+
+    (filters, text_parts.join(" "))
+}
+
 #[derive(Debug)]
 pub struct SqliteSearchEngine {
     conn: Mutex<rusqlite::Connection>,
@@ -328,5 +384,33 @@ impl SearchEngine for SqliteSearchEngine {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("INSERT INTO notes_fts(notes_fts) VALUES ('rebuild');")?;
         Ok(())
+    }
+}
+
+impl SqliteSearchEngine {
+    /// Search using a query string that may contain filter prefixes like `tag:"work project"`.
+    /// The query is parsed with `parse_filter` to extract structured filters and free-text terms.
+    pub fn search_parsed(&self, query: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>> {
+        let (filters, text) = parse_filter(query);
+
+        let mut filter = SearchFilter {
+            folder_id: None,
+            tags: Vec::new(),
+            date_range: None,
+        };
+
+        for (key, value) in &filters {
+            match key.as_str() {
+                "t" | "tag" => filter.tags.push(value.clone()),
+                "f" | "folder" => {
+                    if let Ok(uid) = Uuid::parse_str(value) {
+                        filter.folder_id = Some(uid);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        self.search_with_filter(&text, &filter, limit, offset)
     }
 }

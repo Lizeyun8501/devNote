@@ -20,6 +20,9 @@ members = [
     "devnote-websocket",
     "devnote-qt",
     "devnote-ipfs",
+    "devnote-events",
+    "devnote-database",
+    "devnote-object",
 ]
 resolver = "2"
 
@@ -52,6 +55,7 @@ devnote-qt = { path = "devnote-qt" }
 devnote-ipfs = { path = "devnote-ipfs" }
 devnote-grpc = { path = "devnote-grpc" }
 devnote-websocket = { path = "devnote-websocket" }
+devnote-events = { path = "devnote-events" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:diff_match_patch/diff_match_patch.dart' as dmp;
 
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/bloc/sync_state.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
-import 'package:devnote/features/sync/conflict/diff_viewer.dart';
 
 class ConflictResolutionPage extends StatelessWidget {
   const ConflictResolutionPage({super.key});
@@ -67,7 +67,7 @@ class ConflictResolutionPage extends StatelessWidget {
       ),
       body: BlocBuilder<SyncBloc, SyncState>(
         builder: (context, state) {
-          if (state is! SyncConflict) {
+          if (state is! SyncConflict || state.conflicts.isEmpty) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -94,31 +94,11 @@ class ConflictResolutionPage extends StatelessWidget {
             );
           }
 
-          if (state.conflicts.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.check_circle_outline,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    '没有需要解决的冲突',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ],
-              ),
-            );
-          }
-
           return ListView.builder(
             padding: const EdgeInsets.all(16),
             itemCount: state.conflicts.length,
             itemBuilder: (context, index) {
-              return _ConflictCard(
+              return _ConflictDiffCard(
                 conflict: state.conflicts[index],
                 index: index,
                 total: state.conflicts.length,
@@ -131,24 +111,146 @@ class ConflictResolutionPage extends StatelessWidget {
   }
 }
 
-class _ConflictCard extends StatefulWidget {
+/// Per-block conflict resolution choice
+enum BlockChoice {
+  local,
+  remote,
+  unresolved,
+}
+
+/// Represents a diff block for per-block conflict resolution
+class DiffBlock {
+  final String localText;
+  final String remoteText;
+  final List<dmp.Diff> diffs;
+  BlockChoice choice;
+
+  DiffBlock({
+    required this.localText,
+    required this.remoteText,
+    required this.diffs,
+    this.choice = BlockChoice.unresolved,
+  });
+
+  String get resolvedText {
+    switch (choice) {
+      case BlockChoice.local:
+        return localText;
+      case BlockChoice.remote:
+        return remoteText;
+      case BlockChoice.unresolved:
+        return localText;
+    }
+  }
+}
+
+class _ConflictDiffCard extends StatefulWidget {
   final ConflictInfo conflict;
   final int index;
   final int total;
 
-  const _ConflictCard({
+  const _ConflictDiffCard({
     required this.conflict,
     required this.index,
     required this.total,
   });
 
   @override
-  State<_ConflictCard> createState() => _ConflictCardState();
+  State<_ConflictDiffCard> createState() => _ConflictDiffCardState();
 }
 
-class _ConflictCardState extends State<_ConflictCard> {
+class _ConflictDiffCardState extends State<_ConflictDiffCard> {
   bool _expanded = false;
-  ConflictChoice _choice = ConflictChoice.local;
+  List<DiffBlock> _diffBlocks = [];
+  Map<int, BlockChoice> _blockChoices = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _computeDiffBlocks();
+  }
+
+  void _computeDiffBlocks() {
+    final differ = dmp.DiffMatchPatch();
+    final diffs = differ.diff(widget.conflict.localContent, widget.conflict.remoteContent);
+
+    final blocks = <DiffBlock>[];
+    var localBuffer = StringBuffer();
+    var remoteBuffer = StringBuffer();
+    var hasDifference = false;
+
+    for (final diff in diffs) {
+      if (diff.operation == dmp.Operation.equal) {
+        if (hasDifference && (localBuffer.isNotEmpty || remoteBuffer.isNotEmpty)) {
+          blocks.add(DiffBlock(
+            localText: localBuffer.toString(),
+            remoteText: remoteBuffer.toString(),
+            diffs: differ.diff(localBuffer.toString(), remoteBuffer.toString()),
+          ));
+          localBuffer.clear();
+          remoteBuffer.clear();
+          hasDifference = false;
+        }
+        // Add equal text to both
+        localBuffer.write(diff.text);
+        remoteBuffer.write(diff.text);
+        // Flush equal block
+        blocks.add(DiffBlock(
+          localText: localBuffer.toString(),
+          remoteText: remoteBuffer.toString(),
+          diffs: [diff],
+        ));
+        localBuffer.clear();
+        remoteBuffer.clear();
+      } else if (diff.operation == dmp.Operation.delete) {
+        localBuffer.write(diff.text);
+        hasDifference = true;
+      } else if (diff.operation == dmp.Operation.insert) {
+        remoteBuffer.write(diff.text);
+        hasDifference = true;
+      }
+    }
+
+    // Flush remaining
+    if (hasDifference && (localBuffer.isNotEmpty || remoteBuffer.isNotEmpty)) {
+      blocks.add(DiffBlock(
+        localText: localBuffer.toString(),
+        remoteText: remoteBuffer.toString(),
+        diffs: differ.diff(localBuffer.toString(), remoteBuffer.toString()),
+      ));
+    }
+
+    setState(() {
+      _diffBlocks = blocks;
+      _blockChoices = {
+        for (var i = 0; i < blocks.length; i++)
+          i: blocks[i].diffs.length == 1 &&
+                  blocks[i].diffs[0].operation == dmp.Operation.equal
+              ? BlockChoice.local // Equal blocks default to local
+              : BlockChoice.unresolved,
+      };
+    });
+  }
+
+  bool get _allResolved => _blockChoices.values.every(
+        (c) => c != BlockChoice.unresolved,
+      );
+
+  String get _mergedContent {
+    final buffer = StringBuffer();
+    for (var i = 0; i < _diffBlocks.length; i++) {
+      final choice = _blockChoices[i] ?? BlockChoice.local;
+      switch (choice) {
+        case BlockChoice.local:
+          buffer.write(_diffBlocks[i].localText);
+        case BlockChoice.remote:
+          buffer.write(_diffBlocks[i].remoteText);
+        case BlockChoice.unresolved:
+          buffer.write(_diffBlocks[i].localText);
+      }
+    }
+    return buffer.toString();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -201,16 +303,13 @@ class _ConflictCardState extends State<_ConflictCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildDiffSection(context),
+                  _buildSideBySideDiff(context),
                   const SizedBox(height: 16),
-                  Text(
-                    '选择保留的版本',
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  _buildChoiceSelector(context),
+                  _buildBulkActions(context),
+                  const SizedBox(height: 12),
+                  _buildPerBlockResolution(context),
                   const SizedBox(height: 16),
-                  _buildActions(context),
+                  _buildResolveButton(context),
                 ],
               ),
             ),
@@ -259,123 +358,269 @@ class _ConflictCardState extends State<_ConflictCard> {
     );
   }
 
-  Widget _buildDiffSection(BuildContext context) {
+  Widget _buildSideBySideDiff(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text(
+          '差异对比',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
-              child: _buildContentPreview(
+              child: _buildDiffSide(
                 context,
                 label: '本地版本',
                 content: widget.conflict.localContent,
-                color: Colors.blue,
+                isLocal: true,
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _buildContentPreview(
+              child: _buildDiffSide(
                 context,
                 label: '远程版本',
                 content: widget.conflict.remoteContent,
-                color: Colors.green,
+                isLocal: false,
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 8),
-        Center(
-          child: TextButton.icon(
-            onPressed: () {
-              DiffViewerDialog.show(
-                context: context,
-                localContent: widget.conflict.localContent,
-                remoteContent: widget.conflict.remoteContent,
-                title: '差异对比 - ${widget.conflict.blockId}',
-              );
-            },
-            icon: const Icon(Icons.compare, size: 16),
-            label: const Text('查看详细差异'),
-          ),
         ),
       ],
     );
   }
 
-  Widget _buildContentPreview(
+  Widget _buildDiffSide(
     BuildContext context, {
     required String label,
     required String content,
-    required Color color,
+    required bool isLocal,
   }) {
-    final preview = content.length > 80
-        ? '${content.substring(0, 80)}...'
-        : content;
+    final differ = dmp.DiffMatchPatch();
+    final diffs = differ.diff(
+      widget.conflict.localContent,
+      widget.conflict.remoteContent,
+    );
 
     return Container(
-      padding: const EdgeInsets.all(8),
+      constraints: const BoxConstraints(maxHeight: 250),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.05),
+        color: (isLocal ? Colors.blue : Colors.green).withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
+        border: Border.all(
+          color: (isLocal ? Colors.blue : Colors.green).withValues(alpha: 0.2),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: color,
-                  fontWeight: FontWeight.bold,
-                ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: (isLocal ? Colors.blue : Colors.green).withValues(alpha: 0.1),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(8),
+                topRight: Radius.circular(8),
+              ),
+            ),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: isLocal ? Colors.blue : Colors.green,
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            preview.isEmpty ? '(空)' : preview,
-            style: Theme.of(context).textTheme.bodySmall,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(8),
+              child: _buildDiffSpans(context, diffs, isLocal),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildChoiceSelector(BuildContext context) {
-    return Column(
-      children: [
-        RadioListTile<ConflictChoice>(
-          title: const Text('保留本地版本'),
-          value: ConflictChoice.local,
-          groupValue: _choice,
-          onChanged: (value) => setState(() => _choice = value!),
+  Widget _buildDiffSpans(
+    BuildContext context,
+    List<dmp.Diff> diffs,
+    bool isLocal,
+  ) {
+    final spans = <TextSpan>[];
+
+    for (final diff in diffs) {
+      Color? backgroundColor;
+      Color? textColor;
+      TextDecoration? decoration;
+
+      if (diff.operation == dmp.Operation.equal) {
+        backgroundColor = null;
+        textColor = Theme.of(context).textTheme.bodySmall!.color;
+      } else if (diff.operation == dmp.Operation.delete && isLocal) {
+        backgroundColor = Colors.red.withValues(alpha: 0.2);
+        textColor = Colors.red.shade800;
+        decoration = TextDecoration.lineThrough;
+      } else if (diff.operation == dmp.Operation.insert && !isLocal) {
+        backgroundColor = Colors.green.withValues(alpha: 0.2);
+        textColor = Colors.green.shade800;
+      } else if (diff.operation == dmp.Operation.delete && !isLocal) {
+        // Skip deletions on remote side
+        continue;
+      } else if (diff.operation == dmp.Operation.insert && isLocal) {
+        // Skip insertions on local side
+        continue;
+      }
+
+      spans.add(TextSpan(
+        text: diff.text,
+        style: TextStyle(
+          color: textColor,
+          backgroundColor: backgroundColor,
+          decoration: decoration,
+          fontSize: 12,
         ),
-        RadioListTile<ConflictChoice>(
-          title: const Text('保留远程版本'),
-          value: ConflictChoice.remote,
-          groupValue: _choice,
-          onChanged: (value) => setState(() => _choice = value!),
+      ));
+    }
+
+    return RichText(
+      text: TextSpan(children: spans),
+      softWrap: true,
+    );
+  }
+
+  Widget _buildBulkActions(BuildContext context) {
+    return Row(
+      children: [
+        Text(
+          '快速操作：',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(width: 8),
+        FilledButton.tonalIcon(
+          onPressed: () {
+            setState(() {
+              for (var i = 0; i < _diffBlocks.length; i++) {
+                _blockChoices[i] = BlockChoice.local;
+              }
+            });
+          },
+          icon: const Icon(Icons.phone_android, size: 16),
+          label: const Text('保留本地'),
+        ),
+        const SizedBox(width: 8),
+        FilledButton.tonalIcon(
+          onPressed: () {
+            setState(() {
+              for (var i = 0; i < _diffBlocks.length; i++) {
+                _blockChoices[i] = BlockChoice.remote;
+              }
+            });
+          },
+          icon: const Icon(Icons.cloud, size: 16),
+          label: const Text('保留远程'),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          onPressed: () {
+            setState(() {
+              for (var i = 0; i < _diffBlocks.length; i++) {
+                final block = _diffBlocks[i];
+                // Equal blocks default to local, different blocks stay unresolved
+                if (block.diffs.length == 1 &&
+                    block.diffs[0].operation == dmp.Operation.equal) {
+                  _blockChoices[i] = BlockChoice.local;
+                } else {
+                  _blockChoices[i] = BlockChoice.unresolved;
+                }
+              }
+            });
+          },
+          icon: const Icon(Icons.merge, size: 16),
+          label: const Text('自定义合并'),
         ),
       ],
     );
   }
 
-  Widget _buildActions(BuildContext context) {
+  Widget _buildPerBlockResolution(BuildContext context) {
+    final conflictBlocks = <int, DiffBlock>{};
+    for (var i = 0; i < _diffBlocks.length; i++) {
+      final block = _diffBlocks[i];
+      // Only show blocks that have differences
+      if (block.diffs.length != 1 ||
+          block.diffs[0].operation != dmp.Operation.equal) {
+        conflictBlocks[i] = block;
+      }
+    }
+
+    if (conflictBlocks.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: Text(
+          '无内容差异',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '逐块选择 (${conflictBlocks.length} 处差异)',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 8),
+        ...conflictBlocks.entries.map((entry) {
+          final idx = entry.key;
+          final block = entry.value;
+          final choice = _blockChoices[idx] ?? BlockChoice.unresolved;
+
+          return _PerBlockSelector(
+            block: block,
+            blockIndex: idx,
+            choice: choice,
+            onChoiceChanged: (newChoice) {
+              setState(() {
+                _blockChoices[idx] = newChoice;
+              });
+            },
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildResolveButton(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
+        if (!_allResolved)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Text(
+              '还有未选择的差异块',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+            ),
+          ),
         FilledButton.icon(
-          onPressed: () {
-            final resolvedContent = switch (_choice) {
-              ConflictChoice.local => widget.conflict.localContent,
-              ConflictChoice.remote => widget.conflict.remoteContent,
-            };
-            context.read<SyncBloc>().add(ResolveConflict(
-                  blockId: widget.conflict.blockId,
-                  resolvedContent: resolvedContent,
-                ));
-          },
+          onPressed: _allResolved
+              ? () {
+                  context.read<SyncBloc>().add(ResolveConflict(
+                        blockId: widget.conflict.blockId,
+                        resolvedContent: _mergedContent,
+                      ));
+                }
+              : null,
           icon: const Icon(Icons.check, size: 18),
           label: const Text('解决'),
         ),
@@ -384,7 +629,147 @@ class _ConflictCardState extends State<_ConflictCard> {
   }
 }
 
-enum ConflictChoice {
-  local,
-  remote,
+class _PerBlockSelector extends StatelessWidget {
+  final DiffBlock block;
+  final int blockIndex;
+  final BlockChoice choice;
+  final ValueChanged<BlockChoice> onChoiceChanged;
+
+  const _PerBlockSelector({
+    required this.block,
+    required this.blockIndex,
+    required this.choice,
+    required this.onChoiceChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: choice == BlockChoice.unresolved
+              ? Colors.orange.withValues(alpha: 0.5)
+              : Colors.grey.withValues(alpha: 0.3),
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Show the diff for this block
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _buildBlockContent(
+                    context,
+                    label: '本地',
+                    text: block.localText,
+                    color: Colors.blue,
+                    isAdded: false,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: _buildBlockContent(
+                    context,
+                    label: '远程',
+                    text: block.remoteText,
+                    color: Colors.green,
+                    isAdded: true,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Choice buttons
+            Row(
+              children: [
+                _buildChoiceChip(
+                  context,
+                  label: '保留本地',
+                  value: BlockChoice.local,
+                  color: Colors.blue,
+                ),
+                const SizedBox(width: 8),
+                _buildChoiceChip(
+                  context,
+                  label: '保留远程',
+                  value: BlockChoice.remote,
+                  color: Colors.green,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBlockContent(
+    BuildContext context, {
+    required String label,
+    required String text,
+    required Color color,
+    required bool isAdded,
+  }) {
+    final displayText = text.length > 100 ? '${text.substring(0, 100)}...' : text;
+
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            displayText.isEmpty ? '(空)' : displayText,
+            style: TextStyle(
+              fontSize: 11,
+              color: isAdded ? Colors.green.shade800 : Colors.red.shade800,
+              decoration: isAdded ? null : (text.isNotEmpty ? TextDecoration.lineThrough : null),
+            ),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChoiceChip(
+    BuildContext context, {
+    required String label,
+    required BlockChoice value,
+    required Color color,
+  }) {
+    final isSelected = choice == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      selectedColor: color.withValues(alpha: 0.2),
+      side: BorderSide(
+        color: isSelected ? color : Colors.grey.withValues(alpha: 0.3),
+      ),
+      labelStyle: TextStyle(
+        color: isSelected ? color : null,
+        fontSize: 12,
+      ),
+      onSelected: (_) => onChoiceChanged(value),
+    );
+  }
 }

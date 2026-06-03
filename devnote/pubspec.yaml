@@ -29,6 +29,8 @@ dependencies:
   flutter_math_fork: ^0.7.2
   google_fonts: ^6.2.1
   shared_preferences: ^2.3.4
+  http: ^1.2.2
+  diff_match_patch: ^0.4.1
 
 dev_dependencies:
   flutter_test:

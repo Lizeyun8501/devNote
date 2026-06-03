@@ -431,17 +431,19 @@ impl ObjectEngine for SqliteObjectEngine {
         let ids: Vec<Uuid> = match type_id {
             Some(tid) => {
                 let mut stmt = conn.prepare("SELECT id FROM objects WHERE object_type_id = ?1")?;
-                stmt.query_map(params![tid.to_string()], |row| {
+                let ids: Vec<Uuid> = stmt.query_map(params![tid.to_string()], |row| {
                     let id_str: String = row.get(0)?;
                     Ok(Uuid::parse_str(&id_str).unwrap())
-                })?.collect::<Result<Vec<_>, _>>()?
+                })?.collect::<Result<Vec<_>, _>>()?;
+                ids
             }
             None => {
                 let mut stmt = conn.prepare("SELECT id FROM objects")?;
-                stmt.query_map([], |row| {
+                let ids: Vec<Uuid> = stmt.query_map([], |row| {
                     let id_str: String = row.get(0)?;
                     Ok(Uuid::parse_str(&id_str).unwrap())
-                })?.collect::<Result<Vec<_>, _>>()?
+                })?.collect::<Result<Vec<_>, _>>()?;
+                ids
             }
         };
 
@@ -478,19 +480,21 @@ impl ObjectEngine for SqliteObjectEngine {
                 let mut stmt = conn.prepare(
                     "SELECT target_id FROM object_relations WHERE source_id = ?1 AND relation_id = ?2"
                 )?;
-                stmt.query_map(params![object_id.to_string(), rid.to_string()], |row| {
+                let ids: Vec<Uuid> = stmt.query_map(params![object_id.to_string(), rid.to_string()], |row| {
                     let s: String = row.get(0)?;
                     Ok(Uuid::parse_str(&s).unwrap())
-                })?.collect::<Result<Vec<_>, _>>()?
+                })?.collect::<Result<Vec<_>, _>>()?;
+                ids
             }
             None => {
                 let mut stmt = conn.prepare(
                     "SELECT target_id FROM object_relations WHERE source_id = ?1"
                 )?;
-                stmt.query_map(params![object_id.to_string()], |row| {
+                let ids: Vec<Uuid> = stmt.query_map(params![object_id.to_string()], |row| {
                     let s: String = row.get(0)?;
                     Ok(Uuid::parse_str(&s).unwrap())
-                })?.collect::<Result<Vec<_>, _>>()?
+                })?.collect::<Result<Vec<_>, _>>()?;
+                ids
             }
         };
 

@@ -178,6 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_cells_row ON database_cells(row_id);
 CREATE INDEX IF NOT EXISTS idx_views_db ON database_views(database_id);
 "#;
 
+#[derive(Debug)]
 pub struct SqliteDatabaseEngine {
     conn: Mutex<rusqlite::Connection>,
 }
