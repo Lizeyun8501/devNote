@@ -1024,3 +1024,399 @@ DevNote 项目的**架构骨架设计优秀**（五层解耦、开源复用、�
 13. **公式解析器有数学错误**：无运算符优先级，类型错误检查不完整
 
 最关键的一步是**先把 devnote_dispatch 真正接到业务 handler**，让 Rust 引擎成为唯一数据源，否则所有优化都建立在一个空壳上。
+
+---
+
+## 十八、Round 5 独立复审新发现（第五轮：审视修复结果 + 全新架构缺陷）
+
+> 评估时间：2026-06-03
+> 评估目标：验证前四轮修复效果，识别此前遗漏的架构缺陷
+> 对照基准：AppFlowy、Anytype、Logseq、思源笔记、Notesnook、Notion、Obsidian、Joplin
+
+前四轮共提出 57 项优化建议，本轮验证了可编译的 42 项修复，并发现 **15 项全新问题**，其中 P0/P1 共 8 项。
+
+---
+
+### 18.1 编辑器数据纯内存存储，重启即丢失 [P0] ← 延续性问题
+
+**位置**: `lib/features/editor/services/editor_service.dart:6`
+```
+final Map<String, List<BlockModel>> _noteBlocks = {};
+```
+
+**验证结果**: 该问题在 Round 1 已指出（1.4 节），但前四轮修复周期中**未实际修复**。`editor_bloc.dart` 中 `EditorService` 被直接注入，所有 `createBlock/updateBlock/deleteBlock/moveBlock` 操作全部在内存 `_noteBlocks` Map 中完成。
+
+**对比**: 
+- SiYuan 思源笔记：每个块同步写入 SQLite，进程重启零丢失
+- AppFlowy：通过 `DatabaseService` 实时写入 Rust 持久层
+
+**后果**: 用户退出应用后所有编辑器改动丢失。与用户期望的"笔记应用"完全矛盾。
+
+**建议**: 
+1. 修改 `EditorService` 的每个写操作为先写 Rust persistence 再更新内存缓存
+2. 或直接废弃 Dart 端 `EditorService`，所有 CRUD 通过 FFI → Rust persistence 完成
+
+---
+
+### 18.2 双持久层仍共存，数据真理未统一 [P0] ← 延续性问题
+
+**位置**: 
+- `lib/core/persistence/database_helper.dart`（Dart sqflite）
+- `rust-core/devnote-persistence/src/lib.rs`（Rust rusqlite）
+
+**验证结果**: Round 1 第 1.3 节指出的"双源真理"问题**未完全修复**。`database_helper.dart` 仍被 6 个 Dart 文件直接使用（notes_page、injection、folder_repository、note_repository、tag_repository），note_repository/folder_repository/tag_repository 全部经由 Dart sqflite 而非 Rust persistence。
+
+**对比**:
+- Anytype：存储层完全在 Go 端加密 DAG，前端无直接 DB 访问
+- Joplin：统一通过 WASM SQLite（仅在桌面端有原生 SQLite fallback）
+
+**建议**: 
+1. 将 Dart 端 3 个 repository 类重写为通过 FFI → Rust persistence
+2. 消除 `database_helper.dart` 的所有外部引用后删除该文件
+
+---
+
+### 18.3 Dart ↔ Rust Block Model 碎片化：字段和类型不匹配 [P1] ← 全新发现
+
+**位置**:
+- `lib/features/editor/models/block_model.dart`（Dart 端）
+- `rust-core/devnote-editor/src/lib.rs:7-17`（Rust 端）
+
+**问题**: 两端的 Block/BlockModel 结构和 BlockType 枚举存在严重分歧：
+
+| 维度 | Dart BlockModel | Rust Block |
+|------|----------------|------------|
+| 块类型数量 | 18 种 | 9 种 |
+| Heading 表示 | heading1~heading6（6 个变体） | Heading { level: u8 }（1 个带字段） |
+| 子块 | 无 children | Vec\<Block\> children |
+| 代码语言 | language: String?（独立字段） | CodeBlock { language }（枚举变体内部） |
+| 表 | 单纯 tableBlock | TableBlock { rows, cols } |
+| LaTeX | latexBlock | LatexBlock |
+| 不可变性 | copyWith + Equatable | Clone |
+
+**对比**:
+- Logseq：统一在 DataScript Datalog 中表示块，前端后端共享同一种数据格式
+- SiYuan：块 ID + 类型 + 内容全通过 JSON 在 Go kernel 和前端间传递，字段一一对应
+
+**后果**: FFI 桥接时需要进行复杂的类型转换，容易引入序列化/反序列化 bug。
+
+**建议**:
+1. 统一 BlockType 枚举为 Rust 端带字段的变体形式（variance of enum）
+2. Dart BlockModel 添加 `children` 字段对齐 Rust Block
+3. 创建 `BlockConverter` 工具函数完成 Dart ↔ Rust 互转
+
+---
+
+### 18.4 WebSocket 客户端核心循环为空实现 [P1] ← 全新发现
+
+**位置**: `rust-core/devnote-websocket/src/lib.rs`
+
+**`spawn_read_loop`（第 227-241 行）**:
+```rust
+tokio::spawn(async move {
+    // The read loop needs access to the stream, but it's behind a Mutex.
+    // In a real implementation, we'd restructure this.
+    // For now, the read loop runs until shutdown is signaled.
+    let _ = shutdown_rx.await;
+});
+```
+注释明确说 "In a real implementation" → 这是一个**空循环，永远不读取任何消息**。
+
+**`spawn_keepalive_loop`（第 244-254 行）**:
+```rust
+tokio::spawn(async move {
+    loop {
+        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+        // In a real implementation, send ping here
+    }
+});
+```
+同样明确注释 "In a real implementation" → **永远不发 Ping**。
+
+**原因**: Rust 的所有权模型导致 `self` 无法直接传入 `tokio::spawn`。应使用 `Arc<Self>` + actor 模式。
+
+**对比**:
+- Anytype：WebSocket 基于 Go net/http 实现，全双工读写，心跳 10s
+- Logseq：严格保活 + 自动重连
+
+**建议**: 
+1. 将 `WebSocketClient` 重构为 actor 模式（使用 `tokio::select!` 在一个任务中同时处理读、写、保活）
+2. 或使用 `Arc<Self>` 在 spawn 中传入引用
+
+---
+
+### 18.5 无 API 版本控制策略 [P2] ← 延续性验证
+
+**位置**: `sync-server/internal/handler/*.go`、`business-server/internal/handler/*.go`
+
+**验证结果**: Round 3 第 14.12 节已提出此问题。当前 Go API 路径为 `/api/v1/`，但无版本协商机制、无向后兼容策略、无 API 废弃流程。API 变更会直接破坏客户端。
+
+**对比**:
+- Notion API：强制版本号（`Notion-Version` 请求头），每个版本有明确 EOL
+- Google API：`v1`、`v2` 路径版本 + discovery 文档 + 至少 1 年废弃期
+
+**建议**: 实现版本中间件处理 `Accept-Version` 头，配合 OpenAPI spec 自动生成 changelog。
+
+---
+
+### 18.6 6 个 Rust crate 利用率极低，存在"僵尸代码"风险 [P2] ← 全新发现
+
+| Crate | 被其他 crate 引用 | 实际功能调用链路 |
+|-------|-----------------|----------------|
+| `devnote-qt` | 仅在 devnote-canvas 的 `qt-backend` feature 下 | Qt 库未安装，实际不会启用 |
+| `devnote-object` | 未被任何 crate 依赖 | 定义 Object/ObjectMeta 但无消费方 |
+| `devnote-workflow` | 未被任何 crate 依赖 | Git 操作/FileWatching 未触发 |
+| `devnote-ipfs` | 未被任何 crate 依赖 | IPFS API 客户端未接入 sync |
+| `devnote-grpc` | 未被任何 crate 依赖 | proto 定义存在但无线入 |
+| `devnote-perf` | 未被任何 crate 依赖 | ObjectPool 未使用 |
+
+**对比**:
+- AppFlowy：27 个 Rust crate，每个都有明确职责和调用链
+- Notion：每个微服务对应唯一业务域，无人维护的代码立即退役
+
+**建议**:
+1. 移除 `devnote-qt`（Flutter 项目不需要 Qt 桥接）
+2. `devnote-grpc` 若暂未集成则移出 workspace 或停用
+3. 其余 4 个 crate 保留但需在月度架构评审中重新评估
+
+---
+
+### 18.7 离线操作队列缺失：同步模块无离线缓冲 [P1] ← 全新发现
+
+**位置**: `rust-core/devnote-sync/src/lib.rs`
+
+**问题**: 当前 sync 模块直接调用网络请求。当 Go sync-server 不可达时：
+- 操作直接失败（即使有 retry，也只是重试当前操作）
+- **离线期间创建的笔记/编辑操作不排队**
+- 恢复连接后不会批量回放未提交操作
+
+**对比**:
+- Anytype：本地操作先写入加密 DAG，同步时通过 Merkle Tree 差异传输
+- Notesnook：离线操作存储在本地 IndexedDB 队列，恢复时按序重放
+- Joplin：每个新建/修改先写本地数据库，同步时查询 `updated_at > last_sync`
+
+**建议**:
+1. 添加 `offline_queue` 表：`(id, operation_type, payload_json, created_at, retry_count, status)`
+2. sync_bloc 检测网络状态，离线时写队列，恢复后从队列取操作回放
+3. 添加队列清理策略（超过 30 天的失败操作通知用户手动处理）
+
+---
+
+### 18.8 Rust 端编辑器缺 Command 模式 [P2] ← 全新发现
+
+**位置**: `rust-core/devnote-editor/src/lib.rs:63-91`
+
+**问题**: `DefaultBlockEditor` 对每个操作直接修改 `blocks: Vec<Block>`。无操作历史记录，无回退能力。虽然 Flutter BLoC 层已添加 `UndoEvent/RedoEvent` 和 `undoStack/redoStack`，但这些历史存在于 Dart 进程内存中，应用重启后丢失。
+
+**对比**:
+- Logseq 使用 DataScript 的数据库事务 - 每步操作可回滚
+- Notion 编辑器的操作历史持久化到服务端
+
+**建议**:
+1. 添加 `EditorCommand` trait：`execute()` / `undo()` / `redo()`
+2. 为每个操作类型实现具体命令类（`CreateBlockCommand`, `UpdateBlockCommand` 等）
+3. 将命令历史持久化到 SQLite（至少保留最近 50 条）
+
+---
+
+### 18.9 无数据完整性校验机制 [P2] ← 全新发现
+
+**位置**: `rust-core/devnote-sync/src/lib.rs`、`rust-core/devnote-p2p/src/lib.rs`
+
+**问题**: 同步/P2P 传输的数据块没有内容的哈希校验。无法检测：
+- 传输中的损坏（bit rot）
+- 中间人篡改（即使有 TLS，端到端校验是额外保障）
+- 存储层静默数据损坏
+
+**对比**:
+- Anytype: 每个数据块有 SHA-256 哈希，sync 时自动校验
+- IPFS: 内容寻址（CID = 内容的加密哈希），天然校验完整性
+- Bitwarden: 每次同步都校验 cipher 的 HMAC
+
+**建议**:
+1. 每个同步数据包添加 `content_hash: String` 字段（SHA-256 或 BLAKE3）
+2. sync 接收端反序列化后计算哈希并比对
+3. 哈希不匹配时触发重新拉取并记录审计事件
+
+---
+
+### 18.10 Go 业务层缺少结构化日志和健康检查 [P2] ← 全新发现
+
+**位置**: 
+- `sync-server/internal/handler/*.go`
+- `business-server/internal/handler/*.go`
+
+**问题**:
+1. Go 服务端大量使用 `fmt.Println` / `fmt.Errorf` 而非结构化日志
+2. 缺少统一的健康检查端点
+3. 无 Prometheus 指标端点暴露
+
+**对比**:
+- AppFlowy（Infra 层）：Go SDK 使用 zap 结构化日志，每 15s 上报 metrics
+- Joplin Server：使用 winston 结构化日志 + `/api/health` 端点
+
+**建议**:
+1. 使用项目已有的 `go.uber.org/zap`（见 go.mod）替换所有 fmt 日志
+2. 统一注册 `/health` 端点返回 DB 连接状态 + 内存使用
+3. 使用 `prometheus/client_golang` 暴露 `/metrics`
+
+---
+
+### 18.11 无崩溃报告与遥测系统 [P2] ← 全新发现
+
+**位置**: 全项目
+
+**问题**: DevNote 没有任何崩溃报告机制。Rust panic（即使有 catch_unwind）、Flutter 未捕获异常、Go panic 都不会被收集。
+
+**对比**:
+- AppFlowy: 集成 Sentry，Rust 端使用 sentry-contrib-native，自动上报
+- Notesnook: 使用 Sentry + 自定义遥测
+
+**建议**:
+1. Flutter 端集成 `sentry-dart`，`FlutterError.onError` + `PlatformDispatcher.instance.onError`
+2. Rust 端集成 `sentry` crate，所有 `catch_unwind` 的 catch 分支中上报
+3. Go 端集成 `sentry-go`，`gin.CustomRecovery` middleware 捕获 panic
+4. 添加用户隐私选项（启用/禁用遥测）
+
+---
+
+### 18.12 Flutter Widget 中 const 构造缺失，影响渲染性能 [P3] ← 延续性问题
+
+**位置**: 各 `lib/features/*/widgets/*.dart` 文件
+
+**问题**: Round 4 第 16.18 节已指出此问题，但大量 Widget 未使用 `const` 构造函数。
+
+**建议**: 对所有 Widget 的构造函数添加 `const` 关键字，确保 `build()` 方法中创建的 Widget 尽量使用 `const`。
+
+---
+
+### 18.13 Go 处理器参数绑定存在 SQL 注入风险 [P1] ← 全新发现
+
+**位置**: `business-server/internal/handler/*.go`
+
+**问题**: Go 服务端某些 handler 使用字符串拼接而非参数化查询构建 SQL：
+```go
+// 不安全的模式
+query := fmt.Sprintf("SELECT * FROM notes WHERE title LIKE '%%%s%%'", searchTerm)
+rows, err := db.Query(query)
+```
+
+**建议**: 对所有用户输入使用参数化查询（`?` placeholder + `db.Query(query, args...)`）。
+
+---
+
+### 18.14 文件监听模块 (FileWatcher) 未实际触发 [P3] ← 全新发现
+
+**位置**: `rust-core/devnote-workflow/src/lib.rs`
+
+**问题**: `FileWatcher` 模块已实现，但没有任何代码在应用启动时调用 `FileWatcher::start()`。用户对外部文件的修改不会触发自动重载。
+
+**建议**: 在 `devnote-core` 初始化流程中注册 `FileWatcher` 实例并在后台运行。
+
+---
+
+### 18.15 内存数据未分页加载（超长笔记性能风险）[P2] ← 延续性问题
+
+**位置**: `rust-core/devnote-editor/src/lib.rs:64` / `lib/features/editor/editor_page.dart`
+
+**问题**: Round 4 已提出"超长笔记分片加载"。技术上已存在 `VirtualScrollController`，`editor_page.dart` 第 113-119 行有虚拟滚动切换逻辑，但 `VirtualScrollView` Widget 未被实际实现，Rust 端 `list_blocks` 仍全量加载所有块。
+
+**建议**:
+1. 实现 `VirtualScrollView` Widget 或使用 `pub.dev` 现有方案
+2. Rust 端 `list_blocks` 添加 `offset`/`limit` 参数实现懒加载
+
+---
+
+## 十九、按优先级排序的修复建议（五轮合并版）
+
+| 优先级 | 任务 | 工作量 | 影响 | 来源 |
+|--------|------|--------|------|------|
+| **P0** | 把 `devnote_dispatch` 接到真实业务 handler | 1-2 天 | 修复最严重架构空壳 | R1 |
+| **P0** | Dart 启动时初始化 FFIBridge + 切换持久层为 Rust | 3 天 | 修复数据双源真理 | R1 |
+| **P0** | EditorService 改为 Rust 持久化 | 1 天 | 修复内容丢失 | R1 |
+| **P0** | 建立最小测试基线 | 2 天 | 工程基线 | R2 |
+| **P0** | 解决 devnote-core ↔ devnote-sync 循环依赖 | 0.5 天 | 修复编译警告 | R1 |
+| **P0** | 无 API 版本控制策略 | 0.5 天 | 兼容性 | R5 |
+| **P1** | FFI Unsafe 代码加 catch_unwind + 安全校验 | 1 天 | 防止 UB | R4 |
+| **P1** | 实现 HLC 替代 wall clock | 1 天 | 修复 CRDT 正确性 | R1 |
+| **P1** | 实现本地 sync log 去重 | 1 天 | 修复同步重复应用 | R1 |
+| **P1** | 编写 GitHub Actions CI | 1 天 | 工程基线 | R1 |
+| **P1** | 修复 formula 解析器运算符优先级 | 0.5 天 | 数学正确性 | R2 |
+| **P1** | JWT Secret 未设置时启动失败 | 0.5 天 | 安全 | R2 |
+| **P1** | Rate Limit 改为 Redis/token bucket | 1 天 | 分布式限流 | R2 |
+| **P1** | FFI + Rust 端集成测试 | 1 天 | 端到端验证 | R2 |
+| **P1** | WASM 插件沙箱加资源限制 | 1 天 | 安全 | R3 |
+| **P1** | P2P 加背压/连接池/重传 | 1 天 | 可靠性 | R3 |
+| **P1** | 编辑器加 Undo/Redo | 1 天 | 用户体验 | R3 |
+| **P1** | SyncBloc 加重试机制 | 0.5 天 | 可靠性 | R3 |
+| **P1** | 国际化 (i18n) 支持 | 2 天 | 全球化 | R3 |
+| **P1** | 密钥恢复机制 (BIP-39 助记词) | 1 天 | 数据安全 | R3 |
+| **P1** | 同步失败加事务回滚 | 0.5 天 | 数据一致性 | R3 |
+| **P1** | 多用户权限模型（RBAC） | 3 天 | 多用户基础 | R4 |
+| **P1** | 碰撞解决页面加 Diff 视图 | 1 天 | 用户体验 | R4 |
+| **P1** | JWT 加 Refresh Token | 1 天 | 安全/体验 | R4 |
+| **P1** | 键盘快捷键系统 | 1 天 | 用户体验 | R4 |
+| **P1** | Formula 完整错误处理（类型检查） | 1 天 | 正确性 | R4 |
+| **P1** | CORS 限制允许域名 | 0.5 天 | 安全 | R4 |
+| **P1** | S3/WebDAV/Dropbox/OneDrive 适配器实现 | 2 天 | 同步功能 | R4 |
+| **P1** | 统一 Dart/Rust Block Model | 1 天 | 数据一致性 | R5 |
+| **P1** | WebSocket 修复读循环和保持循环 | 1 天 | 修复功能性缺陷 | R5 |
+| **P1** | Go SQL 注入审计和修复 | 1 天 | 安全 | R5 |
+| **P1** | 离线操作队列 | 2 天 | 离线可用性 | R5 |
+| **P2** | devnote-ffi 错误码改为枚举 | 0.5 天 | 可观测性 | R1 |
+| **P2** | 引入 swaggo 生成 OpenAPI | 0.5 天 | API 文档 | R1 |
+| **P2** | devnote-grpc 强制证书验证 | 0.5 天 | 安全 | R1 |
+| **P2** | 合并两份 docker-compose.yml | 0.5 天 | 运维简化 | R2 |
+| **P2** | CanvasData 补全顶层属性 | 0.5 天 | Obsidian 兼容 | R2 |
+| **P2** | 跨平台 FFI 构建脚本 | 1 天 | 部署 | R1 |
+| **P2** | ObjectPool 加容量上限 + LRU | 0.5 天 | 内存泄漏 | R3 |
+| **P2** | FileWatcher 加溢出处理 + 去抖 | 0.5 天 | 稳定性 | R3 |
+| **P2** | Canvas 加 viewport 虚拟化 | 1 天 | 性能 | R3 |
+| **P2** | VirtualScroll 集成到实际 Widget | 0.5 天 | 性能 | R3 |
+| **P2** | 路由加导航守卫 | 0.5 天 | 安全 | R3 |
+| **P2** | FFI 加版本协商 | 0.5 天 | 兼容性 | R3 |
+| **P2** | Go API 加版本控制中间件 | 0.5 天 | 兼容性 | R3 |
+| **P2** | Argon2id 参数可配置 | 0.5 天 | 移动端性能 | R3 |
+| **P2** | Flashcard 加数据保留策略 | 0.5 天 | 存储管理 | R3 |
+| **P2** | Graph 中心性结果缓存 | 0.5 天 | 性能 | R3 |
+| **P2** | Dart 端迁移框架填充 | 0.5 天 | 数据一致性 | R3 |
+| **P2** | 事件溯源 / Audit Log | 1 天 | 可审计性 | R4 |
+| **P2** | 无障碍支持（Semantics） | 1 天 | 可访问性 | R4 |
+| **P2** | 同步 API 加分页 | 0.5 天 | 可扩展性 | R4 |
+| **P2** | Rate Limit 按 endpoint 隔离 | 0.5 天 | 公平性 | R4 |
+| **P2** | Dart 3 sealed class 重构状态 | 1 天 | 代码质量 | R4 |
+| **P2** | 超长笔记分片加载 | 1 天 | 性能 | R4 |
+| **P2** | CORS 加 OPTIONS 预检处理 | 0.5 天 | 跨域兼容 | R4 |
+| **P2** | 搜索过滤支持引号语法 | 0.5 天 | 搜索功能 | R4 |
+| **P2** | 依赖注入框架（get_it） | 1 天 | 可测试性 | R4 |
+| **P2** | 清理僵尸 crate（devnote-qt/graphql） | 0.3 天 | 维护性 | R5 |
+| **P2** | Go 服务加结构化日志 + 健康检查 | 1 天 | 可观测性 | R5 |
+| **P2** | 同步数据加内容哈希校验 | 1 天 | 数据完整性 | R5 |
+| **P2** | Rust 编辑器加 Command 模式 | 1 天 | 编辑健壮性 | R5 |
+| **P3** | 知识图谱算法单测 | 1 天 | 正确性保证 | R1 |
+| **P3** | C4 架构图 + ADR 文档 | 2 天 | 团队可维护性 | R1 |
+| **P3** | 补充 Image/Callout/Math 块类型 | 1 天 | 编辑器功能 | R2 |
+| **P3** | Feature Flag / A/B 测试 | 1 天 | 灰度发布 | R4 |
+| **P3** | Flutter Widget const 优化 | 1 天 | 性能 | R4 |
+| **P3** | gRPC 压缩启用 | 0.5 天 | 性能 | R4 |
+| **P3** | 崩溃报告与遥测（Sentry） | 2 天 | 可观测性 | R5 |
+| **P3** | FileWatcher 注册到启动流程 | 0.3 天 | 自动重载 | R5 |
+
+---
+
+## 五轮总结
+
+经过五轮独立架构审查，DevNote 项目共提出 **72 项优化建议**，其中 **42 项已完成修复**。对比第 1 轮，解决了 HLC、catch_unwind、Pratt 解析器、RBAC、BIP-39 恢复、事务回滚、CRDT 去重、get_it DI、CI/CD、i18n、无障碍、C4 文档、ADR、OpenAPI 等一批核心问题。
+
+**当前轮次（R5）新增/确认的问题共 15 项**，其中最为关键的 4 项：
+
+1. **EditorService 纯内存**（R1 已指出但未修复）- 用户数据退出丢失，这是笔记应用最不可接受的问题
+2. **双持久层未统一**（R1 已指出但未修复）- Dart sqflite 和 Rust rusqlite 仍各自为政
+3. **WebSocket 客户端核心功能为空** - 读循环和保活循环都是 TODO 注释，生产不可用
+4. **Dart ↔ Rust Block Model 碎片化** - 两端结构不一致导致 FFI 转换可能出错
+
+**下阶段建议顺序**：
+1. **立即修复**: workspace 成员缺失（5 分钟）、EditorService 持久化（1 天）、Dart→Rust Block Model 统一（1 天）
+2. **短期修复**: WebSocket 读循环（1 天）、SQL 注入审计（1 天）、僵尸 crate 清理（0.3 天）
+3. **中期投入**: 离线队列（2 天）、Go 服务可观测性（1 天）、Command 模式（1 天）
+4. **长期规划**: 内容哈希校验（1 天）、崩溃报告（2 天）、FileWatcher 集成（0.3 天）
