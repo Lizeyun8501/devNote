@@ -15,6 +15,7 @@ use devnote_crdt::{
 };
 use rusqlite::Connection;
 use std::sync::Mutex;
+use std::collections::HashSet;
 use sha2::{Sha256, Digest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,6 +84,14 @@ pub struct RemoteChanges {
     pub content_hash: Option<String>,
 }
 
+/// 同步操作幂等键 —— 防止同一操作因网络重试被多次提交
+/// 借鉴 Stripe API 的 Idempotency-Key 设计模式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncOperation {
+    pub idempotency_key: String,  // UUID v4，唯一标识每次同步操作
+    pub operation: Operation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeResult {
     pub applied_operations: Vec<Operation>,
@@ -101,6 +110,24 @@ pub fn compute_content_hash(data: &[u8]) -> String {
 pub fn verify_content_hash(data: &[u8], expected_hash: &str) -> bool {
     let computed = compute_content_hash(data);
     computed == expected_hash
+}
+
+lazy_static::lazy_static! {
+    static ref PROCESSED_KEYS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+}
+
+/// 检查幂等键是否已处理，防止重复提交
+pub fn check_idempotency(key: &str) -> bool {
+    let mut keys = PROCESSED_KEYS.lock().unwrap();
+    if keys.contains(key) {
+        return false; // Already processed
+    }
+    keys.insert(key.to_string());
+    // 限制缓存大小
+    if keys.len() > 10000 {
+        keys.clear();
+    }
+    true
 }
 
 pub trait SyncEngine: Send + Sync {

@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 devnote-core = { workspace = true }
@@ -24,6 +24,7 @@ devnote-canvas = { workspace = true }
 devnote-database = { workspace = true }
 devnote-object = { workspace = true }
 devnote-graph = { workspace = true }
+devnote-crdt = { workspace = true }
 devnote-flashcard = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
@@ -35,6 +36,8 @@ chrono = { workspace = true }
 base64 = "0.22"
 parking_lot = "0.12"
 lazy_static = "1"
+sentry = "0.34"
+sentry-anyhow = "0.34"
 
 [build-dependencies]
 cbindgen = "0.27"

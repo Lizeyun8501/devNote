@@ -34,6 +34,11 @@ import (
 func main() {
 	cfg := config.Load()
 
+	// 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
+	// 来源: https://github.com/AppFlowy-IO/AppFlowy
+	// 检查 SENTRY_DSN 环境变量 —— 未设置时优雅降级
+	middleware.InitSentry()
+
 	// Initialize structured logger
 	logger, err := observability.NewLogger(cfg.LogLevel, cfg.LogFormat)
 	if err != nil {
@@ -78,6 +83,7 @@ func main() {
 	r := gin.New()
 
 	// Global middleware
+	r.Use(middleware.SentryGin())
 	r.Use(middleware.Observability(middleware.ObservabilityConfig{
 		Logger:  logger,
 		Metrics: metrics,

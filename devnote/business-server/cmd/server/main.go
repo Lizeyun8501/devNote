@@ -26,6 +26,11 @@ import (
 func main() {
 	cfg := config.Load()
 
+	// 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
+	// 来源: https://github.com/AppFlowy-IO/AppFlowy
+	// 检查 SENTRY_DSN 环境变量 —— 未设置时优雅降级
+	middleware.InitSentry()
+
 	logger := newLogger(cfg.LogLevel)
 	defer logger.Sync()
 
@@ -71,6 +76,7 @@ func main() {
 	r := gin.New()
 
 	// Middleware
+	r.Use(middleware.SentryGin())
 	r.Use(middleware.Recovery(logger))
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))

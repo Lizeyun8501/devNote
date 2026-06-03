@@ -32,6 +32,9 @@ dependencies:
   http: ^1.2.2
   diff_match_patch: ^0.4.1
   get_it: ^8.0.0
+  # 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
+  # 来源: https://github.com/AppFlowy-IO/AppFlowy
+  sentry_flutter: ^8.0.0
 
 dev_dependencies:
   flutter_test:

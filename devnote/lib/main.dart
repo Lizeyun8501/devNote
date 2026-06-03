@@ -20,6 +20,7 @@ import 'package:devnote/core/theme/app_theme.dart';
 import 'package:devnote/core/router/app_router.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/sentry_config.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
@@ -50,6 +51,10 @@ void main() async {
 
   // Set memory limit
   getIt<MemoryManager>().setMemoryLimit(100 * 1024 * 1024);
+
+  // 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
+  // 来源: https://github.com/AppFlowy-IO/AppFlowy
+  await setupSentry();
 
   runApp(const DevNoteApp());
 }

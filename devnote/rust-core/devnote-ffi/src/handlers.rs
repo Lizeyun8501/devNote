@@ -13,6 +13,7 @@ use devnote_persistence::SqliteNoteRepository;
 use devnote_search::SearchEngine;
 use devnote_sync::{ClientSyncEngine, SyncEngine};
 use devnote_canvas::{CanvasEngine, LayoutType};
+use devnote_crdt::{merge_documents, CRDTDocument, Operation};
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -38,6 +39,7 @@ lazy_static! {
     static ref OBJECT_ENGINE: Mutex<Option<devnote_object::SqliteObjectEngine>> = Mutex::new(None);
     static ref GRAPH_ENGINE: Mutex<Option<devnote_graph::SqliteGraphEngine>> = Mutex::new(None);
     static ref FLASHCARD_ENGINE: Mutex<Option<devnote_flashcard::SqliteFlashcardEngine>> = Mutex::new(None);
+    static ref CRDT_DOCS: Mutex<HashMap<String, CRDTDocument>> = Mutex::new(HashMap::new());
 }
 
 pub fn register_handler(event: &str, handler: EventHandler) {
@@ -74,6 +76,7 @@ pub fn register_all_handlers() {
     register_object_handlers();
     register_graph_handlers();
     register_flashcard_handlers();
+    register_crdt_handlers();
     register_plugin_handlers();
     register_p2p_handlers();
 }
@@ -1220,6 +1223,31 @@ fn register_flashcard_handlers() {
         };
         match engine.get_due_cards(&deck_id, limit) {
             Ok(cards) => serialize_result(Ok(cards)),
+            Err(e) => DispatchResponse::error(FFIErrorCode::InternalError, &e.to_string()),
+        }
+    }));
+}
+
+// ── CRDT handlers ────────────────────────────────────────────────────────
+
+fn register_crdt_handlers() {
+    // FFI dispatch 路由 —— 借鉴 AppFlowy 的 Event-Dispatch 模式，将 Flutter 事件路由到 Rust 业务 handler
+    register_handler("CRDTEvent.Merge", Box::new(|payload| {
+        #[derive(Deserialize)]
+        struct Req {
+            doc_id: String,
+            device_id: String,
+            remote_ops: Vec<Operation>,
+        }
+        let req = match parse_payload::<Req>(payload) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        let mut docs = CRDT_DOCS.lock();
+        let doc = docs.entry(req.doc_id.clone())
+            .or_insert_with(|| CRDTDocument::new(req.doc_id, req.device_id));
+        match merge_documents(doc, req.remote_ops) {
+            Ok(applied) => serialize_result(Ok(applied)),
             Err(e) => DispatchResponse::error(FFIErrorCode::InternalError, &e.to_string()),
         }
     }));

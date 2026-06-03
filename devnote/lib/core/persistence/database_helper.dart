@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -93,16 +95,54 @@ class DatabaseHelper {
     await db.insert('schema_version', {'version': version});
   }
 
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    for (int version = oldVersion + 1; version <= newVersion; version++) {
-      switch (version) {
-        case 2:
-          // v2: 新增 blocks.language 列，用于存储代码块的语言标识
-          await db.execute('ALTER TABLE blocks ADD COLUMN language TEXT');
-          break;
-        default:
-          break;
+  // 迁移回滚保障 —— 借鉴 SQLite 官方迁移最佳实践
+  // 在执行迁移前备份数据库文件，迁移失败时自动恢复
+
+  Future<void> _backupBeforeMigration() async {
+    final dbPath = await getDatabasesPath();
+    final backupPath = '$dbPath/devnote_backup_${DateTime.now().millisecondsSinceEpoch}.db';
+    final originalPath = join(dbPath, _databaseName);
+    try {
+      final originalFile = File(originalPath);
+      if (await originalFile.exists()) {
+        await originalFile.copy(backupPath);
+        print('Migration backup created at $backupPath');
       }
+    } catch (e) {
+      print('Warning: Could not create migration backup: $e');
+    }
+  }
+
+  Future<void> _restoreFromBackup(String backupPath) async {
+    final dbPath = await getDatabasesPath();
+    final originalPath = join(dbPath, _databaseName);
+    try {
+      final backupFile = File(backupPath);
+      if (await backupFile.exists()) {
+        await backupFile.copy(originalPath);
+        print('Migration restored from backup: $backupPath');
+      }
+    } catch (e) {
+      print('Error: Could not restore from backup: $e');
+    }
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    await _backupBeforeMigration();
+    try {
+      for (int version = oldVersion + 1; version <= newVersion; version++) {
+        switch (version) {
+          case 2:
+            // v2: 新增 blocks.language 列，用于存储代码块的语言标识
+            await db.execute('ALTER TABLE blocks ADD COLUMN language TEXT');
+            break;
+          default:
+            break;
+        }
+      }
+    } catch (e) {
+      print('Migration error: $e — database may be in an inconsistent state. Please restore from backup.');
+      rethrow;
     }
   }
 }

@@ -1,3 +1,10 @@
+[package]
+name = "devnote"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
 [workspace]
 members = [
     "devnote-core",
@@ -71,3 +78,11 @@ opentelemetry-otlp = { version = "0.17", features = ["tonic", "metrics"] }
 tracing-opentelemetry = "0.25"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
+
+[dev-dependencies]
+devnote-ffi = { workspace = true }
+devnote-crdt = { workspace = true }
+devnote-persistence = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

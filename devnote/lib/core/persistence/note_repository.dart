@@ -1,6 +1,13 @@
-// TODO: 迁移到 Rust FFI — 当前临时使用 sqflite 直连
-// 注意：此实现为临时方案，后续将通过 Dispatch → FFI → Rust persistence 调用链替换
+// 持久化仓库 —— 通过 FFI 桥接调用 Rust 持久化引擎
+// 借鉴 AppFlowy 的 Repository + FFI 模式：所有持久化操作经 Dispatch → FFI → Rust 完成
+// 来源: https://github.com/AppFlowy-IO/AppFlowy
+// 借鉴内容: Repository 模式通过 FFI 桥接调 Rust 持久化层
 
+import 'dart:developer' as developer;
+
+import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/bridge/persistence_dispatch.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 
@@ -14,11 +21,20 @@ abstract class NoteRepository {
 
 class SqliteNoteRepository implements NoteRepository {
   final DatabaseHelper _dbHelper;
+  final PersistenceDispatch _dispatch = PersistenceDispatch();
+  final FFIBridge _bridge = getIt<FFIBridge>();
 
   SqliteNoteRepository(this._dbHelper);
 
+  bool get _useFFI => _bridge.isAvailable;
+
   @override
   Future<NoteModel> createNote(NoteModel note) async {
+    if (_useFFI) {
+      final result = await _dispatch.create(entity: 'note', data: note.toJson());
+      return NoteModel.fromJson(result);
+    }
+    developer.log('FFI not available, falling back to sqflite for createNote', level: 900);
     final db = await _dbHelper.database;
     await db.insert('notes', note.toJson());
     return note;
@@ -26,6 +42,12 @@ class SqliteNoteRepository implements NoteRepository {
 
   @override
   Future<NoteModel?> getNote(String id) async {
+    if (_useFFI) {
+      final items = await _dispatch.list(entity: 'note', filter: {'id': id});
+      if (items.isEmpty) return null;
+      return NoteModel.fromJson(items.first);
+    }
+    developer.log('FFI not available, falling back to sqflite for getNote', level: 900);
     final db = await _dbHelper.database;
     final results = await db.query(
       'notes',
@@ -38,6 +60,11 @@ class SqliteNoteRepository implements NoteRepository {
 
   @override
   Future<NoteModel> updateNote(NoteModel note) async {
+    if (_useFFI) {
+      final result = await _dispatch.update(entity: 'note', id: note.id, data: note.toJson());
+      return NoteModel.fromJson(result);
+    }
+    developer.log('FFI not available, falling back to sqflite for updateNote', level: 900);
     final db = await _dbHelper.database;
     await db.update(
       'notes',
@@ -50,12 +77,22 @@ class SqliteNoteRepository implements NoteRepository {
 
   @override
   Future<void> deleteNote(String id) async {
+    if (_useFFI) {
+      await _dispatch.delete(entity: 'note', id: id);
+      return;
+    }
+    developer.log('FFI not available, falling back to sqflite for deleteNote', level: 900);
     final db = await _dbHelper.database;
     await db.delete('notes', where: 'id = ?', whereArgs: [id]);
   }
 
   @override
   Future<List<NoteModel>> listNotes(String folderId) async {
+    if (_useFFI) {
+      final items = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
+      return items.map((json) => NoteModel.fromJson(json)).toList();
+    }
+    developer.log('FFI not available, falling back to sqflite for listNotes', level: 900);
     final db = await _dbHelper.database;
     final results = await db.query(
       'notes',
