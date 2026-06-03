@@ -1,9 +1,52 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
 use uuid::Uuid;
+
+/// Backend canvas renderer selection.
+///
+/// On desktop platforms the Qt backend provides a native QGraphicsView-based
+/// canvas with advanced editing features.  When Qt is not available the
+/// Flutter backend is used as a fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasBackend {
+    /// Render canvas using Flutter custom painters.
+    Flutter,
+    /// Render canvas using Qt QGraphicsScene/QGraphicsView (desktop only).
+    Qt,
+}
+
+impl Default for CanvasBackend {
+    fn default() -> Self {
+        CanvasBackend::Flutter
+    }
+}
+
+impl CanvasBackend {
+    /// Detect the best available backend for the current platform.
+    pub fn detect() -> Self {
+        #[cfg(feature = "qt-backend")]
+        {
+            if devnote_qt::QtBridge::new().is_ok() {
+                return CanvasBackend::Qt;
+            }
+        }
+        CanvasBackend::Flutter
+    }
+
+    /// Returns `true` when the Qt backend is available.
+    pub fn is_qt(&self) -> bool {
+        matches!(self, CanvasBackend::Qt)
+    }
+
+    /// Returns `true` when the Flutter backend is in use.
+    pub fn is_flutter(&self) -> bool {
+        matches!(self, CanvasBackend::Flutter)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum CanvasError {
@@ -113,6 +156,7 @@ impl Default for CanvasData {
     }
 }
 
+#[derive(Debug)]
 pub struct CanvasEngine {
     canvases: HashMap<String, CanvasData>,
 }
@@ -130,6 +174,7 @@ impl CanvasEngine {
         id
     }
 
+    #[instrument]
     pub fn add_node(&mut self, canvas_id: &str, node: CanvasNode) -> Result<(), CanvasError> {
         let canvas = self
             .canvases
@@ -238,6 +283,7 @@ impl CanvasEngine {
         Ok(id)
     }
 
+    #[instrument]
     pub fn auto_layout(
         &mut self,
         canvas_id: &str,

@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -59,6 +60,7 @@ pub trait BlockEditor: Send + Sync {
     fn get_children(&self, parent_id: &Uuid) -> anyhow::Result<Vec<&Block>>;
 }
 
+#[derive(Debug)]
 pub struct DefaultBlockEditor {
     blocks: Vec<Block>,
 }
@@ -89,6 +91,7 @@ impl Default for DefaultBlockEditor {
 }
 
 impl BlockEditor for DefaultBlockEditor {
+    #[instrument]
     fn create_block(&mut self, note_id: Uuid, block_type: BlockType, content: String, position: usize) -> anyhow::Result<Block> {
         for block in self.blocks.iter_mut().filter(|b| b.note_id == note_id && b.position >= position) {
             block.position += 1;
@@ -110,6 +113,7 @@ impl BlockEditor for DefaultBlockEditor {
         Ok(())
     }
 
+    #[instrument]
     fn delete_block(&mut self, id: &Uuid) -> anyhow::Result<()> {
         let block = self.blocks.iter().find(|b| &b.id == id)
             .ok_or_else(|| anyhow::anyhow!("Block not found"))?;
@@ -158,6 +162,7 @@ impl BlockEditor for DefaultBlockEditor {
         Ok(blocks)
     }
 
+    #[instrument]
     fn parse_markdown(&mut self, content: &str, note_id: Uuid) -> anyhow::Result<Vec<Block>> {
         let parsed = MarkdownParser::parse(content);
         let mut blocks = Vec::new();
@@ -704,6 +709,7 @@ impl TaskListParser {
 pub struct MarkdownParser;
 
 impl MarkdownParser {
+    #[instrument]
     pub(crate) fn parse(content: &str) -> Vec<ParsedBlock> {
         let mut blocks = Vec::new();
         let mut lines = content.lines().peekable();

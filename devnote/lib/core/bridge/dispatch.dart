@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/ffi_request.dart';
+import 'package:devnote/core/bridge/grpc_bridge.dart';
+import 'package:devnote/core/bridge/websocket_bridge.dart';
 
 enum NoteEvent {
   createNote('NoteEvent.CreateNote'),
@@ -54,6 +56,13 @@ enum SyncEvent {
   final String name;
 }
 
+/// Dispatch mode: local (in-process via FFI) or remote (via gRPC/WebSocket)
+enum DispatchMode {
+  local,
+  grpc,
+  websocket,
+}
+
 class Dispatch {
   Dispatch._();
 
@@ -61,8 +70,64 @@ class Dispatch {
   static Dispatch get instance => _instance;
 
   final FFIBridge _bridge = FFIBridge.instance;
+  final GrpcBridge _grpcBridge = GrpcBridge.instance;
+  final WebSocketBridge _wsBridge = WebSocketBridge.instance;
+
+  DispatchMode _mode = DispatchMode.local;
+
+  /// Set the dispatch mode
+  void setMode(DispatchMode mode) {
+    _mode = mode;
+  }
+
+  /// Get the current dispatch mode
+  DispatchMode get mode => _mode;
+
+  /// Initialize remote bridges (gRPC and WebSocket)
+  void initRemote() {
+    _grpcBridge.init();
+    _wsBridge.init();
+  }
+
+  /// Connect to a gRPC server
+  bool grpcConnect(String serverAddr) {
+    final response = _grpcBridge.connect(serverAddr);
+    return response.isOk;
+  }
+
+  /// Disconnect from the gRPC server
+  bool grpcDisconnect() {
+    final response = _grpcBridge.disconnect();
+    return response.isOk;
+  }
+
+  /// Connect to a WebSocket server
+  bool wsConnect(String url) {
+    final response = _wsBridge.connect(url);
+    return response.isOk;
+  }
+
+  /// Disconnect from the WebSocket server
+  bool wsDisconnect() {
+    final response = _wsBridge.disconnect();
+    return response.isOk;
+  }
 
   Future<FlowyResult<Uint8List, FlowyInternalError>> asyncRequest(
+    String event, {
+    Uint8List? payload,
+  }) async {
+    switch (_mode) {
+      case DispatchMode.grpc:
+        return _grpcRequest(event, payload: payload);
+      case DispatchMode.websocket:
+        return _wsRequest(event, payload: payload);
+      case DispatchMode.local:
+        return _localRequest(event, payload: payload);
+    }
+  }
+
+  Future<FlowyResult<Uint8List, FlowyInternalError>> _localRequest(
     String event, {
     Uint8List? payload,
   }) async {
@@ -72,6 +137,58 @@ class Dispatch {
         payload: payload,
       );
       final response = _bridge.invoke(request);
+
+      if (response.isOk) {
+        return Success(response.data ?? Uint8List(0));
+      } else {
+        return Failure(FlowyInternalError(
+          code: response.code,
+          message: response.message,
+        ));
+      }
+    } catch (e) {
+      return Failure(FlowyInternalError(
+        code: FFIStatusCode.internal.index,
+        message: e.toString(),
+      ));
+    }
+  }
+
+  Future<FlowyResult<Uint8List, FlowyInternalError>> _grpcRequest(
+    String event, {
+    Uint8List? payload,
+  }) async {
+    try {
+      final payloadStr = payload != null ? utf8.decode(payload) : null;
+      final response = _grpcBridge.dispatch(event, payload: payloadStr);
+
+      if (response.isOk) {
+        return Success(response.data ?? Uint8List(0));
+      } else {
+        return Failure(FlowyInternalError(
+          code: response.code,
+          message: response.message,
+        ));
+      }
+    } catch (e) {
+      return Failure(FlowyInternalError(
+        code: FFIStatusCode.internal.index,
+        message: e.toString(),
+      ));
+    }
+  }
+
+  Future<FlowyResult<Uint8List, FlowyInternalError>> _wsRequest(
+    String event, {
+    Uint8List? payload,
+  }) async {
+    try {
+      final message = jsonEncode({
+        'event': event,
+        'payload':
+            payload != null ? base64Encode(payload) : null,
+      });
+      final response = _wsBridge.send(message);
 
       if (response.isOk) {
         return Success(response.data ?? Uint8List(0));
@@ -102,6 +219,26 @@ class Dispatch {
       },
       failure: (error) => Failure(error),
     );
+  }
+
+  /// Send a WebSocket message directly (useful for real-time updates)
+  Future<FlowyResult<bool, FlowyInternalError>> wsSend(Map<String, dynamic> json) async {
+    try {
+      final response = _wsBridge.sendJson(json);
+      if (response.isOk) {
+        return const Success(true);
+      } else {
+        return Failure(FlowyInternalError(
+          code: response.code,
+          message: response.message,
+        ));
+      }
+    } catch (e) {
+      return Failure(FlowyInternalError(
+        code: FFIStatusCode.internal.index,
+        message: e.toString(),
+      ));
+    }
   }
 
   String ping() => _bridge.ping();

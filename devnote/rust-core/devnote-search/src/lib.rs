@@ -1,3 +1,4 @@
+use devnote_observe::{info, instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -83,6 +84,7 @@ END;
 CREATE INDEX IF NOT EXISTS idx_search_content_note_id ON notes_search_content(note_id);
 "#;
 
+#[derive(Debug)]
 pub struct SqliteSearchEngine {
     conn: Mutex<rusqlite::Connection>,
 }
@@ -221,6 +223,7 @@ impl SearchEngine for SqliteSearchEngine {
         Ok(())
     }
 
+    #[instrument]
     fn search(&self, query: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>> {
         let conn = self.conn.lock().unwrap();
         let fts_query = format!("{{title content}} : {}", query);
@@ -238,9 +241,18 @@ impl SearchEngine for SqliteSearchEngine {
             .query_map(params![fts_query, limit as i64, offset as i64], Self::row_to_search_result)?
             .collect::<Result<Vec<_>, _>>()?;
 
+        info!(
+            "search query='{}' results={} limit={} offset={}",
+            query,
+            results.len(),
+            limit,
+            offset
+        );
+
         Ok(results)
     }
 
+    #[instrument]
     fn search_with_filter(&self, query: &str, filter: &SearchFilter, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>> {
         let conn = self.conn.lock().unwrap();
         let fts_query = format!("{{title content}} : {}", query);
@@ -300,6 +312,14 @@ impl SearchEngine for SqliteSearchEngine {
         let results = stmt
             .query_map(params_refs.as_slice(), Self::row_to_search_result)?
             .collect::<Result<Vec<_>, _>>()?;
+
+        info!(
+            "search_with_filter query='{}' results={} limit={} offset={}",
+            query,
+            results.len(),
+            limit,
+            offset
+        );
 
         Ok(results)
     }

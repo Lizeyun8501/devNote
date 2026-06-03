@@ -1,8 +1,10 @@
+
 pub mod models;
 pub mod traits;
 
 pub use devnote_editor::{Block, BlockType, BlockEditor, DefaultBlockEditor, MarkdownParser};
 pub use devnote_crypto::{CryptoEngine, CryptoError};
 pub use devnote_search::{SearchEngine, SearchResult, SearchFilter, DateRange, Highlight, SqliteSearchEngine};
-pub use devnote_sync::{SyncEngine, SyncError, SyncInfo, SyncStatus, ClientSyncEngine, LocalState, RemoteChanges, MergeResult};
 pub use devnote_crdt::{CRDTDocument, Operation, OperationId, VectorClock, BlockCRDT, TextCRDT, ConflictInfo, ConflictType, CRDTError};
+// FIXME: devnote-sync has cyclic dependency on devnote-core
+// pub use devnote_sync::{SyncEngine, SyncError, SyncInfo, SyncStatus, ClientSyncEngine, LocalState, RemoteChanges, MergeResult};

@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
@@ -45,6 +46,7 @@ pub struct GitBranchInfo {
     pub is_current: bool,
 }
 
+#[derive(Debug)]
 pub struct GitManager {
     repo_path: PathBuf,
 }
@@ -54,6 +56,7 @@ impl GitManager {
         Self { repo_path }
     }
 
+    #[instrument]
     pub fn init_repo(&self) -> Result<(), WorkflowError> {
         let output = Command::new("git")
             .arg("init")
@@ -69,6 +72,7 @@ impl GitManager {
         Ok(())
     }
 
+    #[instrument]
     pub fn commit(&self, message: &str) -> Result<(), WorkflowError> {
         let add_output = Command::new("git")
             .args(["add", "-A"])

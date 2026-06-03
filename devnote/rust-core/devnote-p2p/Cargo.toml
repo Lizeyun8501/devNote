@@ -6,6 +6,8 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
 libp2p = { version = "0.54", features = ["tokio", "tcp", "noise", "yamux", "kad", "gossipsub", "identify", "ping", "dns", "macros", "ed25519"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

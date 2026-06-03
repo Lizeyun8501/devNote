@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use std::fs;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,7 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+#[derive(Debug)]
 pub struct MarkdownImporter;
 
 impl MarkdownImporter {
@@ -238,6 +240,7 @@ impl Default for MarkdownImporter {
 }
 
 impl FormatImporter for MarkdownImporter {
+    #[instrument]
     fn import(&self, source_path: &Path, _format: ImportFormat) -> Result<Vec<NoteData>> {
         if source_path.is_file() {
             let parent = source_path.parent().unwrap_or(source_path);
@@ -374,6 +377,7 @@ impl FormatImporter for ObsidianImporter {
     }
 }
 
+#[derive(Debug)]
 pub struct MarkdownExporter;
 
 impl MarkdownExporter {
@@ -410,6 +414,7 @@ impl Default for MarkdownExporter {
 }
 
 impl FormatExporter for MarkdownExporter {
+    #[instrument]
     fn export(&self, notes: &[NoteData], target_path: &Path, _format: ExportFormat) -> Result<()> {
         fs::create_dir_all(target_path)?;
         for note in notes {

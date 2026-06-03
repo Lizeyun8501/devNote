@@ -10,6 +10,8 @@ default = []
 wasm = ["wasmtime"]
 
 [dependencies]
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
 wasmtime = { version = "29", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

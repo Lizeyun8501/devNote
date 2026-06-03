@@ -1,3 +1,4 @@
+use devnote_observe::{debug};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -118,7 +119,13 @@ impl NoteCache {
     }
 
     pub fn get(&self, note_id: &str) -> Option<NoteContent> {
-        self.cache.get(&note_id.to_string())
+        let result = self.cache.get(&note_id.to_string());
+        if result.is_some() {
+            debug!("note_cache: hit note_id={}", note_id);
+        } else {
+            debug!("note_cache: miss note_id={}", note_id);
+        }
+        result
     }
 
     pub fn put(&self, note_id: &str, content: NoteContent) {

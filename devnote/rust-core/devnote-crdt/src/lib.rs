@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use chrono::Utc;
@@ -194,6 +195,7 @@ impl CRDTDocument {
         OperationId::with_sequence(self.device_id.clone(), self.sequence)
     }
 
+    #[instrument]
     pub fn insert_block(&mut self, block_id: String, position: usize, content: String) -> Operation {
         let id = self.next_operation_id();
         let op = Operation::Insert {
@@ -207,6 +209,7 @@ impl CRDTDocument {
         op
     }
 
+    #[instrument]
     pub fn delete_block(&mut self, block_id: String) -> Operation {
         let id = self.next_operation_id();
         let op = Operation::Delete {
@@ -218,6 +221,7 @@ impl CRDTDocument {
         op
     }
 
+    #[instrument]
     pub fn replace_block(&mut self, block_id: String, old_content: String, new_content: String) -> Operation {
         let id = self.next_operation_id();
         let op = Operation::Replace {
@@ -244,6 +248,7 @@ impl CRDTDocument {
         op
     }
 
+    #[instrument]
     pub fn merge(&mut self, remote_ops: Vec<Operation>) -> Result<Vec<Operation>, CRDTError> {
         let mut applied_ops = Vec::new();
         let local_ids: std::collections::HashSet<OperationId> = self
@@ -703,6 +708,7 @@ impl TextCRDT {
     }
 }
 
+#[instrument]
 pub fn merge_documents(local: &mut CRDTDocument, remote_ops: Vec<Operation>) -> Result<Vec<Operation>, CRDTError> {
     local.merge(remote_ops)
 }
@@ -724,6 +730,7 @@ pub enum ConflictType {
     DeleteModifyConflict,
 }
 
+#[instrument]
 pub fn detect_conflicts(local: &CRDTDocument, remote_ops: &[Operation]) -> Vec<ConflictInfo> {
     let mut conflicts = Vec::new();
     let local_op_ids: std::collections::HashSet<String> = local

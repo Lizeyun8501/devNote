@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use devnote_observe::{info, instrument, warn};
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 use devnote_crdt::{
@@ -75,6 +76,7 @@ pub trait SyncEngine: Send + Sync {
     fn pull_changes(&mut self) -> Result<SyncInfo, SyncError>;
 }
 
+#[derive(Debug)]
 pub struct ClientSyncEngine {
     pub device_id: String,
     pub local_state: LocalState,
@@ -96,6 +98,7 @@ impl ClientSyncEngine {
         }
     }
 
+    #[instrument(skip(self, remote_changes))]
     pub fn merge_with_crdt(
         &mut self,
         remote_changes: RemoteChanges,
@@ -172,7 +175,9 @@ impl ClientSyncEngine {
 }
 
 impl SyncEngine for ClientSyncEngine {
+    #[instrument]
     fn sync(&mut self) -> Result<SyncInfo, SyncError> {
+        info!("sync: starting sync with {} pending changes", self.local_state.pending_operations.len());
         self.status = SyncStatus::Syncing;
         Ok(SyncInfo {
             status: self.status.clone(),
@@ -200,7 +205,9 @@ impl SyncEngine for ClientSyncEngine {
         Ok(())
     }
 
+    #[instrument]
     fn push_changes(&mut self) -> Result<SyncInfo, SyncError> {
+        info!("push_changes: {} pending operations", self.local_state.pending_operations.len());
         self.status = SyncStatus::Syncing;
         Ok(SyncInfo {
             status: self.status.clone(),
@@ -211,7 +218,9 @@ impl SyncEngine for ClientSyncEngine {
         })
     }
 
+    #[instrument]
     fn pull_changes(&mut self) -> Result<SyncInfo, SyncError> {
+        info!("pull_changes: local_version={}", self.local_state.document.sequence);
         self.status = SyncStatus::Syncing;
         Ok(SyncInfo {
             status: self.status.clone(),

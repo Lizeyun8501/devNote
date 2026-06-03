@@ -8,12 +8,15 @@ import (
 )
 
 type User struct {
-	ID        string         `gorm:"primaryKey" json:"id"`
-	Username  string         `gorm:"uniqueIndex;size:64" json:"username"`
-	Password  string         `gorm:"size:256" json:"-"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID          string         `gorm:"primaryKey" json:"id"`
+	Username    string         `gorm:"uniqueIndex;size:64" json:"username"`
+	Password    string         `gorm:"size:256" json:"-"`
+	SRPSalt     []byte         `gorm:"type:blob" json:"-"`
+	SRPVerifier []byte         `gorm:"type:blob" json:"-"`
+	SRPEnabled  bool           `gorm:"default:false" json:"srp_enabled"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type Claims struct {

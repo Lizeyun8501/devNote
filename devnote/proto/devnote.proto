@@ -1,0 +1,116 @@
+syntax = "proto3";
+package devnote;
+
+// Core dispatcher service
+service DevNoteService {
+  rpc Dispatch(DispatchRequest) returns (DispatchResponse);
+  rpc StreamEvents(stream ClientEvent) returns (stream ServerEvent);
+}
+
+message DispatchRequest {
+  string method = 1;
+  bytes payload = 2;
+  string request_id = 3;
+}
+
+message DispatchResponse {
+  bool success = 1;
+  bytes payload = 2;
+  string error = 3;
+  string request_id = 4;
+}
+
+// Sync service
+service SyncService {
+  rpc PushChanges(PushRequest) returns (PushResponse);
+  rpc PullChanges(PullRequest) returns (PullResponse);
+  rpc WatchChanges(WatchRequest) returns (stream ChangeEvent);
+}
+
+message PushRequest {
+  string device_id = 1;
+  bytes encrypted_data = 2;
+  int64 base_version = 3;
+}
+
+message PushResponse {
+  bool success = 1;
+  int64 new_version = 2;
+  string error = 3;
+}
+
+message PullRequest {
+  string device_id = 1;
+  int64 since_version = 2;
+}
+
+message PullResponse {
+  repeated bytes changes = 1;
+  int64 latest_version = 2;
+}
+
+message WatchRequest {
+  string device_id = 1;
+}
+
+message ChangeEvent {
+  bytes encrypted_data = 1;
+  int64 version = 2;
+  string source_device = 3;
+}
+
+// Client event for streaming
+message ClientEvent {
+  oneof event {
+    NoteEditEvent note_edit = 1;
+    CursorMoveEvent cursor_move = 2;
+    PresenceEvent presence = 3;
+  }
+}
+
+message NoteEditEvent {
+  string note_id = 1;
+  bytes operations = 2;
+}
+
+message CursorMoveEvent {
+  string note_id = 1;
+  int32 position = 2;
+}
+
+message PresenceEvent {
+  string user_id = 1;
+  bool online = 2;
+}
+
+// Server event for streaming
+message ServerEvent {
+  oneof event {
+    RemoteEditEvent remote_edit = 1;
+    RemoteCursorEvent remote_cursor = 2;
+    PresenceUpdateEvent presence_update = 3;
+    SyncNotification sync_notify = 4;
+  }
+}
+
+message RemoteEditEvent {
+  string note_id = 1;
+  bytes operations = 2;
+  string source_device = 3;
+}
+
+message RemoteCursorEvent {
+  string note_id = 1;
+  string user_id = 2;
+  int32 position = 3;
+}
+
+message PresenceUpdateEvent {
+  string user_id = 1;
+  bool online = 2;
+}
+
+message SyncNotification {
+  string message = 1;
+  string level = 2; // info, warning, error
+}

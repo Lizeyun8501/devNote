@@ -16,6 +16,10 @@ members = [
     "devnote-graph",
     "devnote-flashcard",
     "devnote-perf",
+    "devnote-grpc",
+    "devnote-websocket",
+    "devnote-qt",
+    "devnote-ipfs",
 ]
 resolver = "2"
 
@@ -26,6 +30,7 @@ authors = ["DevNote Team"]
 license = "MIT"
 
 [workspace.dependencies]
+devnote-observe = { path = "devnote-observe" }
 devnote-core = { path = "devnote-core" }
 devnote-ffi = { path = "devnote-ffi" }
 devnote-persistence = { path = "devnote-persistence" }
@@ -43,9 +48,22 @@ devnote-workflow = { path = "devnote-workflow" }
 devnote-graph = { path = "devnote-graph" }
 devnote-flashcard = { path = "devnote-flashcard" }
 devnote-perf = { path = "devnote-perf" }
+devnote-qt = { path = "devnote-qt" }
+devnote-ipfs = { path = "devnote-ipfs" }
+devnote-grpc = { path = "devnote-grpc" }
+devnote-websocket = { path = "devnote-websocket" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"
+opentelemetry = "0.24"
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.17", features = ["tonic", "metrics"] }
+tracing-opentelemetry = "0.25"
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"

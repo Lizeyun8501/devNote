@@ -24,4 +24,16 @@ char *devnote_ping(void);
 
 char *devnote_dispatch(const char *request);
 
+struct FFIResponse *devnote_grpc_connect(const char *server_addr);
+
+struct FFIResponse *devnote_grpc_disconnect(void);
+
+struct FFIResponse *devnote_grpc_dispatch(const char *method, const char *payload);
+
+struct FFIResponse *devnote_ws_connect(const char *url);
+
+struct FFIResponse *devnote_ws_disconnect(void);
+
+struct FFIResponse *devnote_ws_send(const char *message);
+
 #endif  /* DEVNOTE_FFI_H */

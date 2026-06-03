@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 devnote-core = { workspace = true }
 devnote-crypto = { workspace = true }
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,3 +19,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 sha2 = "0.10"
 base64 = "0.22"
+devnote-ipfs = { path = "../devnote-ipfs", optional = true }
+
+[features]
+ipfs = ["devnote-ipfs"]

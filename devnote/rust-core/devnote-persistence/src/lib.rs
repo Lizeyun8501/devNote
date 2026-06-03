@@ -1,4 +1,5 @@
 use devnote_core::models::{Attachment, Folder, Note, Tag};
+use devnote_observe::{instrument, warn};
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoEngine, DefaultCryptoEngine, CryptoConfig};
 use std::sync::Mutex;
@@ -80,6 +81,19 @@ CREATE TABLE IF NOT EXISTS blocks (
     FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS ipfs_metadata (
+    id TEXT PRIMARY KEY,
+    note_id TEXT NOT NULL,
+    attachment_id TEXT,
+    cid TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+    FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
@@ -87,6 +101,12 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 pub struct SqliteNoteRepository {
     conn: Mutex<rusqlite::Connection>,
+}
+
+impl std::fmt::Debug for SqliteNoteRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteNoteRepository").finish()
+    }
 }
 
 impl SqliteNoteRepository {
@@ -343,6 +363,7 @@ impl SqliteNoteRepository {
         Ok(())
     }
 
+    #[instrument]
     pub fn create_note(&self, title: &str, content: &str, folder_id: &Uuid) -> Result<Note> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4();
@@ -373,6 +394,7 @@ impl SqliteNoteRepository {
         self.fetch_note_by_id(id)
     }
 
+    #[instrument]
     pub fn update_note(&self, id: &Uuid, title: &str, content: &str) -> Result<Note> {
         let conn = self.conn.lock().unwrap();
         let id_str = id.to_string();
@@ -389,6 +411,7 @@ impl SqliteNoteRepository {
             .ok_or_else(|| PersistenceError::NotFound(id_str).into())
     }
 
+    #[instrument]
     pub fn delete_note(&self, id: &Uuid) -> Result<()> {
         self.remove_note_by_id(id)
     }
@@ -397,6 +420,7 @@ impl SqliteNoteRepository {
         self.fetch_notes_by_folder(Some(folder_id))
     }
 
+    #[instrument]
     pub fn create_folder(&self, name: &str, parent_id: Option<&Uuid>) -> Result<Folder> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4();
@@ -424,6 +448,7 @@ impl SqliteNoteRepository {
         self.fetch_folders_by_parent(parent_id)
     }
 
+    #[instrument]
     pub fn create_tag(&self, name: &str) -> Result<Tag> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4();
@@ -967,5 +992,188 @@ impl EncryptedFileStorage {
         let mut hasher = Sha256::new();
         hasher.update(data);
         hasher.finalize().to_vec()
+    }
+}
+
+// ============================================================================
+// IPFS Block Storage (feature-gated)
+// ============================================================================
+
+#[cfg(feature = "ipfs")]
+pub mod ipfs {
+    use devnote_ipfs::{IpfsClient, IpfsConfig, IpfsError};
+    use rusqlite::params;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+    use anyhow::Result;
+
+    /// Tracks the association between notes/attachments and IPFS CIDs.
+    #[derive(Debug, Clone)]
+    pub struct IpfsMetadata {
+        pub id: Uuid,
+        pub note_id: Uuid,
+        pub attachment_id: Option<Uuid>,
+        pub cid: String,
+        pub content_type: String,
+        pub size_bytes: u64,
+        pub pinned: bool,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    /// IPFS-backed block storage that stores attachment data on IPFS
+    /// and tracks CID-to-note mappings in the local SQLite database.
+    pub struct IpfsBlockStorage {
+        client: IpfsClient,
+        conn: Mutex<rusqlite::Connection>,
+    }
+
+    impl IpfsBlockStorage {
+        /// Create a new IpfsBlockStorage with the given IPFS config and a shared
+        /// SQLite connection (typically from the existing SqliteNoteRepository).
+        pub fn new(config: IpfsConfig, conn: rusqlite::Connection) -> Result<Self, IpfsError> {
+            let client = IpfsClient::new(config)?;
+            Ok(Self {
+                client,
+                conn: Mutex::new(conn),
+            })
+        }
+
+        /// Check if the configured IPFS node is reachable.
+        pub async fn ping(&self) -> Result<bool, IpfsError> {
+            self.client.ping().await
+        }
+
+        /// Check if IPFS is available (sync check - just verifies client exists).
+        pub fn is_available(&self) -> bool {
+            true
+        }
+
+        /// Store attachment data on IPFS and track the CID mapping.
+        /// Returns the CID of the stored data.
+        pub async fn store_attachment_ipfs(
+            &self,
+            note_id: &Uuid,
+            attachment_id: Option<&Uuid>,
+            data: &[u8],
+            content_type: &str,
+        ) -> Result<String> {
+            let cid = self.client.add(data).await
+                .map_err(|e| anyhow::anyhow!("IPFS store failed: {}", e))?;
+
+            let conn = self.conn.lock().unwrap();
+            let id = Uuid::new_v4();
+            let id_str = id.to_string();
+            let note_id_str = note_id.to_string();
+            let attachment_id_str = attachment_id.map(|a| a.to_string());
+            let now = chrono::Utc::now();
+            let now_str = now.to_rfc3339();
+
+            conn.execute(
+                "INSERT INTO ipfs_metadata (id, note_id, attachment_id, cid, content_type, size_bytes, pinned, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id_str, note_id_str, attachment_id_str, cid, content_type, data.len() as i64, true, now_str],
+            )?;
+
+            Ok(cid)
+        }
+
+        /// Retrieve attachment data from IPFS by CID.
+        pub async fn retrieve_attachment_ipfs(&self, cid: &str) -> Result<Vec<u8>> {
+            let bytes = self.client.get(cid).await
+                .map_err(|e| anyhow::anyhow!("IPFS retrieve failed: {}", e))?;
+            Ok(bytes.to_vec())
+        }
+
+        /// Delete attachment data from IPFS and remove the CID mapping.
+        pub async fn delete_attachment_ipfs(&self, cid: &str) -> Result<()> {
+            self.client.remove(cid).await
+                .map_err(|e| anyhow::anyhow!("IPFS delete failed: {}", e))?;
+
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "DELETE FROM ipfs_metadata WHERE cid = ?1",
+                params![cid],
+            )?;
+
+            Ok(())
+        }
+
+        /// List all IPFS metadata entries for a given note.
+        pub fn list_ipfs_metadata(&self, note_id: &Uuid) -> Result<Vec<IpfsMetadata>> {
+            let conn = self.conn.lock().unwrap();
+            let note_id_str = note_id.to_string();
+            let mut stmt = conn.prepare(
+                "SELECT id, note_id, attachment_id, cid, content_type, size_bytes, pinned, created_at
+                 FROM ipfs_metadata WHERE note_id = ?1 ORDER BY created_at",
+            )?;
+
+            let rows = stmt.query_map(params![note_id_str], |row| {
+                let id_str: String = row.get(0)?;
+                let note_id_str: String = row.get(1)?;
+                let attachment_id_str: Option<String> = row.get(2)?;
+                let cid: String = row.get(3)?;
+                let content_type: String = row.get(4)?;
+                let size_bytes: i64 = row.get(5)?;
+                let pinned: bool = row.get(6)?;
+                let created_at_str: String = row.get(7)?;
+
+                Ok(IpfsMetadata {
+                    id: Uuid::parse_str(&id_str)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    note_id: Uuid::parse_str(&note_id_str)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    attachment_id: attachment_id_str
+                        .map(|a| Uuid::parse_str(&a))
+                        .transpose()
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                    cid,
+                    content_type,
+                    size_bytes: size_bytes as u64,
+                    pinned,
+                    created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                        .to_utc(),
+                })
+            })?;
+
+            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        }
+
+        /// Pin a CID to prevent garbage collection.
+        pub async fn pin_cid(&self, cid: &str) -> Result<()> {
+            self.client.pin(cid).await
+                .map_err(|e| anyhow::anyhow!("IPFS pin failed: {}", e))?;
+
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE ipfs_metadata SET pinned = 1 WHERE cid = ?1",
+                params![cid],
+            )?;
+
+            Ok(())
+        }
+
+        /// Unpin a CID (allows garbage collection).
+        pub async fn unpin_cid(&self, cid: &str) -> Result<()> {
+            self.client.unpin(cid).await
+                .map_err(|e| anyhow::anyhow!("IPFS unpin failed: {}", e))?;
+
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE ipfs_metadata SET pinned = 0 WHERE cid = ?1",
+                params![cid],
+            )?;
+
+            Ok(())
+        }
+    }
+}
+
+/// Stub indicating IPFS is not compiled in.
+#[cfg(not(feature = "ipfs"))]
+pub mod ipfs {
+    /// Returns false when the `ipfs` feature is not enabled.
+    pub fn is_ipfs_available() -> bool {
+        false
     }
 }

@@ -1,3 +1,4 @@
+use devnote_observe::{info, instrument, warn};
 use thiserror::Error;
 use argon2::{Argon2, Algorithm, Version, Params};
 use chacha20poly1305::{XChaCha20Poly1305, Key, XNonce, KeyInit};
@@ -155,12 +156,16 @@ impl Default for DefaultCryptoEngine {
 }
 
 impl CryptoEngine for DefaultCryptoEngine {
+    #[instrument(skip(self, plaintext, key))]
     fn encrypt(&self, plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let encrypted_data = self.encrypt_structured(plaintext, key)?;
-        Ok(encrypted_data.to_bytes())
+        info!("encrypt: plaintext_len={}", plaintext.len());
+        let result = self.encrypt_structured(plaintext, key)?;
+        Ok(result.to_bytes())
     }
 
+    #[instrument(skip(self, ciphertext, key))]
     fn decrypt(&self, ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        info!("decrypt: ciphertext_len={}", ciphertext.len());
         let encrypted_data = EncryptedData::from_bytes(ciphertext)?;
         self.decrypt_structured(&encrypted_data, key)
     }

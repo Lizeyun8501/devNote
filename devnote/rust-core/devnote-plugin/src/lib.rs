@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -95,6 +96,7 @@ impl PluginSandbox {
         })
     }
 
+    #[instrument]
     pub fn load_plugin(
         &mut self,
         wasm_bytes: &[u8],
@@ -123,6 +125,7 @@ impl PluginSandbox {
         Ok(())
     }
 
+    #[instrument]
     pub fn unload_plugin(&mut self, id: &str) -> Result<(), PluginError> {
         if !self.entries.contains_key(id) {
             return Err(PluginError::NotFound(id.to_string()));
@@ -132,6 +135,7 @@ impl PluginSandbox {
         Ok(())
     }
 
+    #[instrument]
     pub fn execute_plugin(
         &mut self,
         id: &str,

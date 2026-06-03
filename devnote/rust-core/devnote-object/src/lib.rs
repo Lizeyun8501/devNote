@@ -1,3 +1,4 @@
+use devnote_observe::{debug, error, info, instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -288,6 +289,7 @@ impl SqliteObjectEngine {
 }
 
 impl ObjectEngine for SqliteObjectEngine {
+    #[instrument(skip(self, properties))]
     fn create_object_type(&self, name: &str, icon: &str, properties: Vec<ObjectProperty>) -> Result<ObjectType, ObjectError> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4();
@@ -363,6 +365,7 @@ impl ObjectEngine for SqliteObjectEngine {
         Ok(types)
     }
 
+    #[instrument(skip(self, properties))]
     fn create_object(&self, type_id: &Uuid, properties: serde_json::Value) -> Result<Object, ObjectError> {
         let conn = self.conn.lock().unwrap();
         let exists: bool = conn.query_row(

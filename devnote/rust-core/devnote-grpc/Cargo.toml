@@ -1,0 +1,22 @@
+[package]
+name = "devnote-grpc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
+tonic = { version = "0.12", features = ["tls", "tls-roots", "transport"] }
+prost = "0.13"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+async-stream = "0.3"
+async-trait = "0.1"
+futures-executor = "0.3"
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+tonic-build = "0.12"

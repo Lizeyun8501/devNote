@@ -1,5 +1,6 @@
 pub mod formula;
 
+use devnote_observe::{debug, error, info, instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -349,6 +350,7 @@ impl SqliteDatabaseEngine {
 }
 
 impl DatabaseEngine for SqliteDatabaseEngine {
+    #[instrument]
     fn create_database(&self, name: &str) -> Result<Database, DatabaseError> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4();
@@ -605,6 +607,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
         })
     }
 
+    #[instrument]
     fn add_view(&self, db_id: &Uuid, name: &str, view_type: ViewType) -> Result<DatabaseView, DatabaseError> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4();

@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc, Duration};
@@ -60,6 +61,7 @@ pub struct ReviewStats {
     pub average_quality: f64,
 }
 
+#[instrument]
 pub fn calculate_next_review(quality: u8, ease_factor: f64, interval: i64, repetitions: i32) -> Sm2Result {
     let quality = quality.min(5);
     let new_ease_factor = if quality < 3 {

@@ -1,3 +1,4 @@
+use devnote_observe::{instrument};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -99,7 +100,18 @@ pub struct P2PNode {
     data_callback: Option<Box<dyn Fn(String, Vec<u8>) + Send + Sync>>,
 }
 
+impl std::fmt::Debug for P2PNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("P2PNode")
+            .field("local_peer_id", &self.local_peer_id)
+            .field("peers", &self.peers)
+            .field("running", &self.running)
+            .finish()
+    }
+}
+
 impl P2PNode {
+    #[instrument]
     pub async fn start(config: P2PConfig) -> Result<Self, P2PError> {
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
@@ -184,6 +196,7 @@ impl P2PNode {
         Ok(())
     }
 
+    #[instrument]
     pub async fn discover_peers(&mut self) -> Result<Vec<PeerInfo>, P2PError> {
         if !self.running {
             return Err(P2PError::NotRunning);
@@ -192,6 +205,7 @@ impl P2PNode {
         Ok(self.peers.values().cloned().collect())
     }
 
+    #[instrument]
     pub async fn connect_peer(&mut self, peer_id: &str) -> Result<(), P2PError> {
         if !self.running {
             return Err(P2PError::NotRunning);
@@ -203,6 +217,7 @@ impl P2PNode {
         Ok(())
     }
 
+    #[instrument(skip(self, data))]
     pub async fn send_data(&mut self, peer_id: &str, data: Vec<u8>) -> Result<(), P2PError> {
         if !self.running {
             return Err(P2PError::NotRunning);

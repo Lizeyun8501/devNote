@@ -1,0 +1,195 @@
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/devnote/business-server/internal/config"
+	"github.com/devnote/business-server/internal/handler"
+	"github.com/devnote/business-server/internal/middleware"
+	"github.com/devnote/business-server/internal/service"
+	"github.com/devnote/business-server/internal/storage"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+)
+
+func main() {
+	cfg := config.Load()
+
+	logger := newLogger(cfg.LogLevel)
+	defer logger.Sync()
+
+	logger.Info("starting business-server",
+		zap.String("port", cfg.Port),
+		zap.String("db_path", cfg.DBPath),
+	)
+
+	// Init SQLite store
+	store, err := storage.NewSQLiteStore(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("failed to init sqlite: %v", err)
+	}
+	defer store.Close()
+
+	// Init services
+	metadataSvc := service.NewMetadataService(store.DB)
+	tagSvc := service.NewTagService(store.DB)
+	folderSvc := service.NewFolderService(store.DB)
+
+	validationCfg := service.ValidationConfig{
+		MaxTagDepth:    cfg.MaxTagDepth,
+		MaxFolderDepth: cfg.MaxFolderDepth,
+		MaxNoteSize:    cfg.MaxNoteSize,
+	}
+	validationSvc := service.NewValidationService(store.DB, validationCfg)
+
+	knowledgeCfg := service.KnowledgeConfig{
+		PageRankDamping: cfg.PageRankDamping,
+		PageRankIters:   cfg.PageRankIters,
+	}
+	knowledgeSvc := service.NewKnowledgeService(store.DB, knowledgeCfg)
+
+	// Init handlers
+	metadataHandler := handler.NewMetadataHandler(metadataSvc, logger)
+	validationHandler := handler.NewValidationHandler(validationSvc, logger)
+	tagHandler := handler.NewTagHandler(tagSvc, logger)
+	folderHandler := handler.NewFolderHandler(folderSvc, logger)
+	knowledgeHandler := handler.NewKnowledgeHandler(knowledgeSvc, logger)
+	healthHandler := handler.NewHealthHandler(logger)
+
+	// Gin engine
+	r := gin.New()
+
+	// Middleware
+	r.Use(middleware.Recovery(logger))
+	r.Use(middleware.Logger(logger))
+	r.Use(cors.New(cors.Config{
+		AllowAllOrigins:  true,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
+		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
+		AllowCredentials: true,
+		MaxAge:           86400,
+	}))
+
+	// Health check
+	r.GET("/api/v1/health", healthHandler.Check)
+
+	// API v1
+	api := r.Group("/api/v1")
+	api.Use(middleware.JWTAuth(cfg.JWTSecret))
+
+	// Metadata routes
+	{
+		meta := api.Group("/metadata")
+		meta.POST("", metadataHandler.Create)
+		meta.GET("", metadataHandler.List)
+		meta.GET("/filter", metadataHandler.Filter)
+		meta.GET("/:id", metadataHandler.Get)
+		meta.PUT("/:id", metadataHandler.Update)
+		meta.DELETE("/:id", metadataHandler.Delete)
+		meta.POST("/batch", metadataHandler.BatchCreate)
+		meta.POST("/batch-delete", metadataHandler.BatchDelete)
+	}
+
+	// Validation routes
+	{
+		val := api.Group("/validate")
+		val.GET("/note/:id", validationHandler.ValidateNote)
+		val.GET("/folder/:id", validationHandler.ValidateFolder)
+		val.GET("/tag/:id", validationHandler.ValidateTag)
+		val.GET("/knowledge/:id", validationHandler.ValidateKnowledgeRelation)
+		// Rule CRUD
+		val.POST("/rules", validationHandler.CreateRule)
+		val.GET("/rules", validationHandler.ListRules)
+		val.PUT("/rules/:id", validationHandler.UpdateRule)
+		val.DELETE("/rules/:id", validationHandler.DeleteRule)
+		// Business rule CRUD
+		val.POST("/business-rules", validationHandler.CreateBusinessRule)
+		val.GET("/business-rules", validationHandler.ListBusinessRules)
+		val.PUT("/business-rules/:id", validationHandler.UpdateBusinessRule)
+		val.DELETE("/business-rules/:id", validationHandler.DeleteBusinessRule)
+	}
+
+	// Tag routes
+	{
+		tags := api.Group("/tags")
+		tags.POST("", tagHandler.Create)
+		tags.GET("", tagHandler.List)
+		tags.GET("/top", tagHandler.GetTopTags)
+		tags.GET("/by-note/:noteId", tagHandler.GetTagsByNote)
+		tags.GET("/:id", tagHandler.Get)
+		tags.PUT("/:id", tagHandler.Update)
+		tags.DELETE("/:id", tagHandler.Delete)
+		tags.GET("/:id/children", tagHandler.GetChildren)
+		tags.GET("/:id/hierarchy", tagHandler.GetHierarchy)
+		tags.GET("/:id/stats", tagHandler.GetStats)
+		tags.GET("/:id/notes", tagHandler.GetNotesByTag)
+		tags.POST("/:id/notes/:noteId", tagHandler.LinkTag)
+		tags.DELETE("/:id/notes/:noteId", tagHandler.UnlinkTag)
+		tags.POST("/merge", tagHandler.MergeTags)
+		tags.POST("/split", tagHandler.SplitTag)
+	}
+
+	// Folder routes
+	{
+		folders := api.Group("/folders")
+		folders.POST("", folderHandler.Create)
+		folders.GET("", folderHandler.List)
+		folders.GET("/tree", folderHandler.GetTree)
+		folders.GET("/:id", folderHandler.Get)
+		folders.PUT("/:id", folderHandler.Update)
+		folders.DELETE("/:id", folderHandler.Delete)
+		folders.GET("/:id/path", folderHandler.ResolvePath)
+		folders.GET("/:id/notes", folderHandler.GetNotesByFolder)
+		folders.POST("/:id/move", folderHandler.MoveFolder)
+		folders.POST("/:id/copy", folderHandler.CopyFolder)
+	}
+
+	// Knowledge routes
+	{
+		know := api.Group("/knowledge")
+		know.POST("/relations", knowledgeHandler.CreateRelation)
+		know.DELETE("/relations/:id", knowledgeHandler.DeleteRelation)
+		know.GET("/notes/:noteId/relations", knowledgeHandler.GetRelations)
+		know.GET("/graph/edges", knowledgeHandler.ComputeEdges)
+		know.GET("/graph/metrics", knowledgeHandler.ComputeMetrics)
+		know.GET("/graph/orphans", knowledgeHandler.FindOrphans)
+		know.GET("/graph/coverage", knowledgeHandler.ComputeCoverage)
+		know.GET("/suggest/:noteId", knowledgeHandler.SuggestRelated)
+		know.GET("/path", knowledgeHandler.FindShortestPath)
+	}
+
+	addr := fmt.Sprintf(":%s", cfg.Port)
+	logger.Info("server listening", zap.String("addr", addr))
+	if err := r.Run(addr); err != nil {
+		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+func newLogger(level string) *zap.Logger {
+	var lvl zapcore.Level
+	switch level {
+	case "debug":
+		lvl = zapcore.DebugLevel
+	case "warn":
+		lvl = zapcore.WarnLevel
+	case "error":
+		lvl = zapcore.ErrorLevel
+	default:
+		lvl = zapcore.InfoLevel
+	}
+
+	cfg := zap.NewProductionConfig()
+	cfg.Level = zap.NewAtomicLevelAt(lvl)
+	cfg.EncoderConfig.TimeKey = "timestamp"
+	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	logger, err := cfg.Build()
+	if err != nil {
+		log.Fatalf("failed to build logger: %v", err)
+	}
+	return logger
+}

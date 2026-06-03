@@ -1,3 +1,4 @@
+use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -136,6 +137,12 @@ pub struct SqliteGraphEngine {
     conn: Mutex<rusqlite::Connection>,
 }
 
+impl std::fmt::Debug for SqliteGraphEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteGraphEngine").finish()
+    }
+}
+
 impl SqliteGraphEngine {
     pub fn init(db_path: &str) -> Result<Self, GraphError> {
         let conn = rusqlite::Connection::open(db_path)?;
@@ -229,6 +236,7 @@ impl SqliteGraphEngine {
 }
 
 impl GraphEngine for SqliteGraphEngine {
+    #[instrument(skip(self, notes, folder_relations, tag_relations, reference_relations))]
     fn build_graph(
         &self,
         notes: &[(Uuid, String, Vec<String>, DateTime<Utc>, DateTime<Utc>)],
@@ -479,6 +487,7 @@ impl GraphEngine for SqliteGraphEngine {
         Ok(GraphData { nodes: filtered_nodes, edges: filtered_edges })
     }
 
+    #[instrument]
     fn calculate_centrality(&self) -> Result<Vec<CentralityResult>, GraphError> {
         let all_nodes = self.load_all_nodes()?;
         let all_edges = self.load_all_edges()?;

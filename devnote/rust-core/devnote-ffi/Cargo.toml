@@ -10,9 +10,15 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 devnote-core = { workspace = true }
+devnote-grpc = { workspace = true }
+devnote-websocket = { workspace = true }
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+uuid = { workspace = true }
 
 [build-dependencies]
 cbindgen = "0.27"
