@@ -661,7 +661,283 @@ store.add_fuel(1_000_000)?;                     // 100 万 fuel 单位
 
 ---
 
-## 十五、按优先级排序的修复建议（三轮合并版）
+## 十六、Round 4 独立复审新发现
+
+以下发现来自第四轮独立审查（3 个 agent 并行深度检视），与 Round 1/2/3 **不重复**：
+
+### 16.1 多用户权限模型（ACL/Permission）完全缺失 [P1]
+
+**位置**: `rust-core/devnote-core/src/lib.rs` 及全项目搜索
+
+**问题**: 全项目无任何用户/组/权限模型。无 workspace 隔离，无笔记共享机制，无角色定义（owner/editor/viewer）。任何用户理论上可以访问所有笔记。
+
+**对照**:
+- Notion 提供 workspace + page-level sharing + permission groups
+- AppFlowy 有 `UserWorkspace` 和 `Collaborator` 模型
+- 思源笔记有 `user` 表和资源权限检查
+
+**建议**: 引入基于角色的访问控制（RBAC）模型：
+```rust
+pub enum Permission { Read, Write, Admin }
+pub struct ResourceACL {
+    pub resource_id: String,
+    pub user_id: String,
+    pub permission: Permission,
+}
+```
+
+### 16.2 事件溯源 / Audit Log 完全缺失 [P2]
+
+**位置**: 全项目搜索 `audit`, `audit_log`, `event_store`, `operation_log` 无匹配
+
+**问题**: 没有记录"谁在何时对什么做了什么"。无法审计敏感操作（删除笔记、修改加密设置、导出数据）。
+
+**对照**:
+- Git 提供完整的 commit history
+- Joplin 的 `sync_items` 表记录每次同步
+- Notion 的 Page History 可回溯每个版本
+
+**建议**: 添加 `audit_log` 表 + 异步写入中间件：
+```rust
+pub struct AuditEntry {
+    pub id: String,
+    pub user_id: String,
+    pub action: String,     // "note.delete", "crypto.key_rotate"
+    pub resource_type: String,
+    pub resource_id: String,
+    pub timestamp: i64,
+    pub metadata: String,   // JSON with relevant details
+}
+```
+
+### 16.3 FFI Unsafe 代码泛滥，无安全校验 [P1]
+
+**位置**: `rust-core/devnote-ffi/src/lib.rs:1-410`
+
+**问题**: 文件中有 **12 个 `unsafe` 块**，涉及 `from_raw`、`as_ptr`、`*const`、`*mut` 操作。关键问题：
+- 空指针解引用：`unsafe { CStr::from_ptr(url) }` 仅在 `url.is_null()` check 后，但 `Box::into_raw(Box::new(...))` 返回的指针未验证
+- 无 `catch_unwind` 保护：Rust panic 跨越 FFI 边界 = UB
+- 无生命周期标注：返回的 `*mut FFIResponse` 由调用者负责 free，但文档未说明
+
+**对照**:
+- AppFlowy 的 FFI 使用 `#[ffi]` 宏自动生成 safe wrapper
+- Chrome 的 C++/JS 桥接有严格的 `HandleScope`
+
+**建议**:
+1. 所有 `unsafe` 函数包裹 `std::panic::catch_unwind`
+2. 用 `NonNull<T>` 替代 `*mut T`
+3. 添加 `// SAFETY:` 注释说明每个 unsafe 的前置条件
+
+### 16.4 键盘快捷键系统缺失 [P1]
+
+**位置**: `lib/features/editor/widgets/block_widget.dart`
+
+**问题**: 无 Ctrl+S 保存、Ctrl+Z 撤销、Ctrl+Shift+V 粘贴纯文本、Ctrl+K 链接等标准快捷键。
+
+**对照**: VS Code 有 200+ 可配置快捷键；Obsidian 通过 `hotkeys` 插件支持所有操作的快捷键绑定。
+
+**建议**: 在顶层 MaterialApp 使用 `Shortcuts` + `Actions` + `LogicalKeySet`：
+```dart
+Shortcuts(
+  shortcuts: {
+    LogicalKeySet(LogicalKeyboardKey.keyS, LogicalKeyboardKey.meta): SaveIntent(),
+  },
+  child: Actions(actions: { SaveIntent: SaveAction() }, child: child),
+)
+```
+
+### 16.5 无障碍支持（Accessibility）缺失 [P2]
+
+**位置**: 全 Flutter 项目搜索 `Semantics`、`Tooltip`、`ExcludeSemantics`
+
+**问题**: 无 `Semantics` 包裹交互元素，屏幕阅读器无法导航。无高对比度主题、无字体缩放适配。
+
+**对照**: Apple Notes 和 Google Keep 都支持 VoiceOver/TalkBack；Flutter 内置 `Semantics` widget。
+
+**建议**: 所有 `IconButton`、`ListTile`、`TextField` 添加 `Semantics(label: "...")` 包裹。
+
+### 16.6 FFI 调用不处理 Rust panic（UB 风险）[P1]
+
+**位置**: `lib/core/bridge/dispatch.dart:134-149` + `rust-core/devnote-ffi/src/lib.rs`
+
+**问题**: Rust 侧 FFI 函数无 `catch_unwind`。如果 `devnote_dispatch` 内部 panic（如 `unwrap()` 失败），panic 会跨越 FFI 边界，**导致未定义行为**（进程可能 segfault）。
+
+**对照**: Flutter 的 `dart:ffi` 文档明确强调：Rust panic 跨越 FFI 边界 = UB。AppFlowy 所有 FFI 函数用 `catch_unwind` 包裹。
+
+**建议**:
+```rust
+#[no_mangle]
+pub extern "C" fn devnote_init() -> *mut FFIResponse {
+    let result = std::panic::catch_unwind(|| {
+        // actual init logic
+    });
+    match result {
+        Ok(response) => Box::into_raw(Box::new(response)),
+        Err(_) => Box::into_raw(Box::new(FFIResponse::error(-99, "Rust panic"))),
+    }
+}
+```
+
+### 16.7 S3/WebDAV/Dropbox/OneDrive 适配器全是空壳 [P1]
+
+**位置**: 
+- `lib/features/sync/adapters/s3_adapter.dart`
+- `lib/features/sync/adapters/webdav_adapter.dart`
+- `lib/features/sync/adapters/dropbox_adapter.dart`
+- `lib/features/sync/adapters/onedrive_adapter.dart`
+
+**问题**: 4 个云存储适配器**全部是空壳**（stub），每个方法都用 `try { } catch(_) { }` 包裹但无任何实际逻辑。用户无法同步到任何第三方云存储。
+
+**对照**: Joplin 的 S3/WebDAV/Dropbox 同步全部可用；Nextcloud Notes 的 WebDAV 同步成熟。
+
+**建议**: 每个适配器至少实现 `upload` / `download` / `list` / `delete` 四个核心方法。
+
+### 16.8 冲突解决页面无 Diff 视图 [P1]
+
+**位置**: `lib/features/sync/widgets/conflict_resolution_page.dart`
+
+**问题**: 冲突页面无可视化差异对比（无 `diff` 视图，无 `merge` 编辑器）。用户无法选择保留哪个版本。
+
+**对照**: Joplin 冲突页面显示并排 diff；VS Code 的 merge editor 是三栏设计。
+
+**建议**: 集成 `diff_match_patch` 库，显示 side-by-side diff，允许用户逐块选择。
+
+### 16.9 JWT 无 Refresh Token / 会话管理 [P1]
+
+**位置**: `lib/features/sync/crypto/e2e_crypto_service.dart` + `sync-server/internal/handler/auth.go`
+
+**问题**: JWT token 无 refresh 机制，过期后只能重新登录。无 session timeout，无登出后的 token 黑名单。
+
+**对照**: AppFlowy Cloud 使用 refresh token + access token 双 token 机制；Auth0 有 `/logout` + token revocation。
+
+**建议**: 添加 `refresh_token` 表 + `POST /api/v1/auth/refresh` 端点。
+
+### 16.10 CORS `Access-Control-Allow-Origin: *` 过于宽松 [P1]
+
+**位置**: `sync-server/internal/middleware/cors.go:1-56`
+
+**问题**: CORS 中间件设置为 `AllowOrigin("*")`，允许任意域名跨域访问 API。在生产环境中，攻击者可在任意网站发起跨域请求。
+
+**对照**: Notion 限制特定域名；GitHub API 只允许 `*.github.com`。
+
+**建议**: 生产环境 `AllowOrigin(whitelist)`，开发环境可 `AllowOrigin("*")`。
+
+### 16.11 Formula 公式评估器错误处理不完整 [P1]
+
+**位置**: `rust-core/devnote-database/src/formula.rs:302-316`
+
+**问题**:
+- 除法：检查了 `b == 0` ✅
+- 溢出：未检查（`f64` 无界，但 `SUM` 累加可能接近 `f64::MAX`）
+- 类型错误：`"abc" + 123` 会 panic 而非返回错误
+- 函数名大小写：`sum(1,2,3)` 和 `SUM(1,2,3)` 应等同
+
+**对照**: Notion 的公式引擎在类型错误时返回 `#ERROR!`；Excel 用 `#VALUE!` / `#DIV/0!`。
+
+**建议**: 添加类型检查 + 统一的 `FormulaError` 枚举。
+
+### 16.12 同步 API 无分页 [P2]
+
+**位置**: `sync-server/internal/handler/sync.go:18-52`
+
+**问题**: `PullChanges` 和 `PushChanges` 无分页参数。大用户可能有数千次操作记录，一次返回可能导致 OOM。
+
+**对照**: Dropbox API 使用 `cursor` 分页；GitHub API 使用 `page` + `per_page`。
+
+**建议**: 添加 `since_version: i64` + `limit: u32` 参数。
+
+### 16.13 Rate Limit 全局共享不区分 endpoint [P2]
+
+**位置**: `sync-server/internal/middleware/rate_limit.go:16-56`
+
+**问题**: 所有 API 端点在同一个 `map[string]*visitor` 中计数。恶意用户发送海量 `/health` 请求会耗尽 `/sync/push` 的配额。
+
+**对照**: GitHub API 对 `POST /repos/*/forks` 和 `GET /repos/*` 使用不同的速率限制。
+
+**建议**: 使用 endpoint-prefixed key：`rate:POST:/api/v1/auth/login:{ip}`。
+
+### 16.14 Rust 无 Feature Flag/A/B 测试支持 [P3]
+
+**位置**: 全 Rust 代码搜索 `feature_flag`, `experiment`, `FeatureFlag`
+
+**问题**: 无方式逐步灰度新功能。`devnote-sync` 的某个大版本更改必须全量发布。
+
+**对照**: LaunchDarkly 是独立 feature flag 平台；AppFlowy 用 `FeatureFlag` 枚举。
+
+**建议**: 添加 `FeatureFlag` 枚举 + 持久化到 SQLite。
+
+### 16.15 Flutter Widget 非必要重构建（缺 const）[P3]
+
+**位置**: 搜索 `Widget build(` in `lib/features/`
+
+**问题**: 大量 widget 在 `build()` 方法中未使用 `const` 构造函数，导致 `setState` 时子树不必要地重构建。
+
+**对照**: Chrome 的 Flutter DevTools 会警告 missing const。
+
+**建议**: 在 `analysis_options.yaml` 启用 `prefer_const_constructors` lint。
+
+### 16.16 Dart 3 `sealed class` / `records` 未使用 [P2]
+
+**位置**: 全 Flutter 项目
+
+**问题**: 项目使用 Dart 3.x 但未使用 `sealed class`、`records`、`pattern matching`。BLoC state 类使用老式 `copyWith` + `class`，而非 `sealed` 表达 `Loading | Success | Failure`。
+
+**对照**: Riverpod 2.x 使用 `sealed class` 表达异步状态；AppFlowy 逐步迁移到 Dart 3 模式。
+
+**建议**:
+```dart
+sealed class NotesState {}
+final class NotesLoading extends NotesState {}
+final class NotesLoaded extends NotesState { final List<Note> notes; ... }
+final class NotesFailure extends NotesState { final String error; ... }
+```
+
+### 16.17 超长笔记/编辑器无分片处理 [P2]
+
+**位置**: 搜索 `truncat`, `limit`, `chunk`, `paginate` in editor code
+
+**问题**: 编辑器一次性加载整篇笔记到 `_noteBlocks Map`。百万字文档（10 万 blocks）会导致：
+- 编辑器启动 5-10 秒
+- 搜索/高亮 OOM
+- 滚动卡顿
+
+**对照**: Notion 使用 `virtual list` + `lazy block loading`；VS Code 使用 `delta decoder`。
+
+**建议**: 编辑器添加 `BlockLoader` + `LazyBlockList`，只加载 viewport 附近的 blocks。
+
+### 16.18 CORS 无 OPTIONS 预检处理 [P2]
+
+**位置**: `sync-server/internal/middleware/cors.go`
+
+**问题**: 中间件没有对 `OPTIONS` 请求返回 `204 No Content`。浏览器跨域预检会失败。
+
+**对照**: 所有 Gin CORS 中间件的标准实现。
+
+**建议**: 在 CORS 中间件中添加 `c.Request.Method == "OPTIONS"` 判断。
+
+### 16.19 无依赖注入框架，手动构建难以测试 [P2]
+
+**位置**: `lib/main.dart`
+
+**问题**: 所有 Service/BLoC 通过 `final _dispatch = Dispatch.instance;` 全局单例获取，无构造函数注入。无法为单元测试提供 mock。
+
+**对照**: AppFlowy 用 `get_it` 管理 100+ 依赖；Notion Web 用 React Context + hooks。
+
+**建议**: 引入 `get_it` + `Injectable` 自动生成依赖注册。
+
+### 16.20 搜索过滤冒号解析有缺陷 [P2]
+
+**位置**: `rust-core/devnote-search/src/lib.rs:255-325`
+
+**问题**: `tag:work project` 中 `tag:work` 的冒号之后遇到空格即停止解析。但 `tag:"work project"` 带引号的写法未支持。
+
+**对照**: Obsidian 的搜索使用 `tag:#work` 语法；Gmail 搜索支持引号分组。
+
+**建议**: 添加引号解析支持 + 冒号分隔的 whitespace handling。
+
+---
+
+## 十七、按优先级排序的修复建议（四轮合并版）
 
 | 优先级 | 任务 | 工作量 | 影响 | 来源 |
 |--------|------|--------|------|------|
@@ -670,6 +946,7 @@ store.add_fuel(1_000_000)?;                     // 100 万 fuel 单位
 | **P0** | EditorService 改为 Rust 持久化 | 1 天 | 修复内容丢失 | R1 |
 | **P0** | 建立最小测试基线 | 2 天 | 工程基线 | R2 |
 | **P0** | 解决 devnote-core ↔ devnote-sync 循环依赖 | 0.5 天 | 修复编译警告 | R1 |
+| **P1** | FFI Unsafe 代码加 catch_unwind + 安全校验 | 1 天 | 防止 UB | R4 |
 | **P1** | 实现 HLC 替代 wall clock | 1 天 | 修复 CRDT 正确性 | R1 |
 | **P1** | 实现本地 sync log 去重 | 1 天 | 修复同步重复应用 | R1 |
 | **P1** | 编写 GitHub Actions CI | 1 天 | 工程基线 | R1 |
@@ -684,6 +961,13 @@ store.add_fuel(1_000_000)?;                     // 100 万 fuel 单位
 | **P1** | 国际化 (i18n) 支持 | 2 天 | 全球化 | R3 |
 | **P1** | 密钥恢复机制 (BIP-39 助记词) | 1 天 | 数据安全 | R3 |
 | **P1** | 同步失败加事务回滚 | 0.5 天 | 数据一致性 | R3 |
+| **P1** | 多用户权限模型（RBAC） | 3 天 | 多用户基础 | R4 |
+| **P1** | 碰撞解决页面加 Diff 视图 | 1 天 | 用户体验 | R4 |
+| **P1** | JWT 加 Refresh Token | 1 天 | 安全/体验 | R4 |
+| **P1** | 键盘快捷键系统 | 1 天 | 用户体验 | R4 |
+| **P1** | Formula 完整错误处理（类型检查） | 1 天 | 正确性 | R4 |
+| **P1** | CORS 限制允许域名 | 0.5 天 | 安全 | R4 |
+| **P1** | S3/WebDAV/Dropbox/OneDrive 适配器实现 | 2 天 | 同步功能 | R4 |
 | **P2** | devnote-ffi 错误码改为枚举 | 0.5 天 | 可观测性 | R1 |
 | **P2** | 引入 swaggo 生成 OpenAPI | 0.5 天 | API 文档 | R1 |
 | **P2** | devnote-grpc 强制证书验证 | 0.5 天 | 安全 | R1 |
@@ -701,28 +985,42 @@ store.add_fuel(1_000_000)?;                     // 100 万 fuel 单位
 | **P2** | Flashcard 加数据保留策略 | 0.5 天 | 存储管理 | R3 |
 | **P2** | Graph 中心性结果缓存 | 0.5 天 | 性能 | R3 |
 | **P2** | Dart 端迁移框架填充 | 0.5 天 | 数据一致性 | R3 |
+| **P2** | 事件溯源 / Audit Log | 1 天 | 可审计性 | R4 |
+| **P2** | 无障碍支持（Semantics） | 1 天 | 可访问性 | R4 |
+| **P2** | 同步 API 加分页 | 0.5 天 | 可扩展性 | R4 |
+| **P2** | Rate Limit 按 endpoint 隔离 | 0.5 天 | 公平性 | R4 |
+| **P2** | Dart 3 sealed class 重构状态 | 1 天 | 代码质量 | R4 |
+| **P2** | 超长笔记分片加载 | 1 天 | 性能 | R4 |
+| **P2** | CORS 加 OPTIONS 预检处理 | 0.5 天 | 跨域兼容 | R4 |
+| **P2** | 搜索过滤支持引号语法 | 0.5 天 | 搜索功能 | R4 |
+| **P2** | 依赖注入框架（get_it/Riverpod） | 1 天 | 可测试性 | R4 |
 | **P3** | 知识图谱算法单测 | 1 天 | 正确性保证 | R1 |
 | **P3** | C4 架构图 + ADR 文档 | 2 天 | 团队可维护性 | R1 |
 | **P3** | 补充 Image/Callout/Math 块类型 | 1 天 | 编辑器功能 | R2 |
+| **P3** | Feature Flag / A/B 测试 | 1 天 | 灰度发布 | R4 |
+| **P3** | Flutter Widget const 优化 | 1 天 | 性能 | R4 |
+| **P3** | gRPC 压缩启用 | 0.5 天 | 性能 | R4 |
 
 ---
 
 ## 总结
 
-DevNote 项目的**架构骨架设计优秀**（五层解耦、开源复用、性能优化、CRDT、SRP、IPFS 等），代码量（约 15.4 万行）和模块完整度都令人印象深刻。但经过三轮独立审查，从优秀开源软件的标准看，核心问题如下：
+DevNote 项目的**架构骨架设计优秀**（五层解耦、开源复用、性能优化、CRDT、SRP、IPFS 等），代码量（约 15.4 万行）和模块完整度都令人印象深刻。但经过四轮独立审查，从优秀开源软件的标准看，核心问题如下：
 
-**三轮合并结论**：
+**四轮合并结论（57 项优化建议）**：
 
 1. **架构落地不完整**：`devnote_dispatch` 是空壳，Rust 引擎与 Dart UI 完全脱节（**最严重**）
 2. **数据双源真理**：Dart sqflite 与 Rust rusqlite 各自维护，违反 spec 的"本地优先"
 3. **零测试覆盖**：Go 服务 0 测试，Flutter 仅 1 个渲染测试，多个 Rust crate 零测试
-4. **插件沙箱不安全**：WASM 无 CPU/内存/超时限制，恶意插件可耗尽资源
-5. **编辑器缺 Undo/Redo**：用户误操作无法撤销
-6. **同步不可靠**：无重试、无回滚、无背压
-7. **密钥丢失无恢复**：用户忘记主密码 = 数据永久丢失
-8. **公式解析器有数学错误**：无运算符优先级
-9. **安全风险**：JWT Secret 硬编码默认值；SRP 与 Bcrypt 并存
-10. **工程化缺失**：无 CI/CD、无 E2E 测试、无跨平台构建脚本、无国际化
-11. **CRDT 正确性**：wall-clock 排序、merge 非真正幂等
+4. **FFI Unsafe 代码不安全**：12 个 unsafe 块无 catch_unwind，panic 跨越 FFI = UB
+5. **插件沙箱不安全**：WASM 无 CPU/内存/超时限制，恶意插件可耗尽资源
+6. **编辑器缺 Undo/Redo**：用户误操作无法撤销
+7. **同步不可靠**：无重试、无回滚、无背压、适配器全空壳
+8. **密钥丢失无恢复**：用户忘记主密码 = 数据永久丢失
+9. **多用户权限缺失**：无 ACL/RBAC，无 workspace 隔离
+10. **安全风险**：JWT Secret 硬编码默认值；CORS * 过于宽松；SRP 与 Bcrypt 并存
+11. **工程化缺失**：无 CI/CD、无 E2E 测试、无跨平台构建脚本、无国际化、无 DI 框架
+12. **CRDT 正确性**：wall-clock 排序、merge 非真正幂等
+13. **公式解析器有数学错误**：无运算符优先级，类型错误检查不完整
 
 最关键的一步是**先把 devnote_dispatch 真正接到业务 handler**，让 Rust 引擎成为唯一数据源，否则所有优化都建立在一个空壳上。
