@@ -1,4 +1,7 @@
 
+//! DevNote 核心业务逻辑层 —— 定义所有核心数据类型、业务模型和领域服务
+//! 遵循 DDD（领域驱动设计）分层架构，提供笔记(Note)、文件夹(Folder)、标签(Tag)等核心实体
+
 pub mod models;
 pub mod traits;
 

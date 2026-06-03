@@ -1,3 +1,14 @@
+//! 本地持久化层 —— 基于 SQLite (rusqlite) 的结构化数据存储
+//! 借鉴思源笔记的 SQLite 表结构设计和 Joplin 的文件系统存储模式
+//!
+//! 借鉴思源笔记的 SQLite 表结构设计
+//! 来源: https://github.com/siyuan-note/siyuan
+//! 借鉴内容: notes/folders/tags/blocks 核心表结构、WAL 模式、渐进式 Schema 迁移方案
+//!
+//! 借鉴 Joplin 的文件系统存储模式
+//! 来源: https://github.com/laurent22/joplin
+//! 借鉴内容: 附件文件加密存储、SHA-256 完整性校验、EncryptedFileStorage 文件加密层
+
 use devnote_core::models::{Attachment, Folder, Note, Tag, Permission, ResourceACL, Workspace, WorkspaceMember};
 use devnote_observe::{instrument, warn};
 use devnote_core::traits::NoteRepository;

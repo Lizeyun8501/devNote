@@ -1,3 +1,6 @@
+// TODO: 迁移到 Rust FFI — 当前临时使用 sqflite 直连
+// 注意：此实现为临时方案，后续将通过 Dispatch → FFI → Rust persistence 调用链替换
+
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 

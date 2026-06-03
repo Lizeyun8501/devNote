@@ -1,3 +1,10 @@
+//! DevNote FFI 桥接层 —— 通过 C ABI 连接 Flutter/Dart 与 Rust 核心引擎
+//! 借鉴 AppFlowy 的 FFI 通信模式，所有 external 函数均包裹 catch_unwind 保护
+//!
+//! 借鉴 AppFlowy 的 FFI 绑定实现模式
+//! 来源: https://github.com/AppFlowy-IO/AppFlowy
+//! 借鉴内容: C ABI 函数签名设计、catch_unwind 安全包装、DispatchRequest/Response 事件分发模式
+
 mod handlers;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};

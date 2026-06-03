@@ -8,9 +8,11 @@ import 'package:devnote/features/sync/bloc/sync_state.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/sync/retry_policy.dart';
+import 'package:devnote/features/sync/offline_queue.dart';
 
 class SyncBloc extends Bloc<SyncEvent, SyncState> {
   final SyncService _syncService;
+  final OfflineQueue _offlineQueue = OfflineQueue();
   Timer? _autoSyncTimer;
   StreamSubscription<SyncServiceState>? _serviceStateSubscription;
 
@@ -91,8 +93,17 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
         ));
+
+        // 重连成功，回放离线队列中的待处理操作
+        if (_offlineQueue.isNotEmpty) {
+          await _offlineQueue.drainQueue((event) async {
+            add(event);
+          });
+        }
       }
     } catch (e) {
+      // 同步失败，将当前操作加入离线队列
+      _offlineQueue.addOperation(event);
       emit(SyncError(
         message: e.toString(),
         autoSyncEnabled: state.autoSyncEnabled,
@@ -139,6 +150,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         ));
       }
     } catch (e) {
+      // 推送失败，将操作加入离线队列
+      _offlineQueue.addOperation(event);
       emit(SyncError(
         message: e.toString(),
         autoSyncEnabled: state.autoSyncEnabled,
@@ -187,6 +200,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
 
       result;
     } catch (e) {
+      // 拉取失败，将操作加入离线队列
+      _offlineQueue.addOperation(event);
       emit(SyncError(
         message: e.toString(),
         autoSyncEnabled: state.autoSyncEnabled,

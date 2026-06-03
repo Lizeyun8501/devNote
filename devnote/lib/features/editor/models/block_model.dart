@@ -1,3 +1,6 @@
+// 确保与 Rust devnote-editor/src/lib.rs Block 结构体字段对齐
+// Dart ↔ Rust 序列化映射：BlockModel.id ↔ Block.id, BlockModel.content ↔ Block.content, etc.
+
 import 'package:equatable/equatable.dart';
 
 enum BlockType {
@@ -25,6 +28,9 @@ class BlockModel extends Equatable {
   final String content;
   final int position;
   final String? language;
+  final List<String> children;
+  final DateTime createdAt;
+  final DateTime updatedAt;
 
   const BlockModel({
     required this.id,
@@ -33,6 +39,9 @@ class BlockModel extends Equatable {
     required this.content,
     required this.position,
     this.language,
+    this.children = const [],
+    required this.createdAt,
+    required this.updatedAt,
   });
 
   BlockModel copyWith({
@@ -42,6 +51,9 @@ class BlockModel extends Equatable {
     String? content,
     int? position,
     String? language,
+    List<String>? children,
+    DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     return BlockModel(
       id: id ?? this.id,
@@ -50,9 +62,22 @@ class BlockModel extends Equatable {
       content: content ?? this.content,
       position: position ?? this.position,
       language: language ?? this.language,
+      children: children ?? this.children,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
   @override
-  List<Object?> get props => [id, noteId, blockType, content, position, language];
+  List<Object?> get props => [
+        id,
+        noteId,
+        blockType,
+        content,
+        position,
+        language,
+        children,
+        createdAt,
+        updatedAt,
+      ];
 }

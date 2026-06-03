@@ -1,3 +1,11 @@
+// FFI 桥接层 —— Dart 端通过 C ABI 调用 Rust 函数
+// 借鉴 AppFlowy 的 FFI 绑定实现模式
+//
+// 借鉴 AppFlowy 的 FFI 绑定实现模式
+// 来源: https://github.com/AppFlowy-IO/AppFlowy
+// 借鉴内容: DynamicLibrary 动态加载 native 库、Native/Dart 函数类型定义映射、
+//         malloc/free 内存管理、跨平台库路径适配
+
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';

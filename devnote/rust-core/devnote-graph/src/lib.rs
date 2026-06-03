@@ -1,3 +1,14 @@
+//! 知识图谱引擎 —— 处理双向链接和关系索引计算
+//! 借鉴思源笔记的知识图谱算法和 Obsidian 的 Graph View 数据模型
+//!
+//! 借鉴思源笔记的知识图谱算法
+//! 来源: https://github.com/siyuan-note/siyuan
+//! 借鉴内容: 节点-边图谱数据模型、BFS 最短路径查询、介数中心性(Betweenness Centrality)计算
+//!
+//! 借鉴 Obsidian 的 Graph View 数据模型
+//! 来源: https://obsidian.md
+//! 借鉴内容: 图过滤(按节点类型/标签/日期)、力导向图布局数据、聚类检测(连通分量)
+
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

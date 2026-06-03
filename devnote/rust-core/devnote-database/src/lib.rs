@@ -1,3 +1,15 @@
+//! 数据库引擎 —— 实现类 Airtable 的表格数据库功能
+//! 支持自定义字段类型、多视图(表格/看板/日历)、过滤器、排序器和公式字段
+//!
+//! 借鉴 Notion 的数据库模型
+//! 来源: https://www.notion.so
+//! 借鉴内容: 多种字段类型(Text/Number/Select/Date/Formula 等)、
+//!         多视图切换(Table/Kanban/Calendar)、过滤器+排序器组合查询
+//!
+//! 借鉴 Airtable 的数据库交互模式
+//! 来源: https://airtable.com
+//! 借鉴内容: 行(row)和列(field/column)的二维表格模型、单元格级别的 CRUD 操作
+
 pub mod formula;
 
 use devnote_observe::{debug, error, info, instrument, warn};

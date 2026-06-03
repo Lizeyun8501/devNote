@@ -1,3 +1,10 @@
+// DevNote 同步服务器 —— Go (Gin) 实现，处理多设备同步请求
+// 借鉴 Joplin Sync Server 的架构设计和 API 结构
+//
+// 借鉴 Joplin Sync Server 的架构设计
+// 来源: https://github.com/laurent22/joplin
+// 借鉴内容: push/pull 增量同步 API、JWT 鉴权、delta sync 协议、冲突解决接口
+
 package main
 
 import (

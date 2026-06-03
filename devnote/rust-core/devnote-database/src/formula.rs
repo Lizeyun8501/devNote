@@ -1,3 +1,14 @@
+//! 公式引擎 —— 基于 Pratt 解析器的公式求值系统
+//! 支持算术运算、比较操作、逻辑短路求值、聚合函数(SUM/AVG/COUNT/MIN/MAX)和字符串函数
+//!
+//! 借鉴 Notion 的公式系统
+//! 来源: https://www.notion.so
+//! 借鉴内容: 公式字段类型、聚合函数语义(SUM/AVG/COUNT)、条件 IF 函数、字符串处理函数(LEN/UPPER/LOWER/TRIM)
+//!
+//! Pratt 解析器设计
+//! 来源: Pratt Parser (Vaughan Pratt, 1973) - "Top Down Operator Precedence"
+//! 借鉴内容: binding_power 优先级绑定、左递归消除、前缀/中缀表达式统一解析框架
+
 use serde_json;
 use std::collections::HashMap;
 

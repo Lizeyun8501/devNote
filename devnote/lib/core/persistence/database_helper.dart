@@ -3,7 +3,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 1;
+  static const _databaseVersion = 2;
 
   static Database? _database;
 
@@ -78,6 +78,7 @@ class DatabaseHelper {
         note_id TEXT NOT NULL,
         block_type TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
+        language TEXT,
         position INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -95,6 +96,10 @@ class DatabaseHelper {
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     for (int version = oldVersion + 1; version <= newVersion; version++) {
       switch (version) {
+        case 2:
+          // v2: 新增 blocks.language 列，用于存储代码块的语言标识
+          await db.execute('ALTER TABLE blocks ADD COLUMN language TEXT');
+          break;
         default:
           break;
       }

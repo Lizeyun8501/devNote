@@ -1,3 +1,14 @@
+//! 块编辑器引擎 —— 实现块级 Markdown 解析和渲染
+//! 借鉴思源笔记的块编辑模型和 Obsidian 的 Markdown 解析策略
+//!
+//! 借鉴思源笔记的块编辑模型
+//! 来源: https://github.com/siyuan-note/siyuan
+//! 借鉴内容: 内容块(Block)作为最小编辑单元、块类型枚举(标题/段落/代码/列表/表格等)
+//!
+//! 借鉴 Obsidian 的 Markdown 解析策略
+//! 来源: https://obsidian.md
+//! 借鉴内容: 逐行解析 Markdown、代码块语法高亮、LaTeX 数学公式渲染、任务列表语法
+
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

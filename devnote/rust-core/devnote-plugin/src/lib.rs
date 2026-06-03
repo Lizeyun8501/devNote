@@ -1,3 +1,14 @@
+//! WebAssembly 插件沙箱 —— 基于 wasmtime 实现安全隔离
+//! 借鉴 Obsidian 的社区插件模型和 Figma 的 WASM 插件隔离方案
+//!
+//! 借鉴 Obsidian 的社区插件模型
+//! 来源: https://github.com/obsidianmd/obsidian-sample-plugin
+//! 借鉴内容: 插件清单(manifest)元数据、插件生命周期管理(Load/Enable/Disable)、权限系统设计
+//!
+//! 借鉴 Figma 的 WASM 插件隔离方案
+//! 来源: https://www.figma.com
+//! 借鉴内容: wasmtime 沙箱引擎、Fuel 燃料消耗追踪、内存限制和执行超时保护
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

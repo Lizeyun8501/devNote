@@ -1,3 +1,11 @@
+// 消息分发模块 —— 将 Flutter UI 操作转发到 Rust 核心引擎
+// 通信模式借鉴 AppFlowy 的 Event-Dispatch 模式
+//
+// 借鉴 AppFlowy 的 Event-Dispatch 模式
+// 来源: https://github.com/AppFlowy-IO/AppFlowy
+// 借鉴内容: 事件枚举定义(NoteEvent/FolderEvent/EditorEvent 等)、Dispatch 类的事件路由分发、
+//         三种通信模式(local FFI / gRPC / WebSocket)的统一抽象
+
 import 'dart:convert';
 import 'dart:typed_data';
 

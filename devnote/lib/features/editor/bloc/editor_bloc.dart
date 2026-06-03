@@ -21,6 +21,8 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
   Future<void> _onLoadNote(LoadNote event, Emitter<EditorState> emit) async {
     emit(const EditorLoading());
     try {
+      // 打开笔记时先从 SQLite 加载 block 数据到内存缓存（思源笔记风格：本地优先持久化）
+      await _editorService.loadBlocks(event.noteId);
       final blocks = await _editorService.listBlocks(event.noteId);
       if (blocks.isEmpty) {
         final newBlock = await _editorService.createBlock(

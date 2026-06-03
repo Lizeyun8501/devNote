@@ -1,3 +1,18 @@
+// DevNote 应用入口 —— 本地优先的跨平台云笔记应用
+// 架构借鉴: AppFlowy (Flutter+Rust), SiYuan (块编辑+知识图谱), Anytype (对象化模型)
+//
+// 借鉴 AppFlowy 的 Flutter+Rust 混合架构
+// 来源: https://github.com/AppFlowy-IO/AppFlowy
+// 借鉴内容: Flutter 前端 + Rust 核心引擎 + FFI 桥接的分层架构模式
+//
+// 借鉴思源笔记的块编辑+知识图谱
+// 来源: https://github.com/siyuan-note/siyuan
+// 借鉴内容: 块级编辑器设计理念、知识图谱可视化
+//
+// 借鉴 Anytype 的对象化模型
+// 来源: https://github.com/anyproto/anytype-kb
+// 借鉴内容: 以对象(Object)为原语的数据建模方式
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_gen/gen_l10n/app_localizations.dart';

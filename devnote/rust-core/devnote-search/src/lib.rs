@@ -1,3 +1,10 @@
+//! 全文检索引擎 —— 基于 FTS5 实现笔记内容全文检索
+//! 借鉴思源笔记的全文检索方案，支持引号语法和布尔查询
+//!
+//! 借鉴思源笔记的全文检索方案
+//! 来源: https://github.com/siyuan-note/siyuan
+//! 借鉴内容: SQLite FTS5 虚拟表索引、snippet 高亮标记、filter 前缀语法解析（tag:/folder:）
+
 use devnote_observe::{info, instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

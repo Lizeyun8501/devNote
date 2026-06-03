@@ -1,3 +1,12 @@
+// DevNote 业务服务器 —— Go (Gin) 实现，处理知识图谱、标签、文件夹等业务逻辑
+//
+// 提供以下业务域的 RESTful API：
+//  - metadata: 笔记元数据的 CRUD 和批量操作
+//  - validate: 笔记/文件夹/标签/知识关系的校验规则管理
+//  - tags: 层级标签的增删改查、合并/拆分、统计
+//  - folders: 树形文件夹的 CRUD、移动/复制、路径解析
+//  - knowledge: 知识图谱关系计算、关联推荐、最短路径、覆盖率分析
+
 package main
 
 import (

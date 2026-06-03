@@ -1,9 +1,40 @@
 import 'package:uuid/uuid.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/core/persistence/database_helper.dart';
 
+/// 编辑器服务 - 负责 block 的 CRUD 与 Markdown 解析。
+///
+/// 持久化策略（借鉴思源笔记的设计理念）：
+/// 思源笔记的核心设计是"内容块即数据"，每个 block 的增删改都会即时同步到 SQLite，
+/// 从而实现本地优先（local-first）的架构。这里采用同样的思路：
+///   - _noteBlocks 作为内存缓存，保证 UI 操作的即时响应
+///   - 每次 create/update/delete/move/parseMarkdown 操作，先写入 SQLite，
+///     再更新内存缓存，确保数据不会因应用重启而丢失
+///   - 打开笔记时通过 loadBlocks() 从 SQLite 回读数据到缓存
+///   - listBlocks() 在缓存为空时自动从数据库加载（懒加载兜底）
+///
+/// 注意：当前 Dart↔Rust FFI 桥尚未完全可用，因此直接在 Dart 侧通过 sqflite
+/// 操作数据库，不再经过 Rust 引擎。
 class EditorService {
   final _uuid = const Uuid();
+  final DatabaseHelper _db = DatabaseHelper();
+
+  /// 内存缓存：noteId → [BlockModel, ...]
+  /// UI 从缓存读取以获得即时响应，持久化由 SQLite 保证。
   final Map<String, List<BlockModel>> _noteBlocks = {};
+
+  /// 从 SQLite 加载指定笔记的所有 block 到内存缓存。
+  /// 在编辑器页面打开时（EditorBloc._onLoadNote）调用。
+  Future<void> loadBlocks(String noteId) async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'blocks',
+      where: 'note_id = ?',
+      whereArgs: [noteId],
+      orderBy: 'position ASC',
+    );
+    _noteBlocks[noteId] = rows.map(_rowToBlock).toList();
+  }
 
   Future<BlockModel> createBlock({
     required String noteId,
@@ -11,6 +42,7 @@ class EditorService {
     required String content,
     required int position,
   }) async {
+    final now = DateTime.now().toIso8601String();
     final block = BlockModel(
       id: _uuid.v4(),
       noteId: noteId,
@@ -18,6 +50,11 @@ class EditorService {
       content: content,
       position: position,
     );
+
+    // 思源笔记风格：先写 SQLite，再更新缓存
+    final db = await _db.database;
+    await db.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
+
     _noteBlocks.putIfAbsent(noteId, () => []);
     _noteBlocks[noteId]!.add(block);
     return block;
@@ -32,6 +69,16 @@ class EditorService {
   }
 
   Future<void> updateBlock({required String blockId, required String content}) async {
+    // 思源笔记风格：先 UPDATE SQLite，再更新缓存
+    final db = await _db.database;
+    final now = DateTime.now().toIso8601String();
+    await db.update(
+      'blocks',
+      {'content': content, 'updated_at': now},
+      where: 'id = ?',
+      whereArgs: [blockId],
+    );
+
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
@@ -42,12 +89,23 @@ class EditorService {
   }
 
   Future<void> deleteBlock(String blockId) async {
+    // 思源笔记风格：先从 SQLite DELETE，再更新缓存
+    final db = await _db.database;
+    await db.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
+
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
         blocks.removeAt(index);
+        // 删除后重新排位，并同步写回数据库
         for (var i = 0; i < blocks.length; i++) {
           blocks[i] = blocks[i].copyWith(position: i);
+          await db.update(
+            'blocks',
+            {'position': i, 'updated_at': DateTime.now().toIso8601String()},
+            where: 'id = ?',
+            whereArgs: [blocks[i].id],
+          );
         }
         return;
       }
@@ -55,14 +113,24 @@ class EditorService {
   }
 
   Future<void> moveBlock({required String blockId, required int newPosition}) async {
+    final db = await _db.database;
+    final now = DateTime.now().toIso8601String();
+
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
         final block = blocks.removeAt(index);
         final insertAt = newPosition.clamp(0, blocks.length);
         blocks.insert(insertAt, block);
+        // 移动后重新排位，并同步写回数据库
         for (var i = 0; i < blocks.length; i++) {
           blocks[i] = blocks[i].copyWith(position: i);
+          await db.update(
+            'blocks',
+            {'position': i, 'updated_at': now},
+            where: 'id = ?',
+            whereArgs: [blocks[i].id],
+          );
         }
         return;
       }
@@ -70,8 +138,18 @@ class EditorService {
   }
 
   Future<List<BlockModel>> listBlocks(String noteId) async {
+    // 缓存优先：若缓存有数据则直接返回，否则从数据库加载（懒加载兜底）
+    final cached = _noteBlocks[noteId];
+    if (cached != null && cached.isNotEmpty) {
+      return List<BlockModel>.from(cached)
+        ..sort((a, b) => a.position.compareTo(b.position));
+    }
+
+    // 缓存为空时从 SQLite 加载
+    await loadBlocks(noteId);
     final blocks = _noteBlocks[noteId] ?? [];
-    return List<BlockModel>.from(blocks)..sort((a, b) => a.position.compareTo(b.position));
+    return List<BlockModel>.from(blocks)
+      ..sort((a, b) => a.position.compareTo(b.position));
   }
 
   Future<List<BlockModel>> parseMarkdown({required String content, required String noteId}) async {
@@ -217,7 +295,52 @@ class EditorService {
       }
     }
 
+    // 思源笔记风格：先清空该笔记在数据库中的旧 blocks，
+    // 再将新解析出的所有 blocks 批量 INSERT 到 SQLite，最后更新缓存
+    final db = await _db.database;
+    final now = DateTime.now().toIso8601String();
+    await db.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
+
+    for (final block in blocks) {
+      await db.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
+    }
+
     _noteBlocks[noteId] = List<BlockModel>.from(blocks);
     return blocks;
+  }
+
+  // ── 数据库序列化辅助方法 ──────────────────────────────────────────
+
+  /// 将 BlockModel 转换为 sqflite 行数据
+  Map<String, dynamic> _blockToRow(
+    BlockModel block, {
+    required String createdAt,
+    required String updatedAt,
+  }) {
+    return {
+      'id': block.id,
+      'note_id': block.noteId,
+      'block_type': block.blockType.name,
+      'content': block.content,
+      'language': block.language,
+      'position': block.position,
+      'created_at': createdAt,
+      'updated_at': updatedAt,
+    };
+  }
+
+  /// 从 sqflite 行数据还原 BlockModel
+  BlockModel _rowToBlock(Map<String, dynamic> row) {
+    return BlockModel(
+      id: row['id'] as String,
+      noteId: row['note_id'] as String,
+      blockType: BlockType.values.firstWhere(
+        (e) => e.name == row['block_type'],
+        orElse: () => BlockType.paragraph,
+      ),
+      content: (row['content'] as String?) ?? '',
+      position: (row['position'] as int?) ?? 0,
+      language: row['language'] as String?,
+    );
   }
 }
