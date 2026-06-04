@@ -1,0 +1,220 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
+import 'package:devnote/core/constants/app_constants.dart';
+import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/core/persistence/folder_repository.dart';
+import 'package:devnote/core/persistence/note_repository.dart';
+import 'package:devnote/features/notes/bloc/notes_bloc.dart';
+import 'package:devnote/features/notes/bloc/notes_event.dart';
+import 'package:devnote/features/notes/bloc/folder_bloc.dart';
+import 'package:devnote/features/notes/bloc/folder_event.dart';
+import 'package:devnote/features/notes/bloc/folder_state.dart';
+import 'package:devnote/features/notes/widgets/folder_tree.dart';
+import 'package:devnote/features/notes/widgets/note_list.dart';
+import 'package:devnote/features/sync/bloc/sync_bloc.dart';
+import 'package:devnote/features/sync/bloc/sync_event.dart';
+import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_status_widget.dart';
+
+class NotesPage extends StatelessWidget {
+  const NotesPage({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final dbHelper = DatabaseHelper();
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(
+          create: (_) => FolderBloc(SqliteFolderRepository(dbHelper))..add(const LoadFolders()),
+        ),
+        BlocProvider(
+          create: (_) => NotesBloc(SqliteNoteRepository(dbHelper)),
+        ),
+        BlocProvider(
+          create: (_) => SyncBloc(getIt<SyncService>()),
+        ),
+      ],
+      child: Scaffold(
+        body: Row(
+          children: [
+            const _DirectoryTreePanel(),
+            const VerticalDivider(width: 1),
+            Expanded(child: child),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DirectoryTreePanel extends StatelessWidget {
+  const _DirectoryTreePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: AppConstants.sidebarWidth,
+      child: ColoredBox(
+        color: Theme.of(context).navigationRailTheme.backgroundColor ??
+            Theme.of(context).scaffoldBackgroundColor,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHeader(context),
+            const Divider(height: 1),
+            Expanded(
+              child: Column(
+                children: [
+                  const Expanded(child: FolderTree()),
+                  const Divider(height: 1),
+                  _buildFolderActions(context),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Semantics(
+            label: '笔记列表',
+            child: Icon(
+              Icons.description_outlined,
+              size: 20,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            AppConstants.appName,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFolderActions(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Semantics(
+            label: '新建文件夹',
+            hint: '创建新的文件夹',
+            child: IconButton(
+              icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+              tooltip: '新建文件夹',
+              onPressed: () => _showCreateFolderDialog(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCreateFolderDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('新建文件夹'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '文件夹名称'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              if (controller.text.isNotEmpty) {
+                final currentState = context.read<FolderBloc>().state;
+                String? parentId;
+                if (currentState is FolderLoaded) {
+                  parentId = currentState.selectedFolderId;
+                }
+                context.read<FolderBloc>().add(
+                      CreateFolder(name: controller.text, parentId: parentId),
+                    );
+                Navigator.pop(dialogContext);
+              }
+            },
+            child: const Text('创建'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class NotesListPlaceholder extends StatelessWidget {
+  const NotesListPlaceholder({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocListener<FolderBloc, FolderState>(
+      listener: (context, folderState) {
+        if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
+          context.read<NotesBloc>().add(LoadNotes(folderState.selectedFolderId!));
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('笔记列表'),
+          actions: [
+            const SyncStatusWidget(),
+            Semantics(
+              label: '搜索笔记',
+              hint: '搜索你的笔记',
+              child: IconButton(
+                icon: const Icon(Icons.search),
+                onPressed: () => context.go('/search'),
+              ),
+            ),
+            Semantics(
+              label: '设置',
+              hint: '打开设置页面',
+              child: IconButton(
+                icon: const Icon(Icons.settings_outlined),
+                onPressed: () => context.go('/settings'),
+              ),
+            ),
+          ],
+        ),
+        body: const NoteList(),
+        floatingActionButton: Semantics(
+          label: '新建笔记',
+          hint: '创建一条新的笔记',
+          child: FloatingActionButton(
+            onPressed: () {
+              final folderState = context.read<FolderBloc>().state;
+              String folderId = '';
+              if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
+                folderId = folderState.selectedFolderId!;
+              }
+              context.read<NotesBloc>().add(CreateNote(title: '无标题', folderId: folderId));
+            },
+            child: const Icon(Icons.add),
+          ),
+        ),
+      ),
+    );
+  }
+}

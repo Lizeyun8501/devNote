@@ -1,0 +1,88 @@
+[package]
+name = "devnote"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[workspace]
+members = [
+    "devnote-core",
+    "devnote-ffi",
+    "devnote-persistence",
+    "devnote-crypto",
+    "devnote-sync",
+    "devnote-search",
+    "devnote-editor",
+    "devnote-format",
+    "devnote-crdt",
+    "devnote-p2p",
+    "devnote-plugin",
+    "devnote-canvas",
+    "devnote-workflow",
+    "devnote-graph",
+    "devnote-flashcard",
+    "devnote-perf",
+    "devnote-grpc",
+    "devnote-websocket",
+    "devnote-qt",
+    "devnote-ipfs",
+    "devnote-events",
+    "devnote-database",
+    "devnote-object",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["DevNote Team"]
+license = "MIT"
+
+[workspace.dependencies]
+devnote-observe = { path = "devnote-observe" }
+devnote-core = { path = "devnote-core" }
+devnote-ffi = { path = "devnote-ffi" }
+devnote-persistence = { path = "devnote-persistence" }
+devnote-crypto = { path = "devnote-crypto" }
+devnote-sync = { path = "devnote-sync" }
+devnote-search = { path = "devnote-search" }
+devnote-editor = { path = "devnote-editor" }
+devnote-format = { path = "devnote-format" }
+devnote-crdt = { path = "devnote-crdt" }
+devnote-p2p = { path = "devnote-p2p" }
+devnote-database = { path = "devnote-database" }
+devnote-object = { path = "devnote-object" }
+devnote-canvas = { path = "devnote-canvas" }
+devnote-workflow = { path = "devnote-workflow" }
+devnote-graph = { path = "devnote-graph" }
+devnote-flashcard = { path = "devnote-flashcard" }
+devnote-perf = { path = "devnote-perf" }
+devnote-qt = { path = "devnote-qt" }
+devnote-ipfs = { path = "devnote-ipfs" }
+devnote-grpc = { path = "devnote-grpc" }
+devnote-websocket = { path = "devnote-websocket" }
+devnote-events = { path = "devnote-events" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"
+opentelemetry = "0.24"
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.17", features = ["tonic", "metrics"] }
+tracing-opentelemetry = "0.25"
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"
+
+[dev-dependencies]
+devnote-ffi = { workspace = true }
+devnote-crdt = { workspace = true }
+devnote-persistence = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

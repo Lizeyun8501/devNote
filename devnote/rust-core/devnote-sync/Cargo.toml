@@ -1,0 +1,23 @@
+[package]
+name = "devnote-sync"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+devnote-crypto = { path = "../devnote-crypto" }
+devnote-events = { workspace = true }
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+devnote-crdt = { workspace = true }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand_core = { version = "0.6", features = ["std"] }
+sha2 = "0.10"
+hmac = "0.12"
+rusqlite = { version = "0.32", features = ["bundled"] }
+lazy_static = "1"

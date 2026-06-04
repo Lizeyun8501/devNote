@@ -1,0 +1,15 @@
+[package]
+name = "devnote-perf"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+dashmap = "6"
+lru = "0.12"
+crossbeam-channel = "0.5"
+anyhow = { workspace = true }

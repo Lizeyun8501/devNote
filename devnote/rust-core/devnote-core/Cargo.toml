@@ -1,0 +1,23 @@
+[package]
+name = "devnote-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+devnote-editor = { workspace = true }
+devnote-crypto = { workspace = true }
+devnote-search = { workspace = true }
+devnote-events = { workspace = true }
+devnote-sync = { workspace = true }
+devnote-crdt = { workspace = true }
+devnote-object = { workspace = true }
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

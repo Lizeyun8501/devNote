@@ -1,0 +1,15 @@
+[package]
+name = "devnote-crypto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+bip39 = "2.0"
+rand_core = { version = "0.6", features = ["std"] }
+thiserror = { workspace = true }
+devnote-observe = { workspace = true }
+tracing = { workspace = true }

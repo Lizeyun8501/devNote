@@ -1,0 +1,1032 @@
+//! 知识图谱引擎 —— 处理双向链接和关系索引计算
+//! 借鉴思源笔记的知识图谱算法和 Obsidian 的 Graph View 数据模型
+//!
+//! 借鉴思源笔记的知识图谱算法
+//! 来源: https://github.com/siyuan-note/siyuan
+//! 借鉴内容: 节点-边图谱数据模型、BFS 最短路径查询、介数中心性(Betweenness Centrality)计算
+//!
+//! 借鉴 Obsidian 的 Graph View 数据模型
+//! 来源: https://obsidian.md
+//! 借鉴内容: 图过滤(按节点类型/标签/日期)、力导向图布局数据、聚类检测(连通分量)
+
+use devnote_observe::{instrument, warn};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use chrono::{DateTime, Utc};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use rusqlite::params;
+use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeType {
+    Note,
+    Tag,
+    Folder,
+    Canvas,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeType {
+    Reference,
+    Tag,
+    Parent,
+    Related,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeNode {
+    pub id: Uuid,
+    pub title: String,
+    pub node_type: NodeType,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEdge {
+    pub id: Uuid,
+    pub source_id: Uuid,
+    pub target_id: Uuid,
+    pub edge_type: EdgeType,
+    pub weight: f64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphData {
+    pub nodes: Vec<KnowledgeNode>,
+    pub edges: Vec<KnowledgeEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphFilter {
+    pub node_types: Option<Vec<NodeType>>,
+    pub tags: Option<Vec<String>>,
+    pub date_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    pub search_query: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodePosition {
+    pub node_id: Uuid,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphLayout {
+    pub positions: Vec<NodePosition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CentralityResult {
+    pub node_id: Uuid,
+    pub centrality: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Cluster {
+    pub id: Uuid,
+    pub node_ids: Vec<Uuid>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum GraphError {
+    #[error("node not found: {0}")]
+    NodeNotFound(Uuid),
+    #[error("edge not found: {0}")]
+    EdgeNotFound(Uuid),
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub trait GraphEngine: Send + Sync {
+    fn build_graph(&self, notes: &[(Uuid, String, Vec<String>, DateTime<Utc>, DateTime<Utc>)], folder_relations: &[(Uuid, Uuid)], tag_relations: &[(Uuid, String)], reference_relations: &[(Uuid, Uuid)]) -> Result<GraphData, GraphError>;
+    fn get_node(&self, id: &Uuid) -> Result<Option<KnowledgeNode>, GraphError>;
+    fn get_neighbors(&self, id: &Uuid, depth: usize) -> Result<GraphData, GraphError>;
+    fn get_backlinks(&self, note_id: &Uuid) -> Result<Vec<KnowledgeEdge>, GraphError>;
+    fn get_shortest_path(&self, from_id: &Uuid, to_id: &Uuid) -> Result<Vec<Uuid>, GraphError>;
+    fn get_related_nodes(&self, id: &Uuid, limit: usize) -> Result<Vec<KnowledgeNode>, GraphError>;
+    fn filter_graph(&self, filter: &GraphFilter) -> Result<GraphData, GraphError>;
+    fn calculate_centrality(&self) -> Result<Vec<CentralityResult>, GraphError>;
+    fn detect_clusters(&self) -> Result<Vec<Cluster>, GraphError>;
+}
+
+const GRAPH_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    node_type TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    edge_type TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(node_type);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);
+"#;
+
+struct CentralityCache {
+    degree: Option<HashMap<String, f64>>,
+    betweenness: Option<HashMap<String, f64>>,
+    pagerank: Option<HashMap<String, f64>>,
+    graph_dirty: bool,
+    last_computed_at: Option<i64>,
+}
+
+pub struct SqliteGraphEngine {
+    conn: Mutex<rusqlite::Connection>,
+    centrality_cache: Mutex<CentralityCache>,
+}
+
+impl std::fmt::Debug for SqliteGraphEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteGraphEngine").finish()
+    }
+}
+
+impl SqliteGraphEngine {
+    pub fn init(db_path: &str) -> Result<Self, GraphError> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        let engine = Self {
+            conn: Mutex::new(conn),
+            centrality_cache: Mutex::new(CentralityCache {
+                degree: None,
+                betweenness: None,
+                pagerank: None,
+                graph_dirty: true,
+                last_computed_at: None,
+            }),
+        };
+        engine.init_schema()?;
+        Ok(engine)
+    }
+
+    pub fn in_memory() -> Result<Self, GraphError> {
+        let conn = rusqlite::Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        let engine = Self {
+            conn: Mutex::new(conn),
+            centrality_cache: Mutex::new(CentralityCache {
+                degree: None,
+                betweenness: None,
+                pagerank: None,
+                graph_dirty: true,
+                last_computed_at: None,
+            }),
+        };
+        engine.init_schema()?;
+        Ok(engine)
+    }
+
+    fn init_schema(&self) -> Result<(), GraphError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(GRAPH_SCHEMA)?;
+        Ok(())
+    }
+
+    fn row_to_node(row: &rusqlite::Row) -> rusqlite::Result<KnowledgeNode> {
+        let id_str: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        let nt_str: String = row.get(2)?;
+        let tags_str: String = row.get(3)?;
+        let created_at_str: String = row.get(4)?;
+        let updated_at_str: String = row.get(5)?;
+
+        let node_type = match nt_str.as_str() {
+            "Tag" => NodeType::Tag,
+            "Folder" => NodeType::Folder,
+            "Canvas" => NodeType::Canvas,
+            _ => NodeType::Note,
+        };
+
+        Ok(KnowledgeNode {
+            id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            title,
+            node_type,
+            tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+            created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+            updated_at: updated_at_str.parse().unwrap_or_else(|_| Utc::now()),
+        })
+    }
+
+    fn row_to_edge(row: &rusqlite::Row) -> rusqlite::Result<KnowledgeEdge> {
+        let id_str: String = row.get(0)?;
+        let source_id_str: String = row.get(1)?;
+        let target_id_str: String = row.get(2)?;
+        let et_str: String = row.get(3)?;
+        let weight: f64 = row.get(4)?;
+        let created_at_str: String = row.get(5)?;
+
+        let edge_type = match et_str.as_str() {
+            "Tag" => EdgeType::Tag,
+            "Parent" => EdgeType::Parent,
+            "Related" => EdgeType::Related,
+            _ => EdgeType::Reference,
+        };
+
+        Ok(KnowledgeEdge {
+            id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            source_id: Uuid::parse_str(&source_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            target_id: Uuid::parse_str(&target_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            edge_type,
+            weight,
+            created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+        })
+    }
+
+    fn load_all_nodes(&self) -> Result<Vec<KnowledgeNode>, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, title, node_type, tags, created_at, updated_at FROM graph_nodes")?;
+        let nodes = stmt.query_map([], Self::row_to_node)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(nodes)
+    }
+
+    fn load_all_edges(&self) -> Result<Vec<KnowledgeEdge>, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, source_id, target_id, edge_type, weight, created_at FROM graph_edges")?;
+        let edges = stmt.query_map([], Self::row_to_edge)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(edges)
+    }
+
+    fn invalidate_centrality_cache(&self) {
+        let mut cache = self.centrality_cache.lock().unwrap();
+        cache.graph_dirty = true;
+    }
+
+    pub fn add_node(&self, node: KnowledgeNode) -> Result<KnowledgeNode, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = node.id.to_string();
+        let node_type_str = match node.node_type {
+            NodeType::Note => "Note",
+            NodeType::Tag => "Tag",
+            NodeType::Folder => "Folder",
+            NodeType::Canvas => "Canvas",
+        };
+        let tags_json = serde_json::to_string(&node.tags).unwrap_or_default();
+        let created_at_str = node.created_at.to_rfc3339();
+        let updated_at_str = node.updated_at.to_rfc3339();
+        conn.execute(
+            "INSERT OR REPLACE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id_str, node.title, node_type_str, tags_json, created_at_str, updated_at_str],
+        )?;
+        drop(conn);
+        self.invalidate_centrality_cache();
+        Ok(node)
+    }
+
+    pub fn remove_node(&self, id: &Uuid) -> Result<(), GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = id.to_string();
+        conn.execute("DELETE FROM graph_nodes WHERE id = ?1", params![id_str])?;
+        drop(conn);
+        self.invalidate_centrality_cache();
+        Ok(())
+    }
+
+    pub fn add_edge(&self, edge: KnowledgeEdge) -> Result<KnowledgeEdge, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = edge.id.to_string();
+        let source_id_str = edge.source_id.to_string();
+        let target_id_str = edge.target_id.to_string();
+        let edge_type_str = match edge.edge_type {
+            EdgeType::Reference => "Reference",
+            EdgeType::Tag => "Tag",
+            EdgeType::Parent => "Parent",
+            EdgeType::Related => "Related",
+        };
+        let created_at_str = edge.created_at.to_rfc3339();
+        conn.execute(
+            "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id_str, source_id_str, target_id_str, edge_type_str, edge.weight, created_at_str],
+        )?;
+        drop(conn);
+        self.invalidate_centrality_cache();
+        Ok(edge)
+    }
+
+    pub fn remove_edge(&self, id: &Uuid) -> Result<(), GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = id.to_string();
+        conn.execute("DELETE FROM graph_edges WHERE id = ?1", params![id_str])?;
+        drop(conn);
+        self.invalidate_centrality_cache();
+        Ok(())
+    }
+
+    fn compute_centrality(&self, algorithm: &str) -> Result<HashMap<String, f64>, GraphError> {
+        let all_nodes = self.load_all_nodes()?;
+        let all_edges = self.load_all_edges()?;
+
+        let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for edge in &all_edges {
+            adj.entry(edge.source_id).or_default().push(edge.target_id);
+            adj.entry(edge.target_id).or_default().push(edge.source_id);
+        }
+
+        let n = all_nodes.len();
+        if n == 0 {
+            return Ok(HashMap::new());
+        }
+
+        match algorithm {
+            "degree" => {
+                let mut result: HashMap<String, f64> = HashMap::new();
+                let max_degree = all_edges.len() as f64 * 2.0;
+                for node in &all_nodes {
+                    let degree = adj.get(&node.id).map(|v| v.len()).unwrap_or(0) as f64;
+                    result.insert(node.id.to_string(), if max_degree > 0.0 { degree / max_degree } else { 0.0 });
+                }
+                Ok(result)
+            }
+            "betweenness" => {
+                let mut betweenness: HashMap<Uuid, f64> = HashMap::new();
+                for node in &all_nodes {
+                    betweenness.insert(node.id, 0.0);
+                }
+
+                for source in &all_nodes {
+                    let mut dist: HashMap<Uuid, i64> = HashMap::new();
+                    let mut sigma: HashMap<Uuid, f64> = HashMap::new();
+                    let mut pred: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+                    let mut stack: Vec<Uuid> = Vec::new();
+                    let mut queue: VecDeque<Uuid> = VecDeque::new();
+
+                    for node in &all_nodes {
+                        dist.insert(node.id, -1);
+                        sigma.insert(node.id, 0.0);
+                        pred.insert(node.id, vec![]);
+                    }
+                    dist.insert(source.id, 0);
+                    sigma.insert(source.id, 1.0);
+                    queue.push_back(source.id);
+
+                    while let Some(v) = queue.pop_front() {
+                        stack.push(v);
+                        if let Some(neighbors) = adj.get(&v) {
+                            for &w in neighbors {
+                                if dist[&w] < 0 {
+                                    dist.insert(w, dist[&v] + 1);
+                                    queue.push_back(w);
+                                }
+                                if dist[&w] == dist[&v] + 1 {
+                                    *sigma.get_mut(&w).unwrap() += sigma[&v];
+                                    pred.get_mut(&w).unwrap().push(v);
+                                }
+                            }
+                        }
+                    }
+
+                    let mut delta: HashMap<Uuid, f64> = HashMap::new();
+                    for node in &all_nodes {
+                        delta.insert(node.id, 0.0);
+                    }
+
+                    while let Some(w) = stack.pop() {
+                        for &v in &pred[&w] {
+                            *delta.get_mut(&v).unwrap() += (sigma[&v] / sigma[&w]) * (1.0 + delta[&w]);
+                        }
+                        if w != source.id {
+                            *betweenness.get_mut(&w).unwrap() += delta[&w];
+                        }
+                    }
+                }
+
+                let norm = if n > 2 { ((n - 1) * (n - 2)) as f64 } else { 1.0 };
+                let result: HashMap<String, f64> = betweenness.into_iter()
+                    .map(|(node_id, c)| (node_id.to_string(), c / norm))
+                    .collect();
+                Ok(result)
+            }
+            "pagerank" => {
+                let damping = 0.85;
+                let iterations = 100;
+                let mut pagerank: HashMap<Uuid, f64> = HashMap::new();
+                for node in &all_nodes {
+                    pagerank.insert(node.id, 1.0 / n as f64);
+                }
+
+                let out_degree: HashMap<Uuid, usize> = all_nodes.iter()
+                    .map(|n| (n.id, adj.get(&n.id).map(|v| v.len()).unwrap_or(0)))
+                    .collect();
+
+                for _ in 0..iterations {
+                    let mut new_pr: HashMap<Uuid, f64> = HashMap::new();
+                    for node in &all_nodes {
+                        let mut sum = 0.0;
+                        if let Some(neighbors) = adj.get(&node.id) {
+                            for &neighbor in neighbors {
+                                let deg = out_degree.get(&neighbor).unwrap_or(&0);
+                                if *deg > 0 {
+                                    sum += pagerank.get(&neighbor).unwrap_or(&0.0) / *deg as f64;
+                                }
+                            }
+                        }
+                        new_pr.insert(node.id, (1.0 - damping) / n as f64 + damping * sum);
+                    }
+                    pagerank = new_pr;
+                }
+
+                let result: HashMap<String, f64> = pagerank.into_iter()
+                    .map(|(node_id, pr)| (node_id.to_string(), pr))
+                    .collect();
+                Ok(result)
+            }
+            _ => Err(GraphError::Sqlite(rusqlite::Error::InvalidParameterName(format!("Unknown algorithm: {}", algorithm)))),
+        }
+    }
+
+    pub fn calculate_centrality_cached(&self, algorithm: &str) -> Result<HashMap<String, f64>, GraphError> {
+        let mut cache = self.centrality_cache.lock().unwrap();
+
+        if !cache.graph_dirty {
+            let cached = match algorithm {
+                "degree" => &cache.degree,
+                "betweenness" => &cache.betweenness,
+                "pagerank" => &cache.pagerank,
+                _ => &None,
+            };
+            if let Some(result) = cached {
+                return Ok(result.clone());
+            }
+        }
+
+        // Need to release cache lock while computing
+        cache.graph_dirty = false;
+        drop(cache);
+
+        let result = self.compute_centrality(algorithm)?;
+
+        let mut cache = self.centrality_cache.lock().unwrap();
+        match algorithm {
+            "degree" => cache.degree = Some(result.clone()),
+            "betweenness" => cache.betweenness = Some(result.clone()),
+            "pagerank" => cache.pagerank = Some(result.clone()),
+            _ => {}
+        }
+        cache.last_computed_at = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64);
+        Ok(result)
+    }
+}
+
+impl GraphEngine for SqliteGraphEngine {
+    #[instrument(skip(self, notes, folder_relations, tag_relations, reference_relations))]
+    fn build_graph(
+        &self,
+        notes: &[(Uuid, String, Vec<String>, DateTime<Utc>, DateTime<Utc>)],
+        folder_relations: &[(Uuid, Uuid)],
+        tag_relations: &[(Uuid, String)],
+        reference_relations: &[(Uuid, Uuid)],
+    ) -> Result<GraphData, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM graph_edges", [])?;
+        conn.execute("DELETE FROM graph_nodes", [])?;
+
+        let mut tag_map: HashMap<String, Uuid> = HashMap::new();
+        let mut folder_set: HashSet<Uuid> = HashSet::new();
+
+        for (id, title, tags, created_at, updated_at) in notes {
+            let id_str = id.to_string();
+            let tags_json = serde_json::to_string(tags).unwrap_or_default();
+            let created_at_str = created_at.to_rfc3339();
+            let updated_at_str = updated_at.to_rfc3339();
+            conn.execute(
+                "INSERT OR REPLACE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id_str, title, "Note", tags_json, created_at_str, updated_at_str],
+            )?;
+
+            for tag in tags {
+                if !tag_map.contains_key(tag) {
+                    let tag_id = Uuid::new_v4();
+                    tag_map.insert(tag.clone(), tag_id);
+                }
+            }
+        }
+
+        for (_, folder_id) in folder_relations {
+            if folder_set.insert(*folder_id) {
+                let folder_id_str = folder_id.to_string();
+                conn.execute(
+                    "INSERT OR IGNORE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![folder_id_str, format!("Folder-{}", folder_id_str[..8].to_string()), "Folder", "[]", Utc::now().to_rfc3339(), Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+
+        for (tag_name, tag_id) in &tag_map {
+            let tag_id_str = tag_id.to_string();
+            conn.execute(
+                "INSERT OR IGNORE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![tag_id_str, tag_name, "Tag", "[]", Utc::now().to_rfc3339(), Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        for (note_id, folder_id) in folder_relations {
+            let edge_id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![edge_id, note_id.to_string(), folder_id.to_string(), "Parent", 1.0, Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        for (note_id, tag_name) in tag_relations {
+            if let Some(tag_id) = tag_map.get(tag_name) {
+                let edge_id = Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![edge_id, note_id.to_string(), tag_id.to_string(), "Tag", 1.0, Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+
+        for (source_id, target_id) in reference_relations {
+            let edge_id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![edge_id, source_id.to_string(), target_id.to_string(), "Reference", 1.0, Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        drop(conn);
+        self.invalidate_centrality_cache();
+        let nodes = self.load_all_nodes()?;
+        let edges = self.load_all_edges()?;
+        Ok(GraphData { nodes, edges })
+    }
+
+    fn get_node(&self, id: &Uuid) -> Result<Option<KnowledgeNode>, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = id.to_string();
+        let mut stmt = conn.prepare("SELECT id, title, node_type, tags, created_at, updated_at FROM graph_nodes WHERE id = ?1")?;
+        let result = stmt.query_map(params![id_str], Self::row_to_node)?.next();
+        match result {
+            Some(Ok(node)) => Ok(Some(node)),
+            Some(Err(_)) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
+    fn get_neighbors(&self, id: &Uuid, depth: usize) -> Result<GraphData, GraphError> {
+        let all_nodes = self.load_all_nodes()?;
+        let all_edges = self.load_all_edges()?;
+
+        let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for edge in &all_edges {
+            adj.entry(edge.source_id).or_default().push(edge.target_id);
+            adj.entry(edge.target_id).or_default().push(edge.source_id);
+        }
+
+        let mut visited: HashSet<Uuid> = HashSet::new();
+        let mut queue: VecDeque<(Uuid, usize)> = VecDeque::new();
+        queue.push_back((*id, 0));
+        visited.insert(*id);
+
+        while let Some((current, d)) = queue.pop_front() {
+            if d < depth {
+                if let Some(neighbors) = adj.get(&current) {
+                    for &neighbor in neighbors {
+                        if visited.insert(neighbor) {
+                            queue.push_back((neighbor, d + 1));
+                        }
+                    }
+                }
+            }
+        }
+
+        let nodes: Vec<KnowledgeNode> = all_nodes.into_iter().filter(|n| visited.contains(&n.id)).collect();
+        let visited_set = &visited;
+        let edges: Vec<KnowledgeEdge> = all_edges.into_iter()
+            .filter(|e| visited_set.contains(&e.source_id) && visited_set.contains(&e.target_id))
+            .collect();
+
+        Ok(GraphData { nodes, edges })
+    }
+
+    fn get_backlinks(&self, note_id: &Uuid) -> Result<Vec<KnowledgeEdge>, GraphError> {
+        let conn = self.conn.lock().unwrap();
+        let note_id_str = note_id.to_string();
+        let mut stmt = conn.prepare("SELECT id, source_id, target_id, edge_type, weight, created_at FROM graph_edges WHERE target_id = ?1 AND edge_type = 'Reference'")?;
+        let edges = stmt.query_map(params![note_id_str], Self::row_to_edge)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(edges)
+    }
+
+    fn get_shortest_path(&self, from_id: &Uuid, to_id: &Uuid) -> Result<Vec<Uuid>, GraphError> {
+        let all_edges = self.load_all_edges()?;
+
+        let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for edge in &all_edges {
+            adj.entry(edge.source_id).or_default().push(edge.target_id);
+            adj.entry(edge.target_id).or_default().push(edge.source_id);
+        }
+
+        let mut visited: HashSet<Uuid> = HashSet::new();
+        let mut parent: HashMap<Uuid, Uuid> = HashMap::new();
+        let mut queue: VecDeque<Uuid> = VecDeque::new();
+        queue.push_back(*from_id);
+        visited.insert(*from_id);
+
+        while let Some(current) = queue.pop_front() {
+            if current == *to_id {
+                let mut path = Vec::new();
+                let mut node = *to_id;
+                while node != *from_id {
+                    path.push(node);
+                    node = *parent.get(&node).unwrap_or(&from_id);
+                }
+                path.push(*from_id);
+                path.reverse();
+                return Ok(path);
+            }
+            if let Some(neighbors) = adj.get(&current) {
+                for &neighbor in neighbors {
+                    if visited.insert(neighbor) {
+                        parent.insert(neighbor, current);
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        Ok(vec![])
+    }
+
+    fn get_related_nodes(&self, id: &Uuid, limit: usize) -> Result<Vec<KnowledgeNode>, GraphError> {
+        let all_nodes = self.load_all_nodes()?;
+        let all_edges = self.load_all_edges()?;
+
+        let node_map: HashMap<Uuid, &KnowledgeNode> = all_nodes.iter().map(|n| (n.id, n)).collect();
+        let mut adj: HashMap<Uuid, Vec<(Uuid, f64)>> = HashMap::new();
+        for edge in &all_edges {
+            adj.entry(edge.source_id).or_default().push((edge.target_id, edge.weight));
+            adj.entry(edge.target_id).or_default().push((edge.source_id, edge.weight));
+        }
+
+        let mut scores: HashMap<Uuid, f64> = HashMap::new();
+        if let Some(direct) = adj.get(id) {
+            for &(neighbor, weight) in direct {
+                *scores.entry(neighbor).or_insert(0.0) += weight;
+                if let Some(second) = adj.get(&neighbor) {
+                    for &(second_neighbor, second_weight) in second {
+                        if second_neighbor != *id {
+                            *scores.entry(second_neighbor).or_insert(0.0) += weight * second_weight * 0.5;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut scored: Vec<(Uuid, f64)> = scores.into_iter().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let result: Vec<KnowledgeNode> = scored.into_iter()
+            .take(limit)
+            .filter_map(|(nid, _)| node_map.get(&nid).map(|n| (*n).clone()))
+            .collect();
+
+        Ok(result)
+    }
+
+    fn filter_graph(&self, filter: &GraphFilter) -> Result<GraphData, GraphError> {
+        let all_nodes = self.load_all_nodes()?;
+        let all_edges = self.load_all_edges()?;
+
+        let filtered_nodes: Vec<KnowledgeNode> = all_nodes.into_iter().filter(|node| {
+            if let Some(ref node_types) = filter.node_types {
+                if !node_types.contains(&node.node_type) {
+                    return false;
+                }
+            }
+            if let Some(ref tags) = filter.tags {
+                if !tags.iter().any(|t| node.tags.contains(t)) {
+                    return false;
+                }
+            }
+            if let Some((start, end)) = &filter.date_range {
+                if node.created_at < *start || node.created_at > *end {
+                    return false;
+                }
+            }
+            if let Some(ref query) = filter.search_query {
+                if !node.title.to_lowercase().contains(&query.to_lowercase()) {
+                    return false;
+                }
+            }
+            true
+        }).collect();
+
+        let node_ids: HashSet<Uuid> = filtered_nodes.iter().map(|n| n.id).collect();
+        let filtered_edges: Vec<KnowledgeEdge> = all_edges.into_iter()
+            .filter(|e| node_ids.contains(&e.source_id) && node_ids.contains(&e.target_id))
+            .collect();
+
+        Ok(GraphData { nodes: filtered_nodes, edges: filtered_edges })
+    }
+
+    #[instrument]
+    fn calculate_centrality(&self) -> Result<Vec<CentralityResult>, GraphError> {
+        let all_nodes = self.load_all_nodes()?;
+        let all_edges = self.load_all_edges()?;
+
+        let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for edge in &all_edges {
+            adj.entry(edge.source_id).or_default().push(edge.target_id);
+            adj.entry(edge.target_id).or_default().push(edge.source_id);
+        }
+
+        let n = all_nodes.len();
+        if n == 0 {
+            return Ok(vec![]);
+        }
+
+        let mut betweenness: HashMap<Uuid, f64> = HashMap::new();
+        for node in &all_nodes {
+            betweenness.insert(node.id, 0.0);
+        }
+
+        for source in &all_nodes {
+            let mut dist: HashMap<Uuid, i64> = HashMap::new();
+            let mut sigma: HashMap<Uuid, f64> = HashMap::new();
+            let mut pred: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+            let mut stack: Vec<Uuid> = Vec::new();
+            let mut queue: VecDeque<Uuid> = VecDeque::new();
+
+            for node in &all_nodes {
+                dist.insert(node.id, -1);
+                sigma.insert(node.id, 0.0);
+                pred.insert(node.id, vec![]);
+            }
+            dist.insert(source.id, 0);
+            sigma.insert(source.id, 1.0);
+            queue.push_back(source.id);
+
+            while let Some(v) = queue.pop_front() {
+                stack.push(v);
+                if let Some(neighbors) = adj.get(&v) {
+                    for &w in neighbors {
+                        if dist[&w] < 0 {
+                            dist.insert(w, dist[&v] + 1);
+                            queue.push_back(w);
+                        }
+                        if dist[&w] == dist[&v] + 1 {
+                            *sigma.get_mut(&w).unwrap() += sigma[&v];
+                            pred.get_mut(&w).unwrap().push(v);
+                        }
+                    }
+                }
+            }
+
+            let mut delta: HashMap<Uuid, f64> = HashMap::new();
+            for node in &all_nodes {
+                delta.insert(node.id, 0.0);
+            }
+
+            while let Some(w) = stack.pop() {
+                for &v in &pred[&w] {
+                    *delta.get_mut(&v).unwrap() += (sigma[&v] / sigma[&w]) * (1.0 + delta[&w]);
+                }
+                if w != source.id {
+                    *betweenness.get_mut(&w).unwrap() += delta[&w];
+                }
+            }
+        }
+
+        let norm = if n > 2 { ((n - 1) * (n - 2)) as f64 } else { 1.0 };
+        let mut results: Vec<CentralityResult> = betweenness.into_iter()
+            .map(|(node_id, c)| CentralityResult {
+                node_id,
+                centrality: c / norm,
+            })
+            .collect();
+        results.sort_by(|a, b| b.centrality.partial_cmp(&a.centrality).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(results)
+    }
+
+    fn detect_clusters(&self) -> Result<Vec<Cluster>, GraphError> {
+        let all_nodes = self.load_all_nodes()?;
+        let all_edges = self.load_all_edges()?;
+
+        let mut adj: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+        for node in &all_nodes {
+            adj.insert(node.id, HashSet::new());
+        }
+        for edge in &all_edges {
+            adj.entry(edge.source_id).or_default().insert(edge.target_id);
+            adj.entry(edge.target_id).or_default().insert(edge.source_id);
+        }
+
+        let mut visited: HashSet<Uuid> = HashSet::new();
+        let mut clusters: Vec<Cluster> = Vec::new();
+
+        for node in &all_nodes {
+            if visited.contains(&node.id) {
+                continue;
+            }
+
+            let mut cluster_nodes: Vec<Uuid> = Vec::new();
+            let mut queue: VecDeque<Uuid> = VecDeque::new();
+            queue.push_back(node.id);
+            visited.insert(node.id);
+
+            while let Some(current) = queue.pop_front() {
+                cluster_nodes.push(current);
+                if let Some(neighbors) = adj.get(&current) {
+                    for &neighbor in neighbors {
+                        if visited.insert(neighbor) {
+                            queue.push_back(neighbor);
+                        }
+                    }
+                }
+            }
+
+            clusters.push(Cluster {
+                id: Uuid::new_v4(),
+                node_ids: cluster_nodes,
+                label: None,
+            });
+        }
+
+        Ok(clusters)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_graph() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        let folder_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![(note_id, "Test Note".to_string(), vec!["rust".to_string()], now, now)];
+        let folder_relations = vec![(note_id, folder_id)];
+        let tag_relations = vec![(note_id, "rust".to_string())];
+        let reference_relations: Vec<(Uuid, Uuid)> = vec![];
+
+        let graph = engine.build_graph(&notes, &folder_relations, &tag_relations, &reference_relations).unwrap();
+        assert!(!graph.nodes.is_empty());
+        assert!(!graph.edges.is_empty());
+    }
+
+    #[test]
+    fn test_get_node() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![(note_id, "Test Note".to_string(), vec![], now, now)];
+        let graph = engine.build_graph(&notes, &[], &[], &[]).unwrap();
+
+        let node = engine.get_node(&note_id).unwrap();
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().title, "Test Note");
+    }
+
+    #[test]
+    fn test_get_neighbors() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![
+            (id1, "Note 1".to_string(), vec![], now, now),
+            (id2, "Note 2".to_string(), vec![], now, now),
+        ];
+        let refs = vec![(id1, id2)];
+        engine.build_graph(&notes, &[], &[], &refs).unwrap();
+
+        let neighbors = engine.get_neighbors(&id1, 1).unwrap();
+        assert!(neighbors.nodes.len() >= 2);
+    }
+
+    #[test]
+    fn test_get_backlinks() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![
+            (id1, "Note 1".to_string(), vec![], now, now),
+            (id2, "Note 2".to_string(), vec![], now, now),
+        ];
+        let refs = vec![(id1, id2)];
+        engine.build_graph(&notes, &[], &[], &refs).unwrap();
+
+        let backlinks = engine.get_backlinks(&id2).unwrap();
+        assert_eq!(backlinks.len(), 1);
+    }
+
+    #[test]
+    fn test_shortest_path() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let id3 = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![
+            (id1, "Note 1".to_string(), vec![], now, now),
+            (id2, "Note 2".to_string(), vec![], now, now),
+            (id3, "Note 3".to_string(), vec![], now, now),
+        ];
+        let refs = vec![(id1, id2), (id2, id3)];
+        engine.build_graph(&notes, &[], &[], &refs).unwrap();
+
+        let path = engine.get_shortest_path(&id1, &id3).unwrap();
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0], id1);
+        assert_eq!(path[2], id3);
+    }
+
+    #[test]
+    fn test_filter_graph() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![
+            (id1, "Rust Note".to_string(), vec!["rust".to_string()], now, now),
+            (id2, "Python Note".to_string(), vec!["python".to_string()], now, now),
+        ];
+        engine.build_graph(&notes, &[], &[], &[]).unwrap();
+
+        let filter = GraphFilter {
+            node_types: Some(vec![NodeType::Note]),
+            tags: Some(vec!["rust".to_string()]),
+            date_range: None,
+            search_query: None,
+        };
+        let filtered = engine.filter_graph(&filter).unwrap();
+        assert_eq!(filtered.nodes.len(), 1);
+        assert_eq!(filtered.nodes[0].title, "Rust Note");
+    }
+
+    #[test]
+    fn test_calculate_centrality() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let id3 = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![
+            (id1, "Note 1".to_string(), vec![], now, now),
+            (id2, "Note 2".to_string(), vec![], now, now),
+            (id3, "Note 3".to_string(), vec![], now, now),
+        ];
+        let refs = vec![(id1, id2), (id2, id3)];
+        engine.build_graph(&notes, &[], &[], &refs).unwrap();
+
+        let centrality = engine.calculate_centrality().unwrap();
+        assert_eq!(centrality.len(), 3);
+        assert!(centrality[0].centrality >= centrality[1].centrality);
+    }
+
+    #[test]
+    fn test_detect_clusters() {
+        let engine = SqliteGraphEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let id3 = Uuid::new_v4();
+        let id4 = Uuid::new_v4();
+        let now = Utc::now();
+
+        let notes = vec![
+            (id1, "Note 1".to_string(), vec![], now, now),
+            (id2, "Note 2".to_string(), vec![], now, now),
+            (id3, "Note 3".to_string(), vec![], now, now),
+            (id4, "Note 4".to_string(), vec![], now, now),
+        ];
+        let refs = vec![(id1, id2), (id3, id4)];
+        engine.build_graph(&notes, &[], &[], &refs).unwrap();
+
+        let clusters = engine.detect_clusters().unwrap();
+        assert_eq!(clusters.len(), 2);
+    }
+}
