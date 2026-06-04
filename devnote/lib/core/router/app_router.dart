@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/features/editor/editor_page.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/settings/settings_page.dart';
@@ -37,6 +38,35 @@ final _shellNavigatorKey = GlobalKey<NavigatorState>();
 final appRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/notes',
+  // ============================================================
+  // 路由导航守卫 —— 借鉴 Vue Router 的 beforeEach 守卫模式
+  // 来源: https://router.vuejs.org/guide/advanced/navigation-guards.html
+  // 借鉴内容: 全局前置守卫 (global before guard)，用于权限校验和重定向
+  // ============================================================
+  redirect: (context, state) {
+    final currentPath = state.matchedLocation;
+    // 需要同步初始化完成才能访问的受保护路由
+    final protectedPaths = [
+      '/settings/sync',
+      '/sync/conflicts',
+      '/canvas',
+      '/workflow/settings',
+      '/workflow/git-history',
+    ];
+    final isProtected = protectedPaths.any((p) => currentPath.startsWith(p));
+    if (isProtected) {
+      // 检查 FFI 桥接是否可用，不可用则重定向到首页
+      try {
+        final bridge = getIt<FFIBridge>();
+        if (!bridge.isAvailable) {
+          return '/notes';
+        }
+      } catch (_) {
+        return '/notes';
+      }
+    }
+    return null; // 无需重定向
+  },
   routes: [
     ShellRoute(
       navigatorKey: _shellNavigatorKey,

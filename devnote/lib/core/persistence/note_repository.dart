@@ -17,6 +17,12 @@ abstract class NoteRepository {
   Future<NoteModel> updateNote(NoteModel note);
   Future<void> deleteNote(String id);
   Future<List<NoteModel>> listNotes(String folderId);
+  // ============================================================
+  // 分页加载 —— 借鉴 Android Paging Library 的分页设计
+  // 来源: https://developer.android.com/topic/libraries/architecture/paging
+  // 借鉴内容: 基于 limit/offset 的分页查询，避免全量加载导致内存溢出
+  // ============================================================
+  Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0});
 }
 
 class SqliteNoteRepository implements NoteRepository {
@@ -99,6 +105,29 @@ class SqliteNoteRepository implements NoteRepository {
       where: 'folder_id = ?',
       whereArgs: [folderId],
       orderBy: 'updated_at DESC',
+    );
+    return results.map((json) => NoteModel.fromJson(json)).toList();
+  }
+
+  @override
+  Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0}) async {
+    if (_useFFI) {
+      final items = await _dispatch.list(entity: 'note', filter: {
+        'folder_id': folderId,
+        'limit': limit,
+        'offset': offset,
+      });
+      return items.map((json) => NoteModel.fromJson(json)).toList();
+    }
+    developer.log('FFI not available, falling back to sqflite for listNotesPaged', level: 900);
+    final db = await _dbHelper.database;
+    final results = await db.query(
+      'notes',
+      where: 'folder_id = ?',
+      whereArgs: [folderId],
+      orderBy: 'updated_at DESC',
+      limit: limit,
+      offset: offset,
     );
     return results.map((json) => NoteModel.fromJson(json)).toList();
   }

@@ -31,6 +31,15 @@ class FileWatcherService {
   final Dispatch _dispatch = getIt<Dispatch>();
   StreamController<FileChangeEvent>? _controller;
 
+  // ============================================================
+  // 防抖机制 —— 借鉴 VS Code 的 files.watcherExclude + debounce 设计
+  // 来源: https://code.visualstudio.com/api/extension-guides/file-watcher
+  // 借鉴内容: 文件变更事件的防抖处理，避免短时间内大量事件导致性能问题
+  // ============================================================
+  Timer? _debounceTimer;
+  static const Duration _debounceDuration = Duration(milliseconds: 300);
+  final List<FileChangeEvent> _pendingEvents = [];
+
   Stream<FileChangeEvent> get onFileChange {
     _controller ??= StreamController<FileChangeEvent>.broadcast();
     return _controller!.stream;
@@ -45,6 +54,9 @@ class FileWatcherService {
   }
 
   Future<void> stopWatching() async {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _pendingEvents.clear();
     await _controller?.close();
     _controller = null;
   }
@@ -54,9 +66,29 @@ class FileWatcherService {
       final json = jsonDecode(utf8.decode(result.value));
       if (json is Map<String, dynamic>) {
         final event = FileChangeEvent.fromJson(json);
-        _controller?.add(event);
+        _addDebouncedEvent(event);
       }
     }
+  }
+
+  /// 防抖处理：短时间内多个文件变更事件合并为一次通知
+  /// 借鉴 VS Code 的 file watcher debounce 机制
+  void _addDebouncedEvent(FileChangeEvent event) {
+    _pendingEvents.add(event);
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(_debounceDuration, () {
+      if (_controller != null && !_controller!.isClosed) {
+        // 合并同类事件：相同路径只保留最后一个
+        final merged = <String, FileChangeEvent>{};
+        for (final e in _pendingEvents) {
+          merged[e.path] = e;
+        }
+        for (final e in merged.values) {
+          _controller!.add(e);
+        }
+      }
+      _pendingEvents.clear();
+    });
   }
 
   // ============================================================

@@ -89,3 +89,17 @@ class ChangeSortBy extends NotesEvent {
   @override
   List<Object?> get props => [sortBy];
 }
+
+// ============================================================
+// 分页加载事件 —— 借鉴 Android Paging Library 的分页触发机制
+// 来源: https://developer.android.com/topic/libraries/architecture/paging
+// 借鉴内容: 滚动到底部时触发 LoadMorePage，增量加载下一页数据
+// ============================================================
+class LoadMoreNotes extends NotesEvent {
+  final String folderId;
+
+  const LoadMoreNotes(this.folderId);
+
+  @override
+  List<Object?> get props => [folderId];
+}

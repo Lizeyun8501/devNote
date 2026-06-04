@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
@@ -19,7 +20,10 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     on<FilterByFolder>(_onFilterByFolder);
     on<ChangeViewMode>(_onChangeViewMode);
     on<ChangeSortBy>(_onChangeSortBy);
+    on<LoadMoreNotes>(_onLoadMoreNotes);
   }
+
+  static const int _pageSize = 20;
 
   Future<void> _onLoadNotes(LoadNotes event, Emitter<NotesState> emit) async {
     try {
@@ -152,5 +156,29 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
         sorted.sort((a, b) => a.title.compareTo(b.title));
     }
     return sorted;
+  }
+
+  /// 分页加载更多笔记 —— 借鉴 Android Paging Library 的增量加载模式
+  Future<void> _onLoadMoreNotes(LoadMoreNotes event, Emitter<NotesState> emit) async {
+    final currentState = state;
+    if (currentState is NotesLoadedData && currentState.hasMore) {
+      try {
+        final nextPage = currentState.currentPage + 1;
+        final moreNotes = await _noteRepository.listNotesPaged(
+          event.folderId,
+          limit: _pageSize,
+          offset: nextPage * _pageSize,
+        );
+        final allNotes = List<NoteModel>.from(currentState.notes)..addAll(moreNotes);
+        emit(currentState.copyWith(
+          notes: _sortNotes(allNotes, currentState.sortBy),
+          hasMore: moreNotes.length >= _pageSize,
+          currentPage: nextPage,
+        ));
+      } catch (e) {
+        // 加载更多失败时保持当前状态，不切换到错误状态
+        developer.log('Failed to load more notes: $e', level: 900);
+      }
+    }
   }
 }

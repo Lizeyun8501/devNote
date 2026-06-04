@@ -20,6 +20,13 @@ final class NotesLoaded extends NotesState {
   final String? filterFolderId;
   final NoteSortBy sortBy;
   final NoteViewMode viewMode;
+  // ============================================================
+  // 分页状态 —— 借鉴 Android Paging Library 的分页状态管理
+  // 来源: https://developer.android.com/topic/libraries/architecture/paging
+  // 借鉴内容: hasMore 标记是否还有更多数据，currentPage 追踪当前页码
+  // ============================================================
+  final bool hasMore;
+  final int currentPage;
 
   const NotesLoaded({
     required this.notes,
@@ -29,6 +36,8 @@ final class NotesLoaded extends NotesState {
     this.filterFolderId,
     this.sortBy = NoteSortBy.updatedAt,
     this.viewMode = NoteViewMode.list,
+    this.hasMore = true,
+    this.currentPage = 0,
   });
 
   NotesLoaded copyWith({
@@ -39,6 +48,8 @@ final class NotesLoaded extends NotesState {
     String? filterFolderId,
     NoteSortBy? sortBy,
     NoteViewMode? viewMode,
+    bool? hasMore,
+    int? currentPage,
   }) {
     return NotesLoaded(
       notes: notes ?? this.notes,
@@ -48,6 +59,8 @@ final class NotesLoaded extends NotesState {
       filterFolderId: filterFolderId ?? this.filterFolderId,
       sortBy: sortBy ?? this.sortBy,
       viewMode: viewMode ?? this.viewMode,
+      hasMore: hasMore ?? this.hasMore,
+      currentPage: currentPage ?? this.currentPage,
     );
   }
 }

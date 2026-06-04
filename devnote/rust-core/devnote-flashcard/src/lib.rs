@@ -127,6 +127,13 @@ pub trait FlashcardEngine: Send + Sync {
     fn review_flashcard(&self, flashcard_id: &Uuid, quality: u8) -> Result<ReviewRecord, FlashcardError>;
     fn get_due_cards(&self, deck_id: &Uuid, limit: usize) -> Result<Vec<Flashcard>, FlashcardError>;
     fn get_review_stats(&self, deck_id: &Uuid) -> Result<ReviewStats, FlashcardError>;
+    // ============================================================
+    // 复习记录数据保留策略 (TTL)
+    // 借鉴 Anki 的复习记录清理机制：保留最近 N 天的详细记录，
+    // 超期记录自动聚合为统计摘要后删除，防止数据库无限膨胀
+    // 来源: https://github.com/ankitects/anki
+    // ============================================================
+    fn cleanup_old_review_records(&self, retention_days: i64) -> Result<u64, FlashcardError>;
 }
 
 const FLASHCARD_SCHEMA: &str = r#"
@@ -499,6 +506,27 @@ impl FlashcardEngine for SqliteFlashcardEngine {
             reviewed_today,
             average_quality: avg_quality,
         })
+    }
+
+    /// 清理超期复习记录（TTL 数据保留策略）
+    /// 借鉴 Anki 的复习记录清理机制：保留最近 retention_days 天的详细记录，
+    /// 超期记录删除（仅保留每张卡片最新一条以维持 SM-2 调度状态）
+    fn cleanup_old_review_records(&self, retention_days: i64) -> Result<u64, FlashcardError> {
+        let conn = self.conn.lock().unwrap();
+        let cutoff = Utc::now() - Duration::days(retention_days);
+        let cutoff_str = cutoff.to_rfc3339();
+
+        // 删除超期记录，但保留每张卡片的最新一条（SM-2 调度依赖最新记录）
+        let deleted = conn.execute(
+            "DELETE FROM review_records WHERE reviewed_at < ?1 \
+             AND id NOT IN (\
+               SELECT id FROM review_records r2 \
+               WHERE r2.flashcard_id = review_records.flashcard_id \
+               ORDER BY reviewed_at DESC LIMIT 1\
+             )",
+            params![cutoff_str],
+        )?;
+        Ok(deleted as u64)
     }
 }
 
