@@ -1,3 +1,27 @@
+//! 性能工具集合 —— 提供对象池、缓存、任务调度与差异计算等基础设施
+//!
+//! ## 借鉴的开源项目
+//! - **jemalloc** ([GitHub](https://github.com/jemalloc/jemalloc)): 借鉴其内存管理思想
+//!   - 通过 `ObjectPool` / `BufferPool` 复用预先分配的内存块，减少 malloc / free 次数
+//!   - LRU 缓存（`LruCache`）在内存压力下优先淘汰冷数据，类似 jemalloc 的
+//!     "active / dirty / decay" 分代回收策略
+//!   - 块缓存 `BlockCache` 使用 `DashMap` 维护 note -> block_id 的二级索引，
+//!     借鉴 jemalloc "arena 化" 的低锁争用思路
+//! - **mimalloc** ([GitHub](https://github.com/microsoft/mimalloc)): 借鉴其性能优化策略
+//!   - 固定大小对象池（`BufferPool`）减少分配器元数据开销，对齐 mimalloc 的 "size class"
+//!   - 任务调度器（`TaskScheduler` + `BackgroundWorker`）基于 `crossbeam-channel` 的
+//!     无锁 MPMC 队列，避免 mimalloc 文档中提到的"高并发下锁争用"问题
+//!   - 编译模板缓存（`CompiledTemplateCache`）按 `source_hash` 失效，避免重复 JIT/编译
+//!
+//! ## 实现说明
+//! - `ObjectPool<T>` 是泛型对象池，可用于线程、数据库连接、缓冲区等任意可重用资源。
+//! - `LruCache` 基于 `lru` crate，提供 `get` / `put` / `remove` / `len` 基础操作。
+//! - `SqliteConnectionPool` 借鉴 "主写多读" 模型，多个只读连接 + 单个写连接 + 轮询调度。
+//! - `DiffCalculator` / `IncrementalProcessor` 提供笔记增量同步所需的差异计算能力。
+//!
+//! 来源说明：以上实现均以 Rust 标准库与开源 crate 为基础，对 jemalloc / mimalloc 的设计
+//! 思想做"接口级借鉴"，并非嵌入其运行时。
+
 use devnote_observe::{debug};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

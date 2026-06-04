@@ -1,3 +1,25 @@
+//! WebSocket 客户端 —— 支持全双工通信、自动重连与心跳保活
+//!
+//! ## 借鉴的开源项目
+//! - **tokio 异步运行时** ([官网](https://tokio.rs/)): 借鉴其异步执行模型
+//!   - 内部 `tokio::spawn` 启动独立的读循环与保活循环，对应 tokio 的 "任务（task）" 概念
+//!   - 使用 `tokio::sync::oneshot` 通知后台循环优雅退出（shutdown 模式）
+//!   - 借 `tokio::time::sleep` 实现保活（keepalive）定时器与重连退避
+//! - **libp2p 网络协议** ([官网](https://libp2p.io/)): 借鉴其网络协议设计
+//!   - **状态机**：`Disconnected / Connecting / Connected / Reconnecting` 借鉴 libp2p
+//!     `NetworkBehaviour` 中的连接生命周期模型
+//!   - **指数退避重连**：`retry_delay * 2^attempt`，参考 libp2p 的 dial backoff
+//!   - **Ping/Pong 保活**：与 libp2p 的 `Ping` protocol 行为一致
+//!   - **读写分离**：将底层 `WebSocketStream` 拆分为 `Sink` 与 `Read` 两半，
+//!     对应 libp2p 的 substream 思路
+//!
+//! ## 实现说明
+//! - `DevNoteWebSocketClient` 是一个引用计数共享（`Arc`）的可克隆客户端。
+//! - `connect()` 建立连接后立即启动读循环 + 保活循环。
+//! - `disconnect()` 通过 oneshot 信道通知两个后台循环退出。
+//! - `reconnect()` 是指数退避的有限次重连。
+//! - 借鉴 Anytype 的 WebSocket 全双工通信模式：读循环+保活循环+自动重连
+
 use devnote_observe::{instrument};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;

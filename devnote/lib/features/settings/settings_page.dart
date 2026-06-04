@@ -1,7 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
 import 'package:devnote/features/sync/p2p/p2p_settings_page.dart';
+
+const String _kDefaultEditModeKey = 'settings.default_edit_mode';
+const Map<String, String> _kEditModeLabels = {
+  'rich': '富文本',
+  'plain': '纯文本',
+  'markdown': 'Markdown',
+};
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -14,6 +24,80 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _darkMode = false;
   bool _autoSave = true;
   double _fontSize = 14.0;
+  String _defaultEditMode = 'rich';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDefaultEditMode();
+  }
+
+  Future<void> _loadDefaultEditMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_kDefaultEditModeKey);
+    if (stored == null) return;
+    if (!mounted) return;
+    setState(() {
+      _defaultEditMode = stored;
+    });
+  }
+
+  Future<void> _pickDefaultEditMode() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: const Text('选择默认编辑模式'),
+          children: _kEditModeLabels.entries
+              .map((entry) => RadioListTile<String>(
+                    title: Text(entry.value),
+                    value: entry.key,
+                    groupValue: _defaultEditMode,
+                    onChanged: (value) => Navigator.of(context).pop(value),
+                  ))
+              .toList(),
+        );
+      },
+    );
+    if (selected == null || selected == _defaultEditMode) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kDefaultEditModeKey, selected);
+    if (!mounted) return;
+    setState(() {
+      _defaultEditMode = selected;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('默认编辑模式已更新为 ${_kEditModeLabels[selected]}')),
+    );
+  }
+
+  Future<void> _confirmClearCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清除缓存'),
+        content: const Text('确定要清除本地缓存数据吗？这不会影响已保存的笔记。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    getIt<CacheManager>().clearAll();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('缓存已清除')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -67,9 +151,9 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             ListTile(
               title: const Text('默认编辑模式'),
-              subtitle: const Text('富文本'),
+              subtitle: Text(_kEditModeLabels[_defaultEditMode] ?? '富文本'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {},
+              onTap: _pickDefaultEditMode,
             ),
           ]),
           _SettingsSection(title: '数据', children: [
@@ -146,13 +230,15 @@ class _SettingsPageState extends State<SettingsPage> {
               title: const Text('数据备份'),
               subtitle: const Text('导出笔记数据'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {},
+              onTap: () {
+                context.push('/settings/import-export');
+              },
             ),
             ListTile(
               title: const Text('清除缓存'),
               subtitle: const Text('清除本地缓存数据'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () {},
+              onTap: _confirmClearCache,
             ),
           ]),
           _SettingsSection(title: '关于', children: [

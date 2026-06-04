@@ -1,3 +1,24 @@
+//! 笔记导入/导出格式支持 —— Markdown / HTML / Obsidian / Siyuan 等
+//!
+//! ## 借鉴的开源项目
+//! - **pandoc** ([官网](https://pandoc.org/)): 借鉴其"通用文档模型 + 多种 reader/writer"的多格式转换设计
+//!   - 定义 `FormatImporter` / `FormatExporter` 两类 trait，模仿 pandoc Reader/Writer 的多态模型
+//!   - `ImportFormat` / `ExportFormat` 枚举对应 pandoc 的 input/output format 概念
+//!   - 内部使用中间 `NoteData` 数据结构（标题/内容/标签/附件/时间戳），对应 pandoc 的 `Pandoc` AST
+//! - **pulldown-cmark** ([GitHub](https://github.com/raphlinus/pulldown-cmark)): 借鉴其 Markdown 编解码思路
+//!   - YAML / TOML Front Matter 解析（`parse_front_matter`）参照 pulldown-cmark 的 metadata block 解析
+//!   - 标题 / 列表 / 引用 / 代码块等基础行级结构解析（`HtmlExporter::markdown_to_html`）借鉴
+//!     pulldown-cmark 的事件驱动解析思路，本实现简化为"按行状态机"版本
+//!   - `extract_attachments` 使用与 CommonMark 兼容的 `![alt](url)` 图片语法
+//!
+//! ## 实现说明
+//! - `MarkdownImporter` / `ObsidianImporter` 是两种典型 Markdown 源：前者只识别 front matter，
+//!   后者还会将 `[[wikilink]]` 转换为标准 Markdown 链接。
+//! - `MarkdownExporter` / `HtmlExporter` 是输出端实现：导出时按 `folder_path` 重建目录结构。
+//! - 借鉴思源 / Obsidian 等笔记生态的目录约定，附件统一放在 `attachments/` 子目录中。
+//! - `parse_yaml_simple` 是极简的 YAML 解析实现（仅支持 `key: value` 与 `[a, b, c]` 数组），
+//!   避免引入完整 YAML 依赖；在生产环境可替换为 `serde_yaml`。
+
 use devnote_observe::{instrument, warn};
 use std::fs;
 use std::path::Path;

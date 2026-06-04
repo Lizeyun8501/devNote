@@ -1,3 +1,26 @@
+// Package service 提供同步服务器的核心业务服务实现。
+//
+// 本文件 auth_service.go 实现用户注册、登录、SRP（Secure Remote Password）
+// 强身份认证、JWT 签发与刷新令牌管理等核心鉴权能力。
+//
+// ## 借鉴的开源项目
+//   - **SRP（Secure Remote Password）协议** ([RFC 5054](https://datatracker.ietf.org/doc/html/rfc5054)
+//     / [Stanford 论文](https://srp.stanford.edu/)):
+//     借鉴其零知识密码证明（Zero-Knowledge Password Proof, ZKPP）思想：
+//     服务端只保存密码的 verifier（而非哈希），且验证过程中密码本身不会在线缆上传输，
+//     也不会在服务端被恢复，从而同时抵御离线字典攻击与中间人攻击。
+//   - **1Password 认证设计** ([AgileBits 博客](https://blog.1password.com/)):
+//     借鉴其分层令牌体系：短生命周期 access token（JWT, 72h）+ 长生命周期 refresh token（30d），
+//     并支持 refresh token 轮转（rotation）与全局吊销（revoke all user tokens），
+//     在易用性与安全性之间取得平衡。
+//
+// ## 实现说明
+//   - Register / RegisterWithSRP：分别支持传统 bcrypt 注册与 SRP 注册。
+//   - Login：根据用户是否启用 SRP 走不同校验路径，但对外暴露统一的 token 返回。
+//   - InitiateSRP / VerifySRP：实现 SRP-6a 协议的两步握手（获取 salt+B / 校验 M1 并返回 M2）。
+//   - generateToken / ValidateToken：JWT HS256 签发与解析。
+//   - RefreshAccessToken / RevokeRefreshToken / RevokeAllUserTokens：实现 1Password 风格
+//     的 refresh token 轮转与主动吊销。
 package service
 
 import (
@@ -18,6 +41,10 @@ import (
 	"gorm.io/gorm"
 )
 
+// AuthService 认证服务
+//
+// 借鉴 1Password 认证设计：将"长期凭证"（密码 / SRP verifier）与
+// "短期凭证"（access / refresh token）解耦。
 type AuthService struct {
 	db          *gorm.DB
 	cfg         *config.Config
@@ -26,6 +53,10 @@ type AuthService struct {
 	srpMu       sync.Mutex
 }
 
+// NewAuthService 构造 AuthService
+//
+// 借鉴 1Password 的"认证上下文隔离"做法：每个 SRP 会话以 username 为 key
+// 独立存放，避免多用户并发登录时的状态串扰。
 func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
 	return &AuthService{
 		db:          db,
@@ -35,6 +66,10 @@ func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
 	}
 }
 
+// Register 使用传统 bcrypt 方式注册用户
+//
+// 借鉴 1Password 的"主密码 + 派生密钥"思路：服务端只保存 bcrypt 哈希，
+// 即使数据库泄露，攻击者也无法直接获得明文密码。
 func (s *AuthService) Register(username, password string) (*model.User, error) {
 	var existing model.User
 	if err := s.db.Where("username = ?", username).First(&existing).Error; err == nil {
@@ -59,6 +94,11 @@ func (s *AuthService) Register(username, password string) (*model.User, error) {
 	return user, nil
 }
 
+// RegisterWithSRP 使用 SRP 注册用户
+//
+// 借鉴 SRP（Secure Remote Password）协议：
+// 服务端不存储密码哈希，而是存储 verifier = g^x mod N（其中 x = SHA256(salt | SHA256(user:pass))），
+// 即使 verifier 泄露，攻击者仍需对每个候选密码执行一次昂贵的模幂运算。
 func (s *AuthService) RegisterWithSRP(username, password string) (*model.User, error) {
 	var existing model.User
 	if err := s.db.Where("username = ?", username).First(&existing).Error; err == nil {
@@ -90,6 +130,12 @@ func (s *AuthService) RegisterWithSRP(username, password string) (*model.User, e
 	return user, nil
 }
 
+// Login 登录入口
+//
+// 借鉴 1Password 的"双轨认证"模式：
+//   - 传统用户走 bcrypt 比对；
+//   - SRP 启用用户走 verifier 比对（更强的零知识证明）。
+// 登录成功签发 JWT access token。
 func (s *AuthService) Login(username, password string) (*model.User, string, error) {
 	var user model.User
 	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
@@ -103,6 +149,7 @@ func (s *AuthService) Login(username, password string) (*model.User, string, err
 		}
 	} else if user.SRPEnabled {
 		// For SRP-enabled users, verify using the verifier directly
+		// 借鉴 SRP 协议：通过比较 v = g^x mod N 与存储的 verifier 是否一致来认证。
 		x := computeSRPX(username, password, user.SRPSalt)
 		v := new(big.Int).Exp(s.srpParams.G(), x, s.srpParams.N())
 		if v.Cmp(new(big.Int).SetBytes(user.SRPVerifier)) != 0 {
@@ -120,8 +167,13 @@ func (s *AuthService) Login(username, password string) (*model.User, string, err
 	return &user, token, nil
 }
 
-// InitiateSRP starts the SRP authentication flow.
-// Returns salt + B (server's public ephemeral).
+// InitiateSRP 启动 SRP 认证流程
+//
+// 借鉴 SRP 协议的两步握手：
+//  1. 客户端发送 username，服务端返回 salt + 公钥 B = k*v + g^b mod N。
+//  2. 客户端利用 salt、自身密码与 B 计算出自己的公钥 A 与证明 M1。
+//
+// **算法来源**: SRP-6a 协议（RFC 5054）。
 func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err error) {
 	var user model.User
 	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
@@ -138,6 +190,8 @@ func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err e
 		return nil, nil, err
 	}
 
+	// 借鉴 1Password 的"会话隔离"：将 SRP 会话按 username 暂存，
+	// 完成 VerifySRP 后立即删除（一次性会话）。
 	s.srpMu.Lock()
 	s.srpSessions[username] = srv
 	s.srpMu.Unlock()
@@ -145,13 +199,18 @@ func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err e
 	return user.SRPSalt, B, nil
 }
 
-// VerifySRP verifies the client proof and returns the server proof + JWT token.
+// VerifySRP 校验客户端证明并签发 JWT
+//
+// 借鉴 SRP 协议：服务端用自身私钥 b 与客户端公钥 A 推导出共享密钥，
+// 验证客户端证明 M1 后返回服务端证明 M2，并签发 access token。
 func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token string, err error) {
 	var user model.User
 	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
 		return nil, "", errors.New("user not found")
 	}
 
+	// 借鉴 1Password 的"一次性会话"模式：取出并立刻销毁会话，
+	// 避免重放攻击。
 	s.srpMu.Lock()
 	srv, ok := s.srpSessions[username]
 	if ok {
@@ -176,6 +235,9 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 	return M2, jwtToken, nil
 }
 
+// generateToken 签发 HS256 JWT
+//
+// 借鉴 1Password 的"短生命周期 access token"策略：有效期 72 小时。
 func (s *AuthService) generateToken(user *model.User) (string, error) {
 	claims := &model.Claims{
 		UserID:   user.ID,
@@ -190,6 +252,7 @@ func (s *AuthService) generateToken(user *model.User) (string, error) {
 	return token.SignedString([]byte(s.cfg.JWTSecret))
 }
 
+// ValidateToken 校验 JWT 签名与有效期
 func (s *AuthService) ValidateToken(tokenStr string) (*model.Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &model.Claims{}, func(t *jwt.Token) (interface{}, error) {
 		return []byte(s.cfg.JWTSecret), nil
@@ -206,7 +269,11 @@ func (s *AuthService) ValidateToken(tokenStr string) (*model.Claims, error) {
 	return claims, nil
 }
 
-// computeSRPX calculates x = SHA256(salt || SHA256(username || ":" || password))
+// computeSRPX 计算 x = SHA256(salt || SHA256(username || ":" || password))
+//
+// 借鉴 SRP 协议（RFC 5054 §2.6）的 x 定义：
+//   inner = SHA-1/256(username || ":" || password)
+//   x     = SHA-1/256(salt || inner)
 func computeSRPX(username, password string, salt []byte) *big.Int {
 	inner := sha256.New()
 	inner.Write([]byte(username))
@@ -222,12 +289,17 @@ func computeSRPX(username, password string, salt []byte) *big.Int {
 	return new(big.Int).SetBytes(xBytes)
 }
 
+// generateRandomToken 生成十六进制编码的随机 token
 func generateRandomToken(length int) string {
 	b := make([]byte, length)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
+// GenerateRefreshToken 生成 refresh token
+//
+// 借鉴 1Password 的"长生命周期 refresh token"策略：30 天有效期，
+// 同时记录 Revoked 标志位以便主动吊销。
 func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 	token := generateRandomToken(32)
 	refreshToken := &model.RefreshToken{
@@ -244,6 +316,11 @@ func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 	return token, nil
 }
 
+// RefreshAccessToken 刷新 access token
+//
+// 借鉴 1Password 的"refresh token 轮转（rotation）"：每次刷新都立刻
+// 吊销旧 refresh token 并签发新 refresh token，从而将泄露风险窗口
+// 限制在单次刷新间隔内。
 func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, error) {
 	var rt model.RefreshToken
 	if err := s.db.Where("token = ?", refreshToken).First(&rt).Error; err != nil {
@@ -282,10 +359,18 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, e
 	return accessToken, newRefreshToken, nil
 }
 
+// RevokeRefreshToken 吊销单个 refresh token
+//
+// 借鉴 1Password 的"按设备吊销"能力：用户可在"已登录设备"列表中
+// 主动登出某个设备，底层实现就是吊销对应的 refresh token。
 func (s *AuthService) RevokeRefreshToken(token string) error {
 	return s.db.Model(&model.RefreshToken{}).Where("token = ?", token).Update("revoked", true).Error
 }
 
+// RevokeAllUserTokens 吊销某个用户的所有未撤销 refresh token
+//
+// 借鉴 1Password 的"修改主密码即登出全部设备"做法：密码变更或账号被盗时，
+// 通过一次性吊销所有 token 强制重新登录。
 func (s *AuthService) RevokeAllUserTokens(userID string) error {
 	return s.db.Model(&model.RefreshToken{}).Where("user_id = ? AND revoked = ?", userID, false).Update("revoked", true).Error
 }

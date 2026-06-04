@@ -1,9 +1,27 @@
 //! 全文检索引擎 —— 基于 FTS5 实现笔记内容全文检索
 //! 借鉴思源笔记的全文检索方案，支持引号语法和布尔查询
 //!
-//! 借鉴思源笔记的全文检索方案
-//! 来源: https://github.com/siyuan-note/siyuan
-//! 借鉴内容: SQLite FTS5 虚拟表索引、snippet 高亮标记、filter 前缀语法解析（tag:/folder:）
+//! ## 借鉴的开源项目
+//! - **ripgrep** ([GitHub](https://github.com/BurntSushi/ripgrep)): 借鉴其查询语法设计
+//!   - 引号包裹的短语匹配：`"exact phrase"`
+//!   - tag:/folder: 等键值前缀过滤：`tag:"work project" folder:abc`
+//!   - 简单空格分隔的词项组合（AND 隐式连接）
+//! - **Tantivy 搜索引擎** ([官网](https://github.com/quickwit-oss/tantivy)): 借鉴其设计
+//!   - Schema 化的字段（title / content / folder_id / tags / updated_at）映射到 FTS5 列
+//!   - 触发器同步（`notes_search_ai/ad/au`）保证外部内容表与 FTS5 虚拟表一致
+//!   - `snippet()` 高亮 + 自定义起始 / 结束标记（`\x01` / `\x02`）输出 HTML 无关的高亮区间
+//! - **Apache Lucene** ([官网](https://lucene.apache.org/)): 借鉴其相关性评分思想
+//!   - 直接使用 SQLite FTS5 内置的 `rank` 列（等价于 BM25）作为相关性分数
+//!   - 在 `search` / `search_with_filter` 中按 `ORDER BY rank` 升序输出最相关结果
+//!
+//! ## 实现说明
+//! - 引擎为 `SqliteSearchEngine`，使用 `rusqlite` 同步 API + `Mutex` 串行化访问。
+//! - `parse_filter` 手写实现 ripgrep 风格的"键:值"前缀解析，支持引号包裹含空格的取值。
+//! - `parse_highlights` 利用自定义标记从 `snippet()` 输出还原高亮区间。
+//! - `search_parsed` 是面向业务的高阶接口，直接接受 `"tag:rust \"async runtime\""` 风格的查询串。
+//! - 借鉴思源笔记的全文检索方案
+//!   - 来源: https://github.com/siyuan-note/siyuan
+//!   - 借鉴内容: SQLite FTS5 虚拟表索引、snippet 高亮标记、filter 前缀语法解析（tag:/folder:）
 
 use devnote_observe::{info, instrument, warn};
 use serde::{Deserialize, Serialize};

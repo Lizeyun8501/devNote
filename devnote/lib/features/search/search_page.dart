@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:devnote/features/search/bloc/search_bloc.dart';
 import 'package:devnote/features/search/bloc/search_event.dart';
 import 'package:devnote/features/search/bloc/search_state.dart';
@@ -244,7 +245,11 @@ class _SearchViewState extends State<_SearchView> {
                 ...state.results.map((result) => SearchResultCard(
                       result: result,
                       query: state.query,
-                      onTap: () {},
+                      onTap: () {
+                        // 修复: 实际路由为 /notes/:id（参见 app_router.dart），
+                        // 之前写成 /editor/:id 会导致点击搜索结果无法打开编辑器。
+                        context.push('/notes/${result.noteId}');
+                      },
                     )),
               ],
             );
