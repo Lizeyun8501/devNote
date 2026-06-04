@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:uuid/uuid.dart';
+
+import 'package:devnote/core/persistence/database_helper.dart';
 
 class ObjectTypeModel {
   final String id;
@@ -99,103 +103,288 @@ class ObjectModel {
 }
 
 class ObjectService {
+  final DatabaseHelper _dbHelper;
   final _uuid = const Uuid();
-  final Map<String, ObjectTypeModel> _objectTypes = {};
-  final Map<String, ObjectModel> _objects = {};
-  final List<ObjectRelationEntry> _objectRelations = [];
+
+  ObjectService([DatabaseHelper? dbHelper]) : _dbHelper = dbHelper ?? DatabaseHelper();
 
   Future<ObjectTypeModel> createObjectType(String name, String icon, List<ObjectPropertyModel> properties) async {
     final id = _uuid.v4();
-    final ot = ObjectTypeModel(id: id, name: name, icon: icon, properties: properties);
-    _objectTypes[id] = ot;
-    return ot;
+    final now = DateTime.now();
+    final db = await _dbHelper.database;
+    await db.transaction((txn) async {
+      await txn.insert('object_types', {
+        'id': id,
+        'name': name,
+        'icon': icon,
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      });
+      for (var i = 0; i < properties.length; i++) {
+        final p = properties[i];
+        await txn.insert('object_properties', {
+          'id': p.id.isEmpty ? _uuid.v4() : p.id,
+          'type_id': id,
+          'name': p.name,
+          'property_type': p.propertyType,
+          'format': jsonEncode(p.format),
+          'position': i,
+        });
+      }
+    });
+    return ObjectTypeModel(
+      id: id,
+      name: name,
+      icon: icon,
+      properties: properties,
+    );
   }
 
   Future<ObjectTypeModel> updateObjectType(String typeId, String name, String icon) async {
-    final ot = _objectTypes[typeId];
-    if (ot == null) throw Exception('Object type not found');
-    final updated = ot.copyWith(name: name, icon: icon);
-    _objectTypes[typeId] = updated;
-    return updated;
+    final db = await _dbHelper.database;
+    final results = await db.query('object_types', where: 'id = ?', whereArgs: [typeId]);
+    if (results.isEmpty) throw Exception('Object type not found');
+    final now = DateTime.now();
+    await db.update(
+      'object_types',
+      {
+        'name': name,
+        'icon': icon,
+        'updated_at': now.toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [typeId],
+    );
+    return _loadObjectType(typeId);
   }
 
   Future<void> deleteObjectType(String typeId) async {
-    _objectTypes.remove(typeId);
+    final db = await _dbHelper.database;
+    await db.delete('object_types', where: 'id = ?', whereArgs: [typeId]);
   }
 
   Future<List<ObjectTypeModel>> listObjectTypes() async {
-    return _objectTypes.values.toList();
+    final db = await _dbHelper.database;
+    final results = await db.query('object_types', orderBy: 'name');
+    final types = <ObjectTypeModel>[];
+    for (final row in results) {
+      types.add(await _hydrateObjectType(row));
+    }
+    return types;
   }
 
   Future<ObjectModel> createObject(String typeId, Map<String, dynamic> properties) async {
-    if (!_objectTypes.containsKey(typeId)) throw Exception('Object type not found');
+    final db = await _dbHelper.database;
+    final typeRows = await db.query('object_types', where: 'id = ?', whereArgs: [typeId], limit: 1);
+    if (typeRows.isEmpty) throw Exception('Object type not found');
     final id = _uuid.v4();
     final now = DateTime.now();
-    final obj = ObjectModel(id: id, objectTypeId: typeId, properties: properties, createdAt: now, updatedAt: now);
-    _objects[id] = obj;
-    return obj;
+    await db.insert('objects', {
+      'id': id,
+      'type_id': typeId,
+      'properties': jsonEncode(properties),
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    return ObjectModel(
+      id: id,
+      objectTypeId: typeId,
+      properties: properties,
+      createdAt: now,
+      updatedAt: now,
+    );
   }
 
   Future<ObjectModel> updateObject(String objectId, Map<String, dynamic> properties) async {
-    final obj = _objects[objectId];
-    if (obj == null) throw Exception('Object not found');
-    final updated = obj.copyWith(properties: properties, updatedAt: DateTime.now());
-    _objects[objectId] = updated;
-    return updated;
+    final db = await _dbHelper.database;
+    final rows = await db.query('objects', where: 'id = ?', whereArgs: [objectId], limit: 1);
+    if (rows.isEmpty) throw Exception('Object not found');
+    final now = DateTime.now();
+    await db.update(
+      'objects',
+      {
+        'properties': jsonEncode(properties),
+        'updated_at': now.toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [objectId],
+    );
+    return _loadObject(objectId);
   }
 
   Future<void> deleteObject(String objectId) async {
-    _objects.remove(objectId);
-    _objectRelations.removeWhere((r) => r.sourceId == objectId || r.targetId == objectId);
+    final db = await _dbHelper.database;
+    await db.delete('objects', where: 'id = ?', whereArgs: [objectId]);
   }
 
   Future<ObjectModel> getObject(String objectId) async {
-    final obj = _objects[objectId];
+    final obj = await _loadObject(objectId);
     if (obj == null) throw Exception('Object not found');
     return obj;
   }
 
   Future<List<ObjectModel>> listObjects({String? typeId}) async {
-    if (typeId != null) {
-      return _objects.values.where((o) => o.objectTypeId == typeId).toList();
+    final db = await _dbHelper.database;
+    final rows = await db.query(
+      'objects',
+      where: typeId != null ? 'type_id = ?' : null,
+      whereArgs: typeId != null ? [typeId] : null,
+      orderBy: 'created_at',
+    );
+    final result = <ObjectModel>[];
+    for (final row in rows) {
+      result.add(_hydrateObject(row));
     }
-    return _objects.values.toList();
+    return result;
   }
 
   Future<void> addRelation(String sourceId, String targetId, String relationId) async {
-    _objectRelations.add(ObjectRelationEntry(sourceId: sourceId, targetId: targetId, relationId: relationId));
+    final db = await _dbHelper.database;
+    await db.insert('object_relations', {
+      'id': _uuid.v4(),
+      'source_id': sourceId,
+      'target_id': targetId,
+      'relation_id': relationId,
+    });
   }
 
   Future<void> removeRelation(String sourceId, String targetId, String relationId) async {
-    _objectRelations.removeWhere(
-      (r) => r.sourceId == sourceId && r.targetId == targetId && r.relationId == relationId,
+    final db = await _dbHelper.database;
+    await db.delete(
+      'object_relations',
+      where: 'source_id = ? AND target_id = ? AND relation_id = ?',
+      whereArgs: [sourceId, targetId, relationId],
     );
   }
 
   Future<List<ObjectModel>> getRelatedObjects(String objectId, {String? relationId}) async {
-    final targetIds = _objectRelations
-        .where((r) => r.sourceId == objectId && (relationId == null || r.relationId == relationId))
-        .map((r) => r.targetId)
-        .toList();
-    return targetIds.map((id) => _objects[id]).whereType<ObjectModel>().toList();
+    final db = await _dbHelper.database;
+    final rows = await db.query(
+      'object_relations',
+      columns: ['target_id'],
+      where: relationId != null
+          ? 'source_id = ? AND relation_id = ?'
+          : 'source_id = ?',
+      whereArgs: relationId != null ? [objectId, relationId] : [objectId],
+    );
+    final targetIds = rows.map((r) => r['target_id'] as String).toList();
+    if (targetIds.isEmpty) return [];
+    final objRows = await db.query('objects', where: 'id IN (${List.filled(targetIds.length, '?').join(',')})', whereArgs: targetIds);
+    return objRows.map(_hydrateObject).toList();
   }
 
   Future<ObjectModel> promoteBlockToObject(String noteId, String blockId, String objectTypeId) async {
-    if (!_objectTypes.containsKey(objectTypeId)) throw Exception('Object type not found');
+    final db = await _dbHelper.database;
+    final typeRows = await db.query('object_types', where: 'id = ?', whereArgs: [objectTypeId], limit: 1);
+    if (typeRows.isEmpty) throw Exception('Object type not found');
     final id = _uuid.v4();
     final now = DateTime.now();
-    final obj = ObjectModel(
+    await db.insert('objects', {
+      'id': id,
+      'type_id': objectTypeId,
+      'properties': jsonEncode({
+        'source_note_id': noteId,
+        'source_block_id': blockId,
+      }),
+      'created_at': now.toIso8601String(),
+      'updated_at': now.toIso8601String(),
+    });
+    return ObjectModel(
       id: id,
       objectTypeId: objectTypeId,
       properties: {'source_note_id': noteId, 'source_block_id': blockId},
       createdAt: now,
       updatedAt: now,
     );
-    _objects[id] = obj;
-    return obj;
   }
 
-  List<ObjectRelationEntry> get allRelations => List.unmodifiable(_objectRelations);
+  Future<List<ObjectRelationEntry>> allRelations() async {
+    final db = await _dbHelper.database;
+    final rows = await db.query('object_relations');
+    return rows
+        .map((r) => ObjectRelationEntry(
+              sourceId: r['source_id'] as String,
+              targetId: r['target_id'] as String,
+              relationId: r['relation_id'] as String,
+            ))
+        .toList();
+  }
+
+  Future<ObjectTypeModel> _loadObjectType(String typeId) async {
+    final db = await _dbHelper.database;
+    final rows = await db.query('object_types', where: 'id = ?', whereArgs: [typeId], limit: 1);
+    if (rows.isEmpty) throw Exception('Object type not found');
+    return _hydrateObjectType(rows.first);
+  }
+
+  Future<ObjectTypeModel> _hydrateObjectType(Map<String, Object?> row) async {
+    final db = await _dbHelper.database;
+    final typeId = row['id'] as String;
+    final propRows = await db.query(
+      'object_properties',
+      where: 'type_id = ?',
+      whereArgs: [typeId],
+      orderBy: 'position',
+    );
+    final relRows = await db.query(
+      'object_relations_definitions',
+      where: 'type_id = ?',
+      whereArgs: [typeId],
+    );
+    return ObjectTypeModel(
+      id: typeId,
+      name: row['name'] as String,
+      icon: (row['icon'] as String?) ?? '',
+      properties: propRows.map(_hydrateProperty).toList(),
+      relations: relRows.map(_hydrateRelation).toList(),
+    );
+  }
+
+  ObjectPropertyModel _hydrateProperty(Map<String, Object?> row) {
+    final formatRaw = row['format'] as String? ?? '{}';
+    final decoded = jsonDecode(formatRaw);
+    final format = decoded is Map<String, dynamic>
+        ? decoded
+        : <String, dynamic>{};
+    return ObjectPropertyModel(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      propertyType: row['property_type'] as String,
+      format: format,
+    );
+  }
+
+  ObjectRelationModel _hydrateRelation(Map<String, Object?> row) {
+    return ObjectRelationModel(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      relationType: row['relation_type'] as String,
+      sourceType: row['source_type'] as String,
+      targetType: row['target_type'] as String,
+    );
+  }
+
+  Future<ObjectModel?> _loadObject(String objectId) async {
+    final db = await _dbHelper.database;
+    final rows = await db.query('objects', where: 'id = ?', whereArgs: [objectId], limit: 1);
+    if (rows.isEmpty) return null;
+    return _hydrateObject(rows.first);
+  }
+
+  ObjectModel _hydrateObject(Map<String, Object?> row) {
+    final propertiesRaw = row['properties'] as String? ?? '{}';
+    final decoded = jsonDecode(propertiesRaw);
+    final properties = decoded is Map<String, dynamic>
+        ? decoded
+        : <String, dynamic>{};
+    return ObjectModel(
+      id: row['id'] as String,
+      objectTypeId: row['type_id'] as String,
+      properties: properties,
+      createdAt: DateTime.parse(row['created_at'] as String),
+      updatedAt: DateTime.parse(row['updated_at'] as String),
+    );
+  }
 }
 
 class ObjectRelationEntry {

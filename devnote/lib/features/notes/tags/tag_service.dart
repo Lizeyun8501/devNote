@@ -30,6 +30,6 @@ class TagService {
   }
 
   Future<List<TagModel>> getAllTags() async {
-    return [];
+    return _tagRepository.getAllTags();
   }
 }

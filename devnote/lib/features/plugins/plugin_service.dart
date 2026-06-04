@@ -243,11 +243,132 @@ class PluginService {
   List<PluginEntry> get enabledPlugins =>
       _plugins.values.where((e) => e.state == PluginLifecycleState.enabled).toList();
 
+  // 修改原因：原实现返回空列表，导致插件市场页面无数据展示。
+  // 现提供一组跨分类的模拟插件，用于本地开发与界面联调。
   Future<List<MarketplacePlugin>> fetchMarketplacePlugins({
     String? category,
     String? query,
   }) async {
     await Future.delayed(const Duration(milliseconds: 100));
-    return <MarketplacePlugin>[];
+    // 构建 6 个跨分类的模拟插件，覆盖 productivity / theme / tool /
+    // integration / export / visualization 六大类，便于 UI 验证。
+    final mockPlugins = <MarketplacePlugin>[
+      MarketplacePlugin(
+        manifest: PluginManifest(
+          id: 'com.devnote.markdown-formatter',
+          name: 'Markdown Formatter',
+          version: '1.2.0',
+          description: '一键整理与美化 Markdown 文档结构，自动规范化标题层级。',
+          author: 'DevNote Team',
+          permissions: [PluginPermission.readNotes, PluginPermission.writeNotes],
+          apiVersion: '1.0.0',
+        ),
+        category: 'productivity',
+        rating: 4.7,
+        downloadCount: 12850,
+      ),
+      MarketplacePlugin(
+        manifest: PluginManifest(
+          id: 'com.devnote.solarized-theme',
+          name: 'Solarized Theme',
+          version: '2.0.1',
+          description: '经典 Solarized 配色方案，为编辑器与代码块提供护眼主题。',
+          author: 'Ethan Schoonover',
+          permissions: [PluginPermission.accessUI],
+          apiVersion: '1.0.0',
+        ),
+        category: 'theme',
+        rating: 4.9,
+        downloadCount: 25630,
+      ),
+      MarketplacePlugin(
+        manifest: PluginManifest(
+          id: 'com.devnote.code-runner',
+          name: 'Code Runner',
+          version: '3.1.4',
+          description: '在笔记中直接运行多种编程语言代码块并显示结果。',
+          author: 'DevNote Labs',
+          permissions: [
+            PluginPermission.readNotes,
+            PluginPermission.accessUI,
+            PluginPermission.accessFileSystem,
+          ],
+          apiVersion: '1.0.0',
+        ),
+        category: 'tool',
+        rating: 4.5,
+        downloadCount: 9870,
+      ),
+      MarketplacePlugin(
+        manifest: PluginManifest(
+          id: 'com.devnote.github-sync',
+          name: 'GitHub Sync',
+          version: '1.5.0',
+          description: '将笔记与 GitHub 仓库双向同步，支持 Gist 与完整仓库模式。',
+          author: 'Open Source Contributors',
+          permissions: [
+            PluginPermission.readNotes,
+            PluginPermission.writeNotes,
+            PluginPermission.accessNetwork,
+            PluginPermission.accessFileSystem,
+          ],
+          apiVersion: '1.0.0',
+        ),
+        category: 'integration',
+        rating: 4.3,
+        downloadCount: 7320,
+      ),
+      MarketplacePlugin(
+        manifest: PluginManifest(
+          id: 'com.devnote.pdf-export-pro',
+          name: 'PDF Export Pro',
+          version: '2.3.2',
+          description: '将笔记导出为高质量 PDF，支持自定义模板、页眉页脚与目录。',
+          author: 'Export Studio',
+          permissions: [
+            PluginPermission.readNotes,
+            PluginPermission.accessFileSystem,
+          ],
+          apiVersion: '1.0.0',
+        ),
+        category: 'export',
+        rating: 4.6,
+        downloadCount: 18420,
+      ),
+      MarketplacePlugin(
+        manifest: PluginManifest(
+          id: 'com.devnote.mermaid-enhanced',
+          name: 'Mermaid Enhanced',
+          version: '1.0.7',
+          description: '增强的 Mermaid 图表渲染，支持更多图表类型与交互。',
+          author: 'Visualization Community',
+          permissions: [
+            PluginPermission.readNotes,
+            PluginPermission.accessUI,
+            PluginPermission.accessCanvas,
+          ],
+          apiVersion: '1.0.0',
+        ),
+        category: 'visualization',
+        rating: 4.4,
+        downloadCount: 5610,
+      ),
+    ];
+
+    Iterable<MarketplacePlugin> result = mockPlugins;
+    if (category != null && category.isNotEmpty) {
+      // 按分类过滤（不区分大小写）
+      result = result.where((p) => p.category.toLowerCase() == category.toLowerCase());
+    }
+    if (query != null && query.isNotEmpty) {
+      final lowerQuery = query.toLowerCase();
+      // 按名称或描述模糊匹配
+      result = result.where(
+        (p) =>
+            p.manifest.name.toLowerCase().contains(lowerQuery) ||
+            p.manifest.description.toLowerCase().contains(lowerQuery),
+      );
+    }
+    return result.toList();
   }
 }

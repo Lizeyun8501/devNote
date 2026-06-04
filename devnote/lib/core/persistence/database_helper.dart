@@ -6,7 +6,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 3;
+  static const _databaseVersion = 4;
 
   static Database? _database;
 
@@ -148,6 +148,60 @@ class DatabaseHelper {
         FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
       )
     ''');
+
+    // Object tables (v4)
+    await db.execute('''
+      CREATE TABLE object_types (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        icon TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE object_properties (
+        id TEXT PRIMARY KEY,
+        type_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        property_type TEXT NOT NULL,
+        format TEXT NOT NULL DEFAULT '{}',
+        position INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE object_relations_definitions (
+        id TEXT PRIMARY KEY,
+        type_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE objects (
+        id TEXT PRIMARY KEY,
+        type_id TEXT NOT NULL,
+        properties TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE object_relations (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        relation_id TEXT NOT NULL,
+        FOREIGN KEY (source_id) REFERENCES objects(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_id) REFERENCES objects(id) ON DELETE CASCADE,
+        FOREIGN KEY (relation_id) REFERENCES object_relations_definitions(id) ON DELETE CASCADE
+      )
+    ''');
   }
 
   // 迁移回滚保障 —— 借鉴 SQLite 官方迁移最佳实践
@@ -243,6 +297,61 @@ class DatabaseHelper {
                 sorts TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+              )
+            ''');
+            break;
+          case 4:
+            // v4: 新增 object 相关表，持久化 ObjectService 的内存数据
+            await db.execute('''
+              CREATE TABLE object_types (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                icon TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE object_properties (
+                id TEXT PRIMARY KEY,
+                type_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                property_type TEXT NOT NULL,
+                format TEXT NOT NULL DEFAULT '{}',
+                position INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE object_relations_definitions (
+                id TEXT PRIMARY KEY,
+                type_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE objects (
+                id TEXT PRIMARY KEY,
+                type_id TEXT NOT NULL,
+                properties TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE object_relations (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relation_id TEXT NOT NULL,
+                FOREIGN KEY (source_id) REFERENCES objects(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_id) REFERENCES objects(id) ON DELETE CASCADE,
+                FOREIGN KEY (relation_id) REFERENCES object_relations_definitions(id) ON DELETE CASCADE
               )
             ''');
             break;

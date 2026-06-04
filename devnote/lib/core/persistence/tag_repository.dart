@@ -16,6 +16,7 @@ abstract class TagRepository {
   Future<void> addTagToNote(String noteId, String tagId);
   Future<void> removeTagFromNote(String noteId, String tagId);
   Future<List<TagModel>> getTagsForNote(String noteId);
+  Future<List<TagModel>> getAllTags();
 }
 
 class SqliteTagRepository implements TagRepository {
@@ -86,6 +87,18 @@ class SqliteTagRepository implements TagRepository {
       WHERE nt.note_id = ?
       ORDER BY t.name
     ''', [noteId]);
+    return results.map((json) => TagModel.fromJson(json)).toList();
+  }
+
+  @override
+  Future<List<TagModel>> getAllTags() async {
+    if (_useFFI) {
+      final items = await _dispatch.list(entity: 'tag');
+      return items.map((json) => TagModel.fromJson(json)).toList();
+    }
+    developer.log('FFI not available, falling back to sqflite for getAllTags', level: 900);
+    final db = await _dbHelper.database;
+    final results = await db.query('tags', orderBy: 'name');
     return results.map((json) => TagModel.fromJson(json)).toList();
   }
 }

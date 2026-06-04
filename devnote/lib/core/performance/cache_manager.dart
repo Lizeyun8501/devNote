@@ -22,10 +22,27 @@ class CacheManager {
   final Map<CacheType, int> _maxSizes = {};
   final Map<CacheType, Duration> _ttls = {};
 
+  // 修改原因：原实现使用 Duration.zero 作为默认 TTL，导致 put 后立即过期，
+  // 缓存形同虚设。现按缓存类型提供合理的默认 TTL：
+  //  - noteContent  30 分钟（笔记内容相对稳定）
+  //  - image        1 小时  （图片数据较大，避免频繁重新加载）
+  //  - searchResult 5 分钟  （搜索结果需要保持相对新鲜）
   void configure(CacheType type, {int maxSize = 100, Duration? ttl}) {
     _caches[type] = LinkedHashMap<String, CacheEntry<dynamic>>();
     _maxSizes[type] = maxSize;
-    _ttls[type] = ttl ?? Duration.zero;
+    _ttls[type] = ttl ?? _defaultTtlFor(type);
+  }
+
+  // 按缓存类型返回合理的默认 TTL。
+  static Duration _defaultTtlFor(CacheType type) {
+    switch (type) {
+      case CacheType.noteContent:
+        return const Duration(minutes: 30);
+      case CacheType.image:
+        return const Duration(hours: 1);
+      case CacheType.searchResult:
+        return const Duration(minutes: 5);
+    }
   }
 
   T? get<T>(CacheType type, String key) {

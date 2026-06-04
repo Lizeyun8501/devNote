@@ -24,12 +24,16 @@ class _ObjectGraphPageState extends State<ObjectGraphPage> {
     _loadData();
   }
 
+  List<ObjectRelationEntry> _relations = [];
+
   Future<void> _loadData() async {
     final types = await _service.listObjectTypes();
     final objects = await _service.listObjects(typeId: _selectedTypeId);
+    final relations = await _service.allRelations();
     setState(() {
       _objectTypes = types;
       _objects = objects;
+      _relations = relations;
     });
   }
 
@@ -67,7 +71,7 @@ class _ObjectGraphPageState extends State<ObjectGraphPage> {
         child: CustomPaint(
           painter: _GraphPainter(
             objects: _objects,
-            relations: _service.allRelations,
+            relations: _relations,
             objectTypes: _objectTypes,
             offset: _offset,
             scale: _scale,
