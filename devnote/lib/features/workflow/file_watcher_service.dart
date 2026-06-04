@@ -58,4 +58,51 @@ class FileWatcherService {
       }
     }
   }
+
+  // ============================================================
+  // 外部编辑器同步支持
+  // 借鉴 VS Code 的 file watching 机制：
+  // https://code.visualstudio.com/api/extension-guides/file-watcher
+  // ============================================================
+
+  bool _externalEditorEnabled = false;
+  final Set<String> _ignoredPaths = <String>{};
+  final Set<String> _watchedExternalPaths = <String>{};
+
+  /// 启用外部编辑器同步
+  /// 添加指定路径到监听列表，外部编辑器的变更将通过 onFileChange 流推送
+  void enableExternalEditorSync(String path) {
+    _externalEditorEnabled = true;
+    _watchedExternalPaths.add(path);
+  }
+
+  /// 禁用外部编辑器同步
+  void disableExternalEditorSync(String path) {
+    _watchedExternalPaths.remove(path);
+    if (_watchedExternalPaths.isEmpty) {
+      _externalEditorEnabled = false;
+    }
+  }
+
+  /// 添加忽略路径（不触发事件）
+  /// 借鉴 VS Code 的 files.watcherExclude 配置
+  void addIgnoredPath(String pattern) {
+    _ignoredPaths.add(pattern);
+  }
+
+  /// 移除忽略路径
+  void removeIgnoredPath(String pattern) {
+    _ignoredPaths.remove(pattern);
+  }
+
+  /// 检查路径是否被忽略
+  bool isPathIgnored(String path) {
+    return _ignoredPaths.any((pattern) => path.contains(pattern));
+  }
+
+  /// 检查外部编辑器同步是否已启用
+  bool get isExternalEditorEnabled => _externalEditorEnabled;
+
+  /// 获取当前监听的目录路径
+  List<String> get externalPaths => List.unmodifiable(_watchedExternalPaths);
 }

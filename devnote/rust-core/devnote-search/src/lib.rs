@@ -439,3 +439,7 @@ impl SqliteSearchEngine {
         self.search_with_filter(&text, &filter, limit, offset)
     }
 }
+
+// Tantivy 全文搜索引擎模块（Task 7.2）
+// 借鉴 Tantivy 和 Lucene 的倒排索引设计，提供比 SQLite FTS5 更高的检索性能
+pub mod tantivy_search;

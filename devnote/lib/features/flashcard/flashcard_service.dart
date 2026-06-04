@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
@@ -280,5 +281,79 @@ class FlashcardService {
       }
     }
     throw Exception('Failed to get review stats');
+  }
+
+  // ============================================================
+  // 批量生成闪卡功能
+  // 借鉴 Anki 的批量导入机制：https://docs.ankiweb.net/importing/textfiles.html
+  // ============================================================
+
+  /// 从笔记内容批量生成闪卡
+  /// 识别笔记中的 Q: / A: 格式，自动创建问答卡片
+  /// 识别 Cloze 格式 {{c1::答案}}，自动创建填空卡片
+  Future<List<FlashcardModel>> batchGenerateFromNote(String noteId) async {
+    final payload = jsonEncode({'note_id': noteId});
+    final result = await _dispatch.asyncRequest(
+      'FlashcardEvent.BatchGenerateFromNote',
+      payload: utf8.encode(payload),
+    );
+    if (result is Success<Uint8List, FlowyInternalError>) {
+      final json = jsonDecode(utf8.decode(result.value));
+      if (json is List) {
+        return json
+            .map((e) => FlashcardModel.fromJson(e as Map<String, dynamic>))
+            .toList();
+      }
+    }
+    return [];
+  }
+
+  /// 批量导入闪卡（从文本文件）
+  /// 支持 CSV / TSV 格式：正面\t背面\t标签1,标签2
+  /// 借鉴 Anki 的文本文件导入格式
+  Future<int> batchImportCards(String filePath, {String delimiter = '\t'}) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw Exception('文件不存在: $filePath');
+    }
+
+    final content = await file.readAsString();
+    final lines = content.split('\n').where((line) => line.trim().isNotEmpty).toList();
+
+    int importedCount = 0;
+    for (final line in lines) {
+      final parts = line.split(delimiter);
+      if (parts.length < 2) continue;
+
+      final front = parts[0].trim();
+      final back = parts[1].trim();
+      if (front.isEmpty || back.isEmpty) continue;
+
+      try {
+        // 自动识别卡片类型：包含 Cloze 标记则创建 cloze 卡片
+        final cardType = _detectCardType(front, back);
+        await createFlashcard(
+          deckId: 'default',
+          cardType: cardType,
+          front: front,
+          back: back,
+        );
+        importedCount++;
+      } catch (e) {
+        // 跳过导入失败的行，继续处理下一行
+        continue;
+      }
+    }
+
+    return importedCount;
+  }
+
+  /// 检测卡片类型
+  CardType _detectCardType(String front, String back) {
+    // 检测 Cloze 格式: {{c1::答案}}
+    if (front.contains(RegExp(r'\{\{c\d+::')) || back.contains(RegExp(r'\{\{c\d+::'))) {
+      return CardType.cloze;
+    }
+    return CardType.basic;
   }
 }

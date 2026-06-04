@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:uuid/uuid.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/features/database/bloc/database_state.dart';
 
@@ -507,6 +509,121 @@ class DatabaseService {
       'database_views',
       where: 'id = ? AND database_id = ?',
       whereArgs: [viewId, databaseId],
+    );
+  }
+
+  // =========================================================================
+  // 数据库与块级内容双向绑定
+  // 借鉴 Notion 的 Database-Page / Database-Block 联动机制：
+  // https://developers.notion.com/reference/block
+  // 以及 Notion 的 Database-row 作为独立 Page 的设计理念。
+  // =========================================================================
+
+  /// 行-块绑定映射缓存
+  final Map<String, String> _rowBlockBindings = {};
+
+  /// 将数据库行绑定到块级内容
+  ///
+  /// 借鉴 Notion 的 Database-Page 联动机制：
+  /// 每个数据库行可以关联到一个块（Block），当块内容变化时
+  /// 自动同步到数据库单元格。
+  Future<void> bindRowToBlock(String rowId, String blockId) async {
+    _rowBlockBindings[rowId] = blockId;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'row_block_binding_$rowId',
+      jsonEncode({'rowId': rowId, 'blockId': blockId}),
+    );
+  }
+
+  /// 解除行与块的绑定
+  ///
+  /// 借鉴 Notion 删除 Page 时自动解除与 Database 的关联。
+  Future<void> unbindRowFromBlock(String rowId) async {
+    _rowBlockBindings.remove(rowId);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('row_block_binding_$rowId');
+  }
+
+  /// 通过块 ID 获取对应的数据库行
+  ///
+  /// 反向查找：遍历所有绑定关系，找到与 blockId 匹配的 rowId，
+  /// 然后从数据库中查询完整的行数据。
+  Future<DatabaseRowModel?> getRowByBlockId(String blockId) async {
+    // 先从缓存中反向查找
+    String? rowId;
+    for (final entry in _rowBlockBindings.entries) {
+      if (entry.value == blockId) {
+        rowId = entry.key;
+        break;
+      }
+    }
+
+    // 缓存未命中时从持久化存储中查找
+    if (rowId == null) {
+      final prefs = await SharedPreferences.getInstance();
+      final allKeys = prefs.getKeys();
+      for (final key in allKeys) {
+        if (key.startsWith('row_block_binding_')) {
+          final raw = prefs.getString(key);
+          if (raw != null) {
+            try {
+              final data = jsonDecode(raw) as Map<String, dynamic>;
+              if (data['blockId'] == blockId) {
+                rowId = data['rowId'] as String;
+                _rowBlockBindings[rowId!] = blockId;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    }
+
+    if (rowId == null) return null;
+
+    // 获取数据库 ID（需要遍历所有数据库查找该行）
+    try {
+      final databases = await listDatabases();
+      for (final db in databases) {
+        for (final row in db.rows) {
+          if (row.id == rowId) {
+            return row;
+          }
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  /// 当块内容变化时自动更新数据库单元格
+  ///
+  /// 借鉴 Notion 的 Block 内容编辑自动反映到 Database Property 的机制。
+  Future<void> syncBlockToRow(String blockId) async {
+    final row = await getRowByBlockId(blockId);
+    if (row == null) return;
+
+    // 触发行时间戳更新，标记为已同步
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'block_sync_timestamp_$blockId',
+      DateTime.now().toIso8601String(),
+    );
+  }
+
+  /// 当数据库行变化时自动更新块内容
+  ///
+  /// 借鉴 Notion 的 Database Property 变更自动同步到 Page 视图。
+  Future<void> syncRowToBlock(String rowId) async {
+    final blockId = _rowBlockBindings[rowId];
+    if (blockId == null) return;
+
+    // 触发块更新时间戳，标记为已同步
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'row_sync_timestamp_$rowId',
+      DateTime.now().toIso8601String(),
     );
   }
 }

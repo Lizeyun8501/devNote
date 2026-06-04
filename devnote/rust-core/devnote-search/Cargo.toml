@@ -14,3 +14,5 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
+# tantivy 全文搜索引擎，借鉴 Lucene 倒排索引设计
+tantivy = "0.22"

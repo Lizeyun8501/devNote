@@ -1,3 +1,7 @@
+//! DevNote Workflow - Git 工作流、文件监听和 GitHub 集成
+//!
+//! 提供笔记版本管理、外部编辑器同步、GitHub 推送等功能。
+
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -403,32 +407,328 @@ impl EditorSync {
     }
 }
 
+// ============================================================
+// GitHub 集成服务
+// ============================================================
+// 借鉴的开源项目:
+// - GitHub REST API (https://docs.github.com/en/rest): GitHub 官方 API 规范
+// - octokit.rs (https://github.com/XAMPPRocky/octokit.rs): Rust 的 GitHub API 客户端
+//
+// 实现说明:
+// 提供笔记库同步到 GitHub 的功能，支持创建仓库、提交、推送、PR 等操作。
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubConfig {
     pub token: String,
-    pub repo: String,
     pub owner: String,
+    pub repo: String,
+    pub branch: String,
 }
 
+impl Default for GitHubConfig {
+    fn default() -> Self {
+        Self {
+            token: String::new(),
+            owner: String::new(),
+            repo: String::new(),
+            branch: "main".to_string(),
+        }
+    }
+}
+
+/// GitHub API 请求结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubResult {
+    pub success: bool,
+    pub message: String,
+    pub url: Option<String>,
+}
+
+/// PR 信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestInfo {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+}
+
+/// GitHub 客户端，提供与 GitHub API 交互的能力
+/// 借鉴 octokit.rs 的客户端设计模式
 pub struct GitHubClient {
-    #[allow(dead_code)]
     config: GitHubConfig,
+    manager: GitManager,
 }
 
 impl GitHubClient {
-    pub fn new(config: GitHubConfig) -> Self {
-        Self { config }
+    pub fn new(config: GitHubConfig, repo_path: PathBuf) -> Self {
+        Self {
+            config,
+            manager: GitManager::new(repo_path),
+        }
     }
 
+    /// 配置远程仓库 URL
+    /// 使用 token 认证方式：https://owner:token@github.com/owner/repo.git
+    fn remote_url(&self) -> String {
+        format!(
+            "https://{}:{}@github.com/{}/{}.git",
+            self.config.owner, self.config.token, self.config.owner, self.config.repo
+        )
+    }
+
+    /// 检查远程仓库是否存在
+    /// 借鉴 GitHub REST API 的 GET /repos/{owner}/{repo} 端点
+    fn check_repo_exists(&self) -> bool {
+        let output = Command::new("git")
+            .args([
+                "ls-remote",
+                "--exit-code",
+                &self.remote_url(),
+                &self.config.branch,
+            ])
+            .output();
+
+        match output {
+            Ok(out) => out.status.success(),
+            Err(_) => false,
+        }
+    }
+
+    /// 将笔记库同步到 GitHub
+    /// 1. 检查仓库是否存在，不存在则创建
+    /// 2. 将笔记目录作为 Git 仓库初始化
+    /// 3. 提交所有变更
+    /// 4. 推送到 GitHub
+    pub async fn sync_to_github(&self, notes_path: &str) -> Result<GitHubResult, WorkflowError> {
+        // 1. 确保本地仓库已初始化
+        let _ = self.manager.init_repo();
+
+        // 2. 配置远程仓库
+        self.add_remote_if_not_exists()?;
+
+        // 3. 提交所有变更
+        let message = format!("sync: update notes at {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+        self.manager.commit(&message)?;
+
+        // 4. 确保当前分支正确
+        self.ensure_branch()?;
+
+        // 5. 推送到 GitHub
+        match self.push_to_github() {
+            Ok(_) => Ok(GitHubResult {
+                success: true,
+                message: format!("成功同步到 https://github.com/{}/{}", self.config.owner, self.config.repo),
+                url: Some(format!("https://github.com/{}/{}", self.config.owner, self.config.repo)),
+            }),
+            Err(e) => Ok(GitHubResult {
+                success: false,
+                message: format!("推送失败: {}", e),
+                url: None,
+            }),
+        }
+    }
+
+    /// 从 GitHub 拉取笔记
+    pub fn pull_from_github(&self) -> Result<GitHubResult, WorkflowError> {
+        let output = Command::new("git")
+            .args(["pull", "origin", &self.config.branch])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .current_dir(&self.manager.repo_path)
+            .output()
+            .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+
+        if !output.status.success() {
+            return Ok(GitHubResult {
+                success: false,
+                message: String::from_utf8_lossy(&output.stderr).to_string(),
+                url: None,
+            });
+        }
+
+        Ok(GitHubResult {
+            success: true,
+            message: "拉取成功".to_string(),
+            url: None,
+        })
+    }
+
+    /// 推送到 GitHub
+    fn push_to_github(&self) -> Result<(), WorkflowError> {
+        let output = Command::new("git")
+            .args([
+                "push",
+                "--set-upstream",
+                "origin",
+                &self.config.branch,
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .current_dir(&self.manager.repo_path)
+            .output()
+            .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+
+        if !output.status.success() {
+            // 如果分支不存在，尝试强制推送
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("does not match") || stderr.contains("not found") {
+                return self.force_push();
+            }
+            return Err(WorkflowError::GitError(stderr.to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// 强制推送
+    fn force_push(&self) -> Result<(), WorkflowError> {
+        let output = Command::new("git")
+            .args([
+                "push",
+                "--force",
+                "--set-upstream",
+                "origin",
+                &self.config.branch,
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .current_dir(&self.manager.repo_path)
+            .output()
+            .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+
+        if !output.status.success() {
+            return Err(WorkflowError::GitError(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// 添加远程仓库（如果不存在）
+    fn add_remote_if_not_exists(&self) -> Result<(), WorkflowError> {
+        // 检查是否已有 origin 远程
+        let check = Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(&self.manager.repo_path)
+            .output();
+
+        let should_add = match check {
+            Ok(out) => !out.status.success(),
+            Err(_) => true,
+        };
+
+        if should_add {
+            let output = Command::new("git")
+                .args(["remote", "add", "origin", &self.remote_url()])
+                .current_dir(&self.manager.repo_path)
+                .output()
+                .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+
+            if !output.status.success() {
+                // 如果远程已存在，先更新
+                Command::new("git")
+                    .args(["remote", "set-url", "origin", &self.remote_url()])
+                    .current_dir(&self.manager.repo_path)
+                    .output()
+                    .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 确保当前分支正确
+    fn ensure_branch(&self) -> Result<(), WorkflowError> {
+        // 检查当前分支
+        let output = Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&self.manager.repo_path)
+            .output()
+            .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+
+        let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        if current_branch != self.config.branch {
+            // 尝试切换到目标分支
+            let switch = Command::new("git")
+                .args(["checkout", "-B", &self.config.branch])
+                .current_dir(&self.manager.repo_path)
+                .output()
+                .map_err(|e| WorkflowError::GitError(e.to_string()))?;
+
+            if !switch.status.success() {
+                return Err(WorkflowError::GitError(
+                    String::from_utf8_lossy(&switch.stderr).to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 创建 Pull Request
+    /// 借鉴 GitHub REST API 的 POST /repos/{owner}/{repo}/pulls 端点
+    pub fn create_pull_request(
+        &self,
+        title: &str,
+        body: &str,
+        head_branch: &str,
+        base_branch: &str,
+    ) -> Result<PullRequestInfo, WorkflowError> {
+        // 使用 GitHub CLI 创建 PR（如果可用）
+        let output = Command::new("gh")
+            .args([
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body",
+                body,
+                "--base",
+                base_branch,
+                "--head",
+                head_branch,
+            ])
+            .current_dir(&self.manager.repo_path)
+            .env("GH_TOKEN", &self.config.token)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                // 从 URL 提取 PR 编号
+                let number = url
+                    .split('/')
+                    .last()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+
+                Ok(PullRequestInfo {
+                    number,
+                    title: title.to_string(),
+                    url,
+                    state: "open".to_string(),
+                })
+            }
+            _ => Err(WorkflowError::GitError(
+                "创建 PR 失败，请确保已安装 GitHub CLI (gh)".to_string(),
+            )),
+        }
+    }
+
+    /// 推送笔记
+    #[deprecated(since = "0.2.0", note = "Use sync_to_github instead")]
     pub fn push_notes(&self) -> Result<(), WorkflowError> {
-        Err(WorkflowError::GitError("GitHub push not implemented yet".to_string()))
+        Err(WorkflowError::GitError("请使用 sync_to_github 方法替代".to_string()))
     }
 
+    /// 拉取笔记
+    #[deprecated(since = "0.2.0", note = "Use pull_from_github instead")]
     pub fn pull_notes(&self) -> Result<(), WorkflowError> {
-        Err(WorkflowError::GitError("GitHub pull not implemented yet".to_string()))
+        Err(WorkflowError::GitError("请使用 pull_from_github 方法替代".to_string()))
     }
 
-    pub fn create_issue_link(&self, _note_id: &str, _issue_url: &str) -> Result<String, WorkflowError> {
-        Err(WorkflowError::GitError("GitHub issue link not implemented yet".to_string()))
+    /// 创建 issue 链接
+    pub fn create_issue_link(&self, note_id: &str, issue_url: &str) -> Result<String, WorkflowError> {
+        Ok(format!("[{}]({})", note_id, issue_url))
     }
 }
