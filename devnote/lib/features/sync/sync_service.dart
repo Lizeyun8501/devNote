@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -5,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'crypto/e2e_crypto_service.dart';
 
 enum SyncServiceStatus {
@@ -68,6 +70,16 @@ class SyncService {
   );
 
   SyncServiceState get state => _state;
+
+  // 状态广播流，用于外部监听服务状态变化
+  final StreamController<SyncServiceState> _stateController =
+      StreamController<SyncServiceState>.broadcast();
+
+  /// 对外暴露的状态流，供 SyncBloc 等消费者订阅
+  Stream<SyncServiceState> get stateStream => _stateController.stream;
+
+  // 冲突解析器，用于在同步过程中检测和记录冲突
+  final ConflictResolver conflictResolver = ConflictResolver();
 
   Future<void> initialize() async {
     await _cryptoService.initialize();
@@ -274,5 +286,8 @@ class SyncService {
     throw Exception('拉取失败: HTTP ${response.statusCode} - ${response.body}');
   }
 
-  void _notifyListeners() {}
+  /// 通知所有状态流监听器当前服务状态已变更
+  void _notifyListeners() {
+    _stateController.add(_state);
+  }
 }

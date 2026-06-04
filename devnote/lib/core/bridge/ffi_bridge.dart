@@ -1,3 +1,20 @@
+/// FFIBridge - Dart 与 Rust 之间的 FFI 桥接层
+///
+/// ## 当前实现
+/// 采用自研的 DynamicLibrary + NativeFunction 绑定方案，
+/// 借鉴 AppFlowy 的 FFI 实现模式。
+///
+/// ## 推荐的开源替代方案
+/// - **flutter_rust_bridge** ([GitHub](https://github.com/fzyzcjy/flutter_rust_bridge)):
+///   自动从 Rust 代码生成 Dart FFI 绑定代码，减少手写绑定的错误，
+///   支持 async/await、serde 序列化等高级特性。
+///   推荐在未来迁移时使用，可显著降低维护成本。
+///
+/// ## 实现说明
+/// 当前采用自研方案是因为项目已有一定量的 FFI 代码，
+/// 迁移 flutter_rust_bridge 需要重写所有绑定层。
+/// 但在新功能开发时建议优先使用 flutter_rust_bridge。
+
 // FFI 桥接层 —— Dart 端通过 C ABI 调用 Rust 函数
 // 借鉴 AppFlowy 的 FFI 绑定实现模式
 //

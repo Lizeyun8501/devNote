@@ -1,5 +1,16 @@
 /// 知识图谱服务（Knowledge Graph Service）
 ///
+/// ## 当前实现
+/// 自研图遍历算法，借鉴 Neo4j 的关系计算和 d3-force 的力导向布局。
+///
+/// ## 推荐的开源替代方案
+/// - **graphview** ([pub.dev](https://pub.dev/packages/graphview)):
+///   Flutter 原生图可视化库，支持有向图/无向图/树形图渲染，
+///   内置 Sugiyama 布局算法，性能优于自研方案。
+///   推荐在未来迁移时使用，可替换当前的 CustomPaint 渲染方案。
+/// - **force_graph** ([pub.dev](https://pub.dev/packages/force_graph)):
+///   基于 d3-force 的力导向图可视化，支持动态节点和交互。
+///
 /// 该服务为 DevNote 提供知识图谱的构建、查询与分析能力，包括节点/边遍历、
 /// 邻居发现、最短路径、相关节点推荐、子图过滤、中心性计算与社区聚类等。
 ///

@@ -1,3 +1,16 @@
+/// CacheManager - 应用缓存管理器
+///
+/// ## 当前实现
+/// 自研内存缓存实现，支持 TTL 过期、LRU 淘汰、磁盘持久化。
+///
+/// ## 推荐的开源替代方案
+/// - **flutter_cache_manager** ([pub.dev](https://pub.dev/packages/flutter_cache_manager)):
+///   成熟的文件缓存管理库，支持 HTTP 缓存、图片缓存、自定义缓存策略，
+///   内置 SQLite 存储，自动处理缓存过期和淘汰。
+///   推荐在未来迁移时使用，特别是图片缓存场景。
+/// - **flutter_cache_manager** 的替代方案还包括 **cached_network_image**，
+///   专门用于网络图片缓存。
+
 import 'dart:collection';
 
 enum CacheType { noteContent, image, searchResult }

@@ -21,6 +21,7 @@
 library;
 
 import 'dart:async';
+import 'dart:developer' as developer;
 
 /// 启动管理器
 ///
@@ -85,14 +86,26 @@ class StartupManager {
   /// - 延迟任务 `unawaited` 后台执行，释放主线程。
   Future<void> runStartup() async {
     _startupTime = DateTime.now();
+    final totalStopwatch = Stopwatch()..start();
 
     for (final task in _criticalTasks) {
+      final taskStopwatch = Stopwatch()..start();
       await _runTask(task);
+      taskStopwatch.stop();
+      // P1-2 修复: 记录关键启动任务耗时，便于性能基线建立与回归监控
+      // 借鉴 Facebook 移动应用启动优化：对关键启动任务计时
+      developer.log('关键任务 [${task.name}] 耗时: ${taskStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
     }
 
     for (final task in _normalTasks) {
+      final taskStopwatch = Stopwatch()..start();
       await _runTask(task);
+      taskStopwatch.stop();
+      developer.log('普通任务 [${task.name}] 耗时: ${taskStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
     }
+
+    totalStopwatch.stop();
+    developer.log('应用启动总耗时: ${totalStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
 
     unawaited(_runLazyTasks());
   }

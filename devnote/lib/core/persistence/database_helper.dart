@@ -238,16 +238,20 @@ class DatabaseHelper {
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     await _backupBeforeMigration();
+    // P1-1 修复: 使用 batch 执行迁移操作，利用 sqflite 的事务机制确保原子性
+    // 修复原因: 原代码逐条执行 db.execute，若中间某条语句失败会导致数据库处于部分升级的不一致状态
+    // sqflite batch.commit() 会将所有操作放在一个事务中，任一失败则整体回滚
+    final batch = db.batch();
     try {
       for (int version = oldVersion + 1; version <= newVersion; version++) {
         switch (version) {
           case 2:
             // v2: 新增 blocks.language 列，用于存储代码块的语言标识
-            await db.execute('ALTER TABLE blocks ADD COLUMN language TEXT');
+            batch.execute('ALTER TABLE blocks ADD COLUMN language TEXT');
             break;
           case 3:
             // v3: 新增 database 相关表
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE databases (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -255,7 +259,7 @@ class DatabaseHelper {
                 updated_at TEXT NOT NULL
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE database_fields (
                 id TEXT PRIMARY KEY,
                 database_id TEXT NOT NULL,
@@ -268,7 +272,7 @@ class DatabaseHelper {
                 FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE database_rows (
                 id TEXT PRIMARY KEY,
                 database_id TEXT NOT NULL,
@@ -277,7 +281,7 @@ class DatabaseHelper {
                 FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE database_cells (
                 id TEXT PRIMARY KEY,
                 row_id TEXT NOT NULL,
@@ -287,7 +291,7 @@ class DatabaseHelper {
                 FOREIGN KEY (field_id) REFERENCES database_fields(id) ON DELETE CASCADE
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE database_views (
                 id TEXT PRIMARY KEY,
                 database_id TEXT NOT NULL,
@@ -302,7 +306,7 @@ class DatabaseHelper {
             break;
           case 4:
             // v4: 新增 object 相关表，持久化 ObjectService 的内存数据
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE object_types (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -311,7 +315,7 @@ class DatabaseHelper {
                 updated_at TEXT NOT NULL
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE object_properties (
                 id TEXT PRIMARY KEY,
                 type_id TEXT NOT NULL,
@@ -322,7 +326,7 @@ class DatabaseHelper {
                 FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE object_relations_definitions (
                 id TEXT PRIMARY KEY,
                 type_id TEXT NOT NULL,
@@ -333,7 +337,7 @@ class DatabaseHelper {
                 FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE objects (
                 id TEXT PRIMARY KEY,
                 type_id TEXT NOT NULL,
@@ -343,7 +347,7 @@ class DatabaseHelper {
                 FOREIGN KEY (type_id) REFERENCES object_types(id) ON DELETE CASCADE
               )
             ''');
-            await db.execute('''
+            batch.execute('''
               CREATE TABLE object_relations (
                 id TEXT PRIMARY KEY,
                 source_id TEXT NOT NULL,
@@ -359,9 +363,13 @@ class DatabaseHelper {
             break;
         }
       }
+      // batch.commit() 将所有操作放在一个事务中，任一失败则整体回滚
+      await batch.commit(noResult: true);
+      developer.log('数据库升级成功: $oldVersion -> $newVersion', name: 'DatabaseHelper');
     } catch (e) {
-      developer.log('Migration error — database may be in an inconsistent state. Please restore from backup.',
-          name: 'DatabaseHelper', error: e);
+      // P1-1 修复: 迁移失败时通过 catch 捕获，batch 未 commit 则自动回滚
+      // 同时记录详细错误日志，便于排查问题
+      developer.log('数据库升级失败，事务已回滚: $e', name: 'DatabaseHelper');
       rethrow;
     }
   }

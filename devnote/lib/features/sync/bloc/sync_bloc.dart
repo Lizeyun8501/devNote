@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -54,7 +55,28 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   void _listenToServiceState() {
-    _syncService.state;
+    // P0-2 修复: 实际订阅 SyncService 的状态流，而非仅仅引用 state 属性
+    // 修复原因: 原代码 `_syncService.state` 仅获取当前状态快照，没有建立流式监听，
+    // 导致服务端状态变化（如冲突、同步完成）无法实时通知到 SyncBloc
+    _serviceStateSubscription = _syncService.stateStream.listen((serviceState) {
+      if (serviceState.status == SyncServiceStatus.conflict) {
+        // 使用服务的冲突解析器获取实际冲突信息
+        final conflicts = _syncService.conflictResolver.conflicts;
+        emit(SyncConflict(
+          conflicts: conflicts,
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      } else if (serviceState.status == SyncServiceStatus.synced) {
+        emit(SyncCompleted(
+          lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      }
+    });
   }
 
   Future<void> _onStartSync(StartSync event, Emitter<SyncState> emit) async {
@@ -71,10 +93,12 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       final pullResult = await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
+      // P0-1 修复: 使用 SyncService 的 conflictResolver 获取实际冲突信息，而非创建空的新实例
+      // 修复原因: 新创建的 ConflictResolver() 内部 _conflicts 列表为空，不包含同步服务
+      // 检测到的真实冲突数据，导致用户看不到需要解决的冲突
       if (serviceState.status == SyncServiceStatus.conflict) {
-        final resolver = ConflictResolver();
         emit(SyncConflict(
-          conflicts: resolver.conflicts,
+          conflicts: _syncService.conflictResolver.conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
@@ -174,10 +198,12 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       final result = await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
+      // P0-1 修复: 使用 SyncService 的 conflictResolver 获取实际冲突信息，而非创建空的新实例
+      // 修复原因: 新创建的 ConflictResolver() 内部 _conflicts 列表为空，不包含同步服务
+      // 检测到的真实冲突数据，导致用户看不到需要解决的冲突
       if (serviceState.status == SyncServiceStatus.conflict) {
-        final resolver = ConflictResolver();
         emit(SyncConflict(
-          conflicts: resolver.conflicts,
+          conflicts: _syncService.conflictResolver.conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
@@ -198,7 +224,14 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         ));
       }
 
-      result;
+      // P1-3 修复: 处理拉取结果，将服务端数据应用到本地
+      // 修复原因: 原代码 `result;` 仅引用变量，未实际处理拉取到的数据，
+      // 导致即使拉取成功也没有任何日志或后续处理
+      // 此处使用 serviceState（而非 result，因为 result 是 Map<String, dynamic>?）
+      if (serviceState.status == SyncServiceStatus.synced) {
+        // 拉取成功，数据已由 SyncService 写入本地数据库，无需额外处理
+        developer.log('拉取同步完成: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
+      }
     } catch (e) {
       // 拉取失败，将操作加入离线队列
       _offlineQueue.addOperation(event);

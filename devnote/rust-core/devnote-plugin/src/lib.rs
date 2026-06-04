@@ -1,5 +1,14 @@
-//! WebAssembly 插件沙箱 —— 基于 wasmtime 实现安全隔离
-//! 借鉴 Obsidian 的社区插件模型和 Figma 的 WASM 插件隔离方案
+//! WASM 插件系统
+//!
+//! ## 当前实现
+//! 基于 wasmtime 的自研插件沙箱，支持动态加载、权限控制、数据隔离。
+//!
+//! ## 推荐的开源替代方案
+//! - **extism** ([crates.io](https://crates.io/crates/extism)):
+//!   通用的 WASM 插件框架，支持多语言插件开发（Rust/Go/Python/JS），
+//!   内置 HTTP 请求、内存管理、日志等插件 API。
+//!   推荐在未来迁移时使用，可降低插件开发门槛。
+//! - **wasmtime** 本身也提供了完善的 API，但 extism 在插件化方面更成熟。
 //!
 //! 借鉴 Obsidian 的社区插件模型
 //! 来源: https://github.com/obsidianmd/obsidian-sample-plugin
