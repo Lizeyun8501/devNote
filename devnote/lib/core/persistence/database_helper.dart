@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
@@ -106,10 +107,10 @@ class DatabaseHelper {
       final originalFile = File(originalPath);
       if (await originalFile.exists()) {
         await originalFile.copy(backupPath);
-        print('Migration backup created at $backupPath');
+        developer.log('Migration backup created at $backupPath', name: 'DatabaseHelper');
       }
     } catch (e) {
-      print('Warning: Could not create migration backup: $e');
+      developer.log('Could not create migration backup', name: 'DatabaseHelper', error: e);
     }
   }
 
@@ -120,10 +121,10 @@ class DatabaseHelper {
       final backupFile = File(backupPath);
       if (await backupFile.exists()) {
         await backupFile.copy(originalPath);
-        print('Migration restored from backup: $backupPath');
+        developer.log('Migration restored from backup: $backupPath', name: 'DatabaseHelper');
       }
     } catch (e) {
-      print('Error: Could not restore from backup: $e');
+      developer.log('Could not restore from backup', name: 'DatabaseHelper', error: e);
     }
   }
 
@@ -141,7 +142,8 @@ class DatabaseHelper {
         }
       }
     } catch (e) {
-      print('Migration error: $e — database may be in an inconsistent state. Please restore from backup.');
+      developer.log('Migration error — database may be in an inconsistent state. Please restore from backup.',
+          name: 'DatabaseHelper', error: e);
       rethrow;
     }
   }

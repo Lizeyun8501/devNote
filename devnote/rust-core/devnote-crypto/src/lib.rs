@@ -68,7 +68,12 @@ impl EncryptedData {
 pub struct CryptoConfig {
     pub algorithm: String,
     pub key_derivation: String,
+    /// Argon2id 时间成本 (iteration count) — RFC 9106 推荐 t=3
     pub iterations: u32,
+    /// Argon2id 内存成本 (KiB) — RFC 9106 推荐 m=65536 (64 MiB)
+    pub memory_kib: u32,
+    /// Argon2id 并行度 (lanes) — RFC 9106 推荐 p=4
+    pub parallelism: u32,
 }
 
 impl Default for CryptoConfig {
@@ -77,25 +82,55 @@ impl Default for CryptoConfig {
             algorithm: "XChaCha20-Poly1305".to_string(),
             key_derivation: "Argon2id".to_string(),
             iterations: 3,
+            memory_kib: 65536,
+            parallelism: 4,
         }
     }
 }
 
 impl CryptoConfig {
+    /// RFC 9106 标准参数 — 平衡性能与安全
     pub fn standard() -> Self {
-        Self {
-            algorithm: "XChaCha20-Poly1305".to_string(),
-            key_derivation: "Argon2id".to_string(),
-            iterations: 3,
-        }
+        Self::default()
     }
 
+    /// 高安全等级 — 适合服务器端或敏感场景
     pub fn high_strength() -> Self {
         Self {
             algorithm: "XChaCha20-Poly1305".to_string(),
             key_derivation: "Argon2id".to_string(),
             iterations: 6,
+            memory_kib: 131072, // 128 MiB
+            parallelism: 8,
         }
+    }
+
+    /// 低资源模式 — 适合移动端或嵌入式
+    pub fn low_resource() -> Self {
+        Self {
+            algorithm: "XChaCha20-Poly1305".to_string(),
+            key_derivation: "Argon2id".to_string(),
+            iterations: 2,
+            memory_kib: 19456, // 19 MiB — Argon2id 最低安全值
+            parallelism: 1,
+        }
+    }
+
+    /// 从环境变量加载(允许运行时覆盖)
+    /// 借鉴 1Password 的 Argon2id 强度分级
+    /// 来源: https://blog.1password.com/1password-argon2id-implementation/
+    pub fn from_env_or_default() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(v) = std::env::var("DEVNOTE_ARGON2_ITERATIONS") {
+            if let Ok(n) = v.parse() { cfg.iterations = n; }
+        }
+        if let Ok(v) = std::env::var("DEVNOTE_ARGON2_MEMORY_KIB") {
+            if let Ok(n) = v.parse() { cfg.memory_kib = n; }
+        }
+        if let Ok(v) = std::env::var("DEVNOTE_ARGON2_PARALLELISM") {
+            if let Ok(n) = v.parse() { cfg.parallelism = n; }
+        }
+        cfg
     }
 }
 
@@ -116,7 +151,7 @@ impl DefaultCryptoEngine {
     }
 
     pub fn derive_key_with_params(&self, password: &str, salt: &[u8], output_len: usize) -> Result<Vec<u8>, CryptoError> {
-        let params = Params::new(65536, self.config.iterations, 4, Some(output_len))
+        let params = Params::new(self.config.memory_kib, self.config.iterations, self.config.parallelism, Some(output_len))
             .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
         let mut output = vec![0u8; output_len];

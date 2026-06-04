@@ -30,6 +30,9 @@ pub enum FFIErrorCode {
     NotConnected = 3,
     CryptoError = 4,
     PermissionDenied = 5,
+    /// 错误码 6: 功能尚未实现 —— 用于 Plugin/P2P 等需要复杂运行时环境的桩实现
+    /// 与 NotConnected 区分: NotConnected = 服务未就绪可重试; NotImplemented = 设计上暂不提供
+    NotImplemented = 6,
     InternalError = 99,
     RustPanic = -99,
 }

@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:uuid/uuid.dart';
+import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/bridge/ffi_request.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 
@@ -13,11 +17,12 @@ import 'package:devnote/core/persistence/database_helper.dart';
 ///   - 打开笔记时通过 loadBlocks() 从 SQLite 回读数据到缓存
 ///   - listBlocks() 在缓存为空时自动从数据库加载（懒加载兜底）
 ///
-/// 注意：当前 Dart↔Rust FFI 桥尚未完全可用，因此直接在 Dart 侧通过 sqflite
-/// 操作数据库，不再经过 Rust 引擎。
+/// Markdown 解析优先通过 Rust 端 devnote-editor 引擎执行（FFI），
+/// 当 FFI 不可用时回退到 Dart 侧实现。
 class EditorService {
   final _uuid = const Uuid();
   final DatabaseHelper _db = DatabaseHelper();
+  final FFIBridge _ffi = FFIBridge();
 
   /// 内存缓存：noteId → [BlockModel, ...]
   /// UI 从缓存读取以获得即时响应，持久化由 SQLite 保证。
@@ -153,6 +158,67 @@ class EditorService {
   }
 
   Future<List<BlockModel>> parseMarkdown({required String content, required String noteId}) async {
+    // 优先通过 Rust 端 devnote-editor 引擎执行（9 种块类型 + 表格/任务列表子解析器）
+    final ffiBlocks = await _tryParseViaFfi(content, noteId);
+    if (ffiBlocks != null) {
+      await _persistBlocks(noteId, ffiBlocks);
+      _noteBlocks[noteId] = List<BlockModel>.from(ffiBlocks);
+      return ffiBlocks;
+    }
+    // FFI 不可用时回退到 Dart 侧实现（5 种基础块类型）
+    return await _parseMarkdownDart(content: content, noteId: noteId);
+  }
+
+  /// 尝试通过 FFI 调 Rust 解析器；不可用或失败时返回 null
+  Future<List<BlockModel>?> _tryParseViaFfi(String content, String noteId) async {
+    if (!_ffi.isAvailable) return null;
+    try {
+      final req = FFIRequest(
+        event: 'EditorEvent.ParseMarkdown',
+        payload: utf8.encode(jsonEncode({'content': content})),
+        requestId: 0,
+      );
+      final resp = _ffi.invoke(req);
+      if (resp.code != 0) return null;
+      final list = jsonDecode(resp.data ?? '[]') as List<dynamic>;
+      return list.map((item) {
+        final m = item as Map<String, dynamic>;
+        return BlockModel(
+          id: _uuid.v4(),
+          noteId: noteId,
+          blockType: _parseBlockType(m['block_type'] as String?),
+          content: (m['content'] as String?) ?? '',
+          position: (m['position'] as int?) ?? 0,
+          language: m['language'] as String?,
+        );
+      }).toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  BlockType _parseBlockType(String? name) {
+    if (name == null) return BlockType.paragraph;
+    return BlockType.values.firstWhere(
+      (e) => e.name == name,
+      orElse: () => BlockType.paragraph,
+    );
+  }
+
+  /// 将块列表持久化到 SQLite（思源笔记风格：先清空再批量插入）
+  Future<void> _persistBlocks(String noteId, List<BlockModel> blocks) async {
+    final db = await _db.database;
+    final now = DateTime.now().toIso8601String();
+    await db.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
+    await db.transaction((txn) async {
+      for (final block in blocks) {
+        await txn.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
+      }
+    });
+  }
+
+  /// Dart 侧 Markdown 解析实现（5 种基础块）—— FFI 不可用时的兜底
+  Future<List<BlockModel>> _parseMarkdownDart({required String content, required String noteId}) async {
     final lines = content.split('\n');
     final blocks = <BlockModel>[];
     var position = 0;
@@ -297,14 +363,7 @@ class EditorService {
 
     // 思源笔记风格：先清空该笔记在数据库中的旧 blocks，
     // 再将新解析出的所有 blocks 批量 INSERT 到 SQLite，最后更新缓存
-    final db = await _db.database;
-    final now = DateTime.now().toIso8601String();
-    await db.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
-
-    for (final block in blocks) {
-      await db.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
-    }
-
+    await _persistBlocks(noteId, blocks);
     _noteBlocks[noteId] = List<BlockModel>.from(blocks);
     return blocks;
   }

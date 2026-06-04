@@ -1,3 +1,19 @@
+//! 画布引擎 —— 兼容 Obsidian Canvas 数据模型的无限画布
+//! 提供节点/边的 JSON 持久化与三种自动布局算法（网格/力导向/层级）
+//!
+//! 借鉴 Obsidian Canvas 的数据模型与文件格式
+//! 来源: https://docs.obsidian.md/Plugins/Canvas
+//! 借鉴内容: .canvas 文件 JSON 结构 (nodes/edges)、fromNode/toNode/fromSide/toSide 字段约定、
+//!         节点类型(file/text/link/group)、边的颜色与箭头端点规范
+//!
+//! 借鉴 dagre.js 的层级布局算法
+//! 来源: https://github.com/dagrejs/dagre
+//! 借鉴内容: Sugiyama 框架的有向无环图层级布局、边的交叉最小化
+//!
+//! 借鉴 d3-force 的力导向布局
+//! 来源: https://github.com/d3/d3-force
+//! 借鉴内容: 弹簧-电荷力模型（link force / charge force / center force）
+
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

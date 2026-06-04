@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 
 [workspace]
+# 23 个核心 crate
+# devnote-qt 是可选的 Qt 桥接 crate(动态加载 libdevnote_qt_bridge.so 作为桌面端 fallback)
+# 当前不通过任何生产代码直接依赖 —— 仅作为 reference 编译,未来可作为 devnote-canvas 的高级渲染后端
+# 编译时可执行 `cargo build -p devnote-qt` 单独验证
 members = [
     "devnote-core",
     "devnote-ffi",

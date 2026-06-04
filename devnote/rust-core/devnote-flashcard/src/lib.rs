@@ -1,3 +1,16 @@
+//! 闪卡复习引擎 —— 借鉴 Anki 间隔重复算法 (SM-2) 实现
+//! 支持基础问答/反向卡片/Cloze 填空三种卡片类型
+//!
+//! 借鉴 Anki 的间隔重复算法 (SM-2)
+//! 来源: https://github.com/ankitects/anki
+//! 借鉴内容: SuperMemo SM-2 算法的简化版本 (easiness factor / interval / repetitions)、
+//!         四档评分(Again/Hard/Good/Easy) 调整下次复习时间
+//!
+//! 借鉴 Anki 的 FSRS 算法思路
+//! 来源: https://github.com/open-spaced-repetition/fsrs4anki
+//! 借鉴内容: 自由间隔重复调度器 (FSRS) 的记忆稳定性/可提取性双参数模型，
+//!         用作未来替代 SM-2 的可选升级路径
+
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

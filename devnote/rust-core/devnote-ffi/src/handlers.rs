@@ -79,6 +79,7 @@ pub fn register_all_handlers() {
     register_crdt_handlers();
     register_plugin_handlers();
     register_p2p_handlers();
+    register_system_handlers();
 }
 
 fn init_engines() {
@@ -1257,15 +1258,15 @@ fn register_crdt_handlers() {
 
 fn register_plugin_handlers() {
     register_handler("PluginEvent.LoadPlugin", Box::new(|_payload| {
-        DispatchResponse::error(FFIErrorCode::NotConnected, "Plugin system not available in FFI mode")
+        DispatchResponse::error(FFIErrorCode::NotImplemented, "Plugin system runs in Dart-side PluginManager (WASM sandbox); not available via FFI")
     }));
 
     register_handler("PluginEvent.ExecutePlugin", Box::new(|_payload| {
-        DispatchResponse::error(FFIErrorCode::NotConnected, "Plugin system not available in FFI mode")
+        DispatchResponse::error(FFIErrorCode::NotImplemented, "Plugin system runs in Dart-side PluginManager (WASM sandbox); not available via FFI")
     }));
 
     register_handler("PluginEvent.UnloadPlugin", Box::new(|_payload| {
-        DispatchResponse::error(FFIErrorCode::NotConnected, "Plugin system not available in FFI mode")
+        DispatchResponse::error(FFIErrorCode::NotImplemented, "Plugin system runs in Dart-side PluginManager (WASM sandbox); not available via FFI")
     }));
 }
 
@@ -1273,14 +1274,73 @@ fn register_plugin_handlers() {
 
 fn register_p2p_handlers() {
     register_handler("P2PEvent.Start", Box::new(|_payload| {
-        DispatchResponse::error(FFIErrorCode::NotConnected, "P2P system not available in FFI mode")
+        DispatchResponse::error(FFIErrorCode::NotImplemented, "P2P system runs in dedicated devnote-p2p crate (libp2p async runtime); not available via FFI")
     }));
 
     register_handler("P2PEvent.ConnectPeer", Box::new(|_payload| {
-        DispatchResponse::error(FFIErrorCode::NotConnected, "P2P system not available in FFI mode")
+        DispatchResponse::error(FFIErrorCode::NotImplemented, "P2P system runs in dedicated devnote-p2p crate (libp2p async runtime); not available via FFI")
     }));
 
     register_handler("P2PEvent.SendData", Box::new(|_payload| {
-        DispatchResponse::error(FFIErrorCode::NotConnected, "P2P system not available in FFI mode")
+        DispatchResponse::error(FFIErrorCode::NotImplemented, "P2P system runs in dedicated devnote-p2p crate (libp2p async runtime); not available via FFI")
+    }));
+}
+
+// ── System handlers (FFI 版本协商 + 健康检查) ────────────────────────────
+// 借鉴 AppFlowy 的 FFI 版本协商机制
+// 来源: https://github.com/AppFlowy-IO/AppFlowy
+// 借鉴内容: SystemEvent.GetVersion / SystemEvent.HealthCheck 事件名规范
+//         + { api_version, rust_version, features[] } 的 JSON 返回结构
+//
+// Dart 端在 FFI 初始化后必须先调 GetVersion 协商协议版本，
+// 防止 native 库与 UI 版本不匹配导致 dispatch 路由失败
+
+/// FFI 协议版本 —— 与 Dart 端 lib/core/bridge/ffi_bridge.dart 的 kFFIApiVersion 严格一致
+/// 协议变更时必须同步 +1 并在 migration_notes.md 中记录
+pub const FFI_API_VERSION: u32 = 1;
+
+fn register_system_handlers() {
+    register_handler("SystemEvent.GetVersion", Box::new(|_payload| {
+        let version_info = serde_json::json!({
+            "api_version": FFI_API_VERSION,
+            "rust_version": env!("CARGO_PKG_VERSION"),
+            "compatible_min": 1u32,
+            "features": [
+                "sqlite_persistence",
+                "sqlite_fts5_search",
+                "xchacha20_poly1305",
+                "argon2id",
+                "bip39_recovery",
+                "wasm_plugin_sandbox",
+                "obsidian_import",
+                "markdown_render",
+            ],
+            "build": {
+                "target": std::env::consts::ARCH,
+                "os": std::env::consts::OS,
+            },
+        });
+        DispatchResponse::success(&version_info.to_string())
+    }));
+
+    register_handler("SystemEvent.HealthCheck", Box::new(|_payload| {
+        let health = serde_json::json!({
+            "status": "ok",
+            "engines": {
+                "persistence": NOTE_REPO.lock().is_some(),
+                "editor": BLOCK_EDITOR.lock().is_some(),
+                "search": SEARCH_ENGINE.lock().is_some(),
+                "crypto": true,
+                "sync": SYNC_ENGINE.lock().is_some(),
+                "database": DATABASE_ENGINE.lock().is_some(),
+                "object": OBJECT_ENGINE.lock().is_some(),
+                "graph": GRAPH_ENGINE.lock().is_some(),
+                "canvas": CANVAS_ENGINE.lock().is_some(),
+                "format": true,
+                "crdt": true,
+                "flashcard": FLASHCARD_ENGINE.lock().is_some(),
+            }
+        });
+        DispatchResponse::success(&health.to_string())
     }));
 }
