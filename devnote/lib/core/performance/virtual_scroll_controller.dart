@@ -1,18 +1,27 @@
-/// 虚拟滚动控制器与虚拟滚动视图（Virtual Scroll Controller & View）
+/// 虚拟滚动控制器与虚拟滚动视图
+///
+/// ## 已替换的开源模块
+/// - **scrollable_positioned_list** ([pub.dev](https://pub.dev/packages/scrollable_positioned_list)):
+///   Google 官方维护的虚拟滚动列表，已替代本自研实现。
+///   优势：支持 scrollToIndex/jumpToIndex、ItemScrollController、ItemPositionsListener，
+///   性能经过大规模验证，无需手动管理可见范围。
+///
+/// ## 推荐替代（暂未替换）
+/// - **graphview** ([pub.dev](https://pub.dev/packages/graphview)):
+///   已在知识图谱模块中替代自研 CustomPaint 渲染方案。
+///   本文件的虚拟滚动功能暂无更高优先级的替代需求，保留作为备用方案。
+///
+/// ## 本文件的保留原因
+/// - VirtualScrollController 仍作为备用方案保留
+/// - 在 scrollable_positioned_list 不可用的场景（如 Web 平台）可回退使用
+///
+/// ## 借鉴的开源项目
+/// - **react-virtual** ([GitHub](https://github.com/TanStack/virtual)): overscan 机制
+/// - **Flutter SliverList**: 滚动状态机
 ///
 /// 虚拟滚动（Virtualization）是一种"按需渲染"技术：对于可能包含成千上万条目的列表，
 /// 完整构建所有 Widget 会消耗大量内存并阻塞首屏渲染。本实现仅构建"可见区域 + 少量
 /// overscan"内的条目，显著降低内存占用与重建成本。
-///
-/// ## 借鉴的开源项目
-/// - **react-virtual** ([GitHub](https://github.com/TanStack/virtual)): 借鉴其
-///   - "固定项高（fixed item size）+ 起始 / 结束可见索引"模型；
-///   - overscan（预渲染）数量配置（`_overscanCount`）以保证快速滚动时无白边；
-///   - 暴露 `scrollToIndex` / `jumpToIndex` 编程式滚动 API。
-/// - **Flutter SliverList** ([官方文档](https://api.flutter.dev/flutter/widgets/SliverList-class.html)):
-///   借鉴其 Sliver 协议思路——将可见区间的计算与渲染分离：
-///   - 本类（`VirtualScrollController`）相当于"逻辑 Sliver"，负责维护可见范围与通知；
-///   - `VirtualScrollView` 相当于"渲染 Sliver"，根据可见范围构建 `Positioned` 节点。
 ///
 /// ## 实现说明
 /// - 假设每个 item 高度相同（fixed-size），通过 `itemHeight * index` 计算位置。

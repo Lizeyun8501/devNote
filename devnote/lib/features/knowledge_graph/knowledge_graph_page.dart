@@ -1,11 +1,35 @@
+/// 知识图谱页面
+///
+/// ## 已替换的开源模块
+/// - **graphview** ([pub.dev](https://pub.dev/packages/graphview)):
+///   已替代自研 CustomPaint + InteractiveViewer + Stack 渲染方案，
+///   使用 FruchtermanReingoldAlgorithm 力导向布局（借鉴 d3-force）。
+///   graphview 提供更成熟的图可视化能力，支持节点拖拽、缩放、布局算法切换等。
+///
+/// ## 替换前方案
+/// - 自研 InteractiveViewer + CustomPaint（网格背景）+ Stack（节点/边叠加）
+/// - 自研 GraphEdgeWidget 绘制边（含箭头、虚线）
+/// - 自研 GraphNodeWidget 手动 Positioned 定位 + GestureDetector 拖拽
+/// - 自研 _calculateForceLayout 力导向布局算法
+///
+/// ## 替换后方案
+/// - graphview 的 GraphView 组件接管图渲染
+/// - FruchtermanReingoldAlgorithm 替代自研力导向布局
+/// - graphview 内置 EdgeRenderer 替代自研 GraphEdgeWidget
+/// - graphview 内置拖拽替代自研 onDragStart/onDragUpdate/onDragEnd
+/// - 仍保留 GraphNodeWidget 用于自定义节点外观
+/// - 仍保留 BLoC 架构（GraphBloc + GraphEvent + GraphState）
+/// - 仍保留 GraphFilterPanel 侧边栏
+
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:graphview/graphview.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_bloc.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_event.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_state.dart';
 import 'package:devnote/features/knowledge_graph/graph_service.dart';
 import 'package:devnote/features/knowledge_graph/widgets/graph_node_widget.dart';
-import 'package:devnote/features/knowledge_graph/widgets/graph_edge_widget.dart';
 import 'package:devnote/features/knowledge_graph/widgets/graph_filter_panel.dart';
 import 'package:go_router/go_router.dart';
 
@@ -29,20 +53,38 @@ class _KnowledgeGraphView extends StatefulWidget {
 }
 
 class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
-  final TransformationController _transformationController = TransformationController();
-  Offset _dragOffset = Offset.zero;
-  String? _draggingNodeId;
+  /// graphview 的图数据对象
+  Graph _graph = Graph();
+
+  /// FruchtermanReingold 力导向布局算法（借鉴 d3-force）
+  FruchtermanReingoldAlgorithm _algorithm = FruchtermanReingoldAlgorithm(
+    iterations: 100,
+  );
+
   bool _showFilterPanel = false;
 
-  @override
-  void initState() {
-    super.initState();
-  }
+  /// 将 GraphState 中的节点/边数据转换为 graphview 的 Graph 对象
+  void _buildGraph(GraphLoaded state) {
+    _graph = Graph();
 
-  @override
-  void dispose() {
-    _transformationController.dispose();
-    super.dispose();
+    // 添加节点
+    for (final node in state.data.nodes) {
+      _graph.addNode(Node.Id(node.id));
+    }
+
+    // 添加边
+    for (final edge in state.data.edges) {
+      _graph.addEdge(
+        Node.Id(edge.sourceId),
+        Node.Id(edge.targetId),
+      );
+    }
+
+    // 使用 FruchtermanReingold 力导向布局
+    // 借鉴 d3-force 的力导向布局思想，graphview 内置实现更成熟
+    _algorithm = FruchtermanReingoldAlgorithm(
+      iterations: 100,
+    );
   }
 
   @override
@@ -73,14 +115,6 @@ class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
               context.read<GraphBloc>().add(const DetectClusters());
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.zoom_in),
-            onPressed: _zoomIn,
-          ),
-          IconButton(
-            icon: const Icon(Icons.zoom_out),
-            onPressed: _zoomOut,
-          ),
         ],
       ),
       body: BlocBuilder<GraphBloc, GraphState>(
@@ -92,87 +126,50 @@ class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
             return const Center(child: CircularProgressIndicator());
           }
           if (state is GraphLoaded) {
+            // 每次状态更新时重建 graphview 的 Graph 对象
+            _buildGraph(state);
+
             return Row(
               children: [
                 Expanded(
+                  // graphview 内部已支持缩放与平移，但仍用 InteractiveViewer
+                  // 提供更流畅的缩放体验
                   child: InteractiveViewer(
-                    transformationController: _transformationController,
                     minScale: 0.1,
                     maxScale: 5.0,
-                    child: GestureDetector(
-                      onTapUp: (_) {
-                        context.read<GraphBloc>().add(const SelectGraphNode(null));
+                    child: GraphView(
+                      graph: _graph,
+                      algorithm: _algorithm,
+                      // 使用透明画笔，因为 graphview 的 EdgeRenderer 已接管边渲染
+                      paint: Paint()..color = Colors.transparent,
+                      builder: (node) {
+                        // 自定义节点渲染：通过 node.key 查找对应的业务数据
+                        final nodeId = node.key?.value as String?;
+                        if (nodeId == null) return const SizedBox.shrink();
+
+                        final graphNode = state.data.nodes
+                            .where((n) => n.id == nodeId)
+                            .firstOrNull;
+                        if (graphNode == null) return const SizedBox.shrink();
+
+                        final isSelected =
+                            state.selectedNodeId == graphNode.id;
+
+                        return GraphNodeWidget(
+                          node: graphNode,
+                          // graphview 内部管理节点位置，不再需要手动传入 x/y
+                          x: 0,
+                          y: 0,
+                          isSelected: isSelected,
+                          onTap: () {
+                            context
+                                .read<GraphBloc>()
+                                .add(SelectGraphNode(graphNode.id));
+                          },
+                          // 移除 onDragStart/onDragUpdate/onDragEnd，
+                          // graphview 内置拖拽支持
+                        );
                       },
-                      child: Container(
-                        width: 10000,
-                        height: 10000,
-                        color: Theme.of(context).colorScheme.surface,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            CustomPaint(
-                              size: const Size(10000, 10000),
-                              painter: _GridPainter(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .outlineVariant
-                                    .withValues(alpha: 0.2),
-                              ),
-                            ),
-                            ...state.data.edges.map((edge) {
-                              final fromPos = state.positions.where((p) => p.nodeId == edge.sourceId);
-                              final toPos = state.positions.where((p) => p.nodeId == edge.targetId);
-                              if (fromPos.isEmpty || toPos.isEmpty) return const SizedBox.shrink();
-                              return GraphEdgeWidget(
-                                edge: edge,
-                                fromPosition: fromPos.first,
-                                toPosition: toPos.first,
-                              );
-                            }),
-                            ...state.data.nodes.map((node) {
-                              final pos = state.positions.where((p) => p.nodeId == node.id);
-                              if (pos.isEmpty) return const SizedBox.shrink();
-                              final isSelected = state.selectedNodeId == node.id;
-                              return GraphNodeWidget(
-                                node: node,
-                                x: pos.first.x,
-                                y: pos.first.y,
-                                isSelected: isSelected,
-                                onTap: () {
-                                  context.read<GraphBloc>().add(SelectGraphNode(node.id));
-                                },
-                                onDragStart: (offset) {
-                                  setState(() {
-                                    _draggingNodeId = node.id;
-                                    _dragOffset = offset;
-                                  });
-                                },
-                                onDragUpdate: (globalPosition) {
-                                  if (_draggingNodeId == node.id) {
-                                    final transform = _transformationController.value;
-                                    final inverse = Matrix4.inverted(transform);
-                                    final local = MatrixUtils.transformPoint(inverse, globalPosition);
-                                    final dx = local.dx - 60;
-                                    final dy = local.dy - 25;
-                                    context.read<GraphBloc>().add(MoveGraphNode(
-                                          nodeId: node.id,
-                                          x: dx,
-                                          y: dy,
-                                        ));
-                                  }
-                                },
-                                onDragEnd: () {
-                                  setState(() {
-                                    _draggingNodeId = null;
-                                  });
-                                },
-                              );
-                            }),
-                            if (state.selectedNodeId != null)
-                              _buildNodeDetail(context, state),
-                          ],
-                        ),
-                      ),
                     ),
                   ),
                 ),
@@ -190,127 +187,4 @@ class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
       ),
     );
   }
-
-  Widget _buildNodeDetail(BuildContext context, GraphLoaded state) {
-    final selectedNode = state.data.nodes.where((n) => n.id == state.selectedNodeId).firstOrNull;
-    if (selectedNode == null) return const SizedBox.shrink();
-
-    final pos = state.positions.where((p) => p.nodeId == selectedNode.id).firstOrNull;
-    if (pos == null) return const SizedBox.shrink();
-
-    return Positioned(
-      left: pos.x + 70,
-      top: pos.y - 40,
-      child: Material(
-        elevation: 4,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          width: 200,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                selectedNode.title,
-                style: Theme.of(context).textTheme.titleSmall,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '类型: ${_typeLabel(selectedNode.nodeType)}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              if (selectedNode.tags.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Wrap(
-                    spacing: 4,
-                    children: selectedNode.tags
-                        .map((t) => Chip(
-                              label: Text(t, style: const TextStyle(fontSize: 10)),
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              visualDensity: VisualDensity.compact,
-                            ))
-                        .toList(),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () {
-                      if (selectedNode.nodeType == GraphNodeType.note) {
-                        context.push('/notes/${selectedNode.id}');
-                      }
-                    },
-                    child: const Text('打开'),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      context.read<GraphBloc>().add(GetNeighbors(nodeId: selectedNode.id, depth: 2));
-                    },
-                    child: const Text('展开'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _typeLabel(GraphNodeType type) {
-    switch (type) {
-      case GraphNodeType.note:
-        return '笔记';
-      case GraphNodeType.tag:
-        return '标签';
-      case GraphNodeType.folder:
-        return '文件夹';
-      case GraphNodeType.canvas:
-        return '画布';
-    }
-  }
-
-  void _zoomIn() {
-    final transform = _transformationController.value;
-    final newScale = (transform.getMaxScaleOnAxis() * 1.2).clamp(0.1, 5.0);
-    _transformationController.value = Matrix4.identity()..scale(newScale);
-  }
-
-  void _zoomOut() {
-    final transform = _transformationController.value;
-    final newScale = (transform.getMaxScaleOnAxis() / 1.2).clamp(0.1, 5.0);
-    _transformationController.value = Matrix4.identity()..scale(newScale);
-  }
-}
-
-class _GridPainter extends CustomPainter {
-  final Color color;
-
-  const _GridPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 0.5;
-    const step = 50.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

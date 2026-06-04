@@ -40,6 +40,13 @@ dependencies:
   # PDF 导出 —— 借鉴 pdf.dart 库：https://github.com/DavBfr/dart_pdf
   pdf: ^3.10.7
   printing: ^5.12.0
+  # 知识图谱可视化 —— 替代自研 CustomPaint 渲染
+  # 来源: https://pub.dev/packages/graphview
+  graphview: ^1.2.0
+  # 虚拟滚动列表 —— 替代自研 VirtualScrollController
+  # Google 官方维护，支持 scrollToIndex/jumpToIndex
+  # 来源: https://pub.dev/packages/scrollable_positioned_list
+  scrollable_positioned_list: ^0.3.8
 
 dev_dependencies:
   flutter_test:

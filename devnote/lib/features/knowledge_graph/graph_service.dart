@@ -1,13 +1,18 @@
-/// 知识图谱服务（Knowledge Graph Service）
+/// GraphService - 知识图谱关系计算与渲染服务
+///
+/// ## 已替换的开源模块
+/// - **graphview** ([pub.dev](https://pub.dev/packages/graphview)):
+///   已替代自研 CustomPaint 渲染方案，使用 FruchtermanReingoldAlgorithm 力导向布局。
+///   graphview 提供更成熟的图可视化能力，支持节点拖拽、缩放、布局算法切换等。
+///
+/// ## 仍保留的自研部分
+/// - 关系计算逻辑（邻居查询、路径查找、中心度分析、聚类检测）
+/// - 图谱数据模型（GraphNodeData、GraphEdgeData、GraphData）
 ///
 /// ## 当前实现
 /// 自研图遍历算法，借鉴 Neo4j 的关系计算和 d3-force 的力导向布局。
 ///
 /// ## 推荐的开源替代方案
-/// - **graphview** ([pub.dev](https://pub.dev/packages/graphview)):
-///   Flutter 原生图可视化库，支持有向图/无向图/树形图渲染，
-///   内置 Sugiyama 布局算法，性能优于自研方案。
-///   推荐在未来迁移时使用，可替换当前的 CustomPaint 渲染方案。
 /// - **force_graph** ([pub.dev](https://pub.dev/packages/force_graph)):
 ///   基于 d3-force 的力导向图可视化，支持动态节点和交互。
 ///

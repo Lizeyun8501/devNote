@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:devnote/core/performance/virtual_scroll_controller.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:devnote/features/notes/bloc/notes_bloc.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
@@ -34,6 +34,10 @@ class NoteList extends StatelessWidget {
     );
   }
 
+  // 使用 scrollable_positioned_list 替代自研 VirtualScrollView
+  // 借鉴 Google 官方维护的 ScrollablePositionedList:
+  // https://pub.dev/packages/scrollable_positioned_list
+  // 优势：支持 scrollToIndex/jumpToIndex，性能经过大规模验证
   Widget _buildListView(BuildContext context, List<NoteModel> notes, String? selectedNoteId) {
     if (notes.isEmpty) {
       return Semantics(
@@ -41,27 +45,9 @@ class NoteList extends StatelessWidget {
         child: const Center(child: Text('暂无笔记')),
       );
     }
-    // 笔记数量超过阈值时启用虚拟滚动，提升长列表性能
-    if (notes.length > 100) {
-      return Semantics(
-        label: '笔记列表（虚拟滚动）',
-        child: VirtualScrollView(
-          controller: VirtualScrollController(),
-          itemCount: notes.length,
-          itemHeight: 72.0, // NoteCard 的预估高度
-          itemBuilder: (context, index) {
-            return NoteCard(
-              note: notes[index],
-              isSelected: notes[index].id == selectedNoteId,
-            );
-          },
-        ),
-      );
-    }
     return Semantics(
       label: '笔记列表',
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
+      child: ScrollablePositionedList.builder(
         itemCount: notes.length,
         itemBuilder: (context, index) {
           return NoteCard(
