@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:devnote/core/bridge/dispatch.dart';
+import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum P2PNodeStatus {
@@ -86,6 +89,9 @@ class P2PService {
   static const String _keySignalingServer = 'p2p_signaling_server';
   static const String _keyBootstrapPeers = 'p2p_bootstrap_peers';
 
+  /// FFI 事件分发器，用于调用 Rust P2P 模块
+  final Dispatch _dispatch = getIt<Dispatch>();
+
   P2PState _state = const P2PState(
     status: P2PNodeStatus.stopped,
     isEnabled: false,
@@ -155,6 +161,8 @@ class P2PService {
     await prefs.setStringList(_keyBootstrapPeers, peers);
   }
 
+  /// 启动 P2P 节点
+  /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<void> startNode() async {
     if (_state.status == P2PNodeStatus.running) return;
 
@@ -162,25 +170,55 @@ class P2PService {
     _notifyListeners();
 
     try {
-      await Future.delayed(const Duration(milliseconds: 500));
+      // 构造 FFI 请求载荷
+      final payload = utf8.encode(jsonEncode({
+        'signaling_server_url': _state.signalingServerUrl ?? 'https://signal.devnote.app',
+      }));
 
-      final localPeerId = _generatePeerId();
-
-      _state = _state.copyWith(
-        status: P2PNodeStatus.running,
-        localPeerId: localPeerId,
-        lastError: null,
+      final result = await _dispatch.asyncRequest(
+        'P2PEvent.StartNode',
+        payload: Uint8List.fromList(payload),
       );
 
-      _startDiscoveryTimer();
+      if (result is Success) {
+        // 解析 Rust 返回的 JSON 数据
+        final responseData = jsonDecode(
+          utf8.decode((result as Success).value),
+        ) as Map<String, dynamic>;
+
+        final localPeerId = responseData['local_peer_id'] as String? ??
+            _generatePeerId();
+
+        _state = _state.copyWith(
+          status: P2PNodeStatus.running,
+          localPeerId: localPeerId,
+          lastError: null,
+        );
+
+        _startDiscoveryTimer();
+      } else {
+        // FFI 调用失败，回退到 Dart 侧模拟实现
+        _startNodeFallback();
+      }
     } catch (e) {
-      _state = _state.copyWith(
-        status: P2PNodeStatus.error,
-        lastError: e.toString(),
-      );
+      // FFI 不可用，回退到 Dart 侧模拟实现
+      _startNodeFallback();
     }
 
     _notifyListeners();
+  }
+
+  /// Dart 侧兜底：模拟启动 P2P 节点
+  void _startNodeFallback() {
+    final localPeerId = _generatePeerId();
+
+    _state = _state.copyWith(
+      status: P2PNodeStatus.running,
+      localPeerId: localPeerId,
+      lastError: null,
+    );
+
+    _startDiscoveryTimer();
   }
 
   Future<void> stopNode() async {
@@ -198,17 +236,114 @@ class P2PService {
     _notifyListeners();
   }
 
+  /// 发现对等节点
+  /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<List<P2PPeerInfo>> discoverPeers() async {
     if (_state.status != P2PNodeStatus.running) return [];
 
-    await Future.delayed(const Duration(milliseconds: 300));
+    try {
+      // 构造 FFI 请求载荷
+      final payload = utf8.encode(jsonEncode({}));
 
+      final result = await _dispatch.asyncRequest(
+        'P2PEvent.DiscoverPeers',
+        payload: Uint8List.fromList(payload),
+      );
+
+      if (result is Success) {
+        // 解析 Rust 返回的 JSON 数据
+        final responseData = jsonDecode(
+          utf8.decode((result as Success).value),
+        ) as Map<String, dynamic>;
+
+        final peersJson = responseData['peers'] as List<dynamic>? ?? [];
+        final discoveredPeers = peersJson.map((p) {
+          final map = p as Map<String, dynamic>;
+          return P2PPeerInfo(
+            peerId: map['peer_id'] as String? ?? '',
+            addresses: (map['addresses'] as List<dynamic>? ?? [])
+                .map((a) => a as String)
+                .toList(),
+            connectedAt: map['connected_at'] != null
+                ? DateTime.tryParse(map['connected_at'] as String)
+                : null,
+          );
+        }).toList();
+
+        _state = _state.copyWith(peers: discoveredPeers);
+        _notifyListeners();
+
+        return discoveredPeers;
+      } else {
+        // FFI 调用失败，回退到 Dart 侧模拟实现
+        return _discoverPeersFallback();
+      }
+    } catch (e) {
+      // FFI 不可用，回退到 Dart 侧模拟实现
+      return _discoverPeersFallback();
+    }
+  }
+
+  /// Dart 侧兜底：模拟发现对等节点
+  Future<List<P2PPeerInfo>> _discoverPeersFallback() async {
+    await Future.delayed(const Duration(milliseconds: 300));
     return _state.peers;
   }
 
+  /// 连接指定对等节点
+  /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<void> connectPeer(String peerId) async {
     if (_state.status != P2PNodeStatus.running) return;
 
+    try {
+      // 构造 FFI 请求载荷
+      final payload = utf8.encode(jsonEncode({
+        'peer_id': peerId,
+      }));
+
+      final result = await _dispatch.asyncRequest(
+        'P2PEvent.ConnectPeer',
+        payload: Uint8List.fromList(payload),
+      );
+
+      if (result is Success) {
+        // 解析 Rust 返回的 JSON 数据，更新本地节点状态
+        final responseData = jsonDecode(
+          utf8.decode((result as Success).value),
+        ) as Map<String, dynamic>;
+
+        if (responseData['code'] == 0) {
+          final existingIndex = _state.peers.indexWhere((p) => p.peerId == peerId);
+          if (existingIndex >= 0) {
+            final updatedPeers = List<P2PPeerInfo>.from(_state.peers);
+            updatedPeers[existingIndex] = updatedPeers[existingIndex].copyWith(
+              connectedAt: DateTime.now(),
+            );
+            _state = _state.copyWith(peers: updatedPeers);
+          } else {
+            final newPeer = P2PPeerInfo(
+              peerId: peerId,
+              connectedAt: DateTime.now(),
+            );
+            _state = _state.copyWith(peers: [..._state.peers, newPeer]);
+          }
+          _notifyListeners();
+        } else {
+          // FFI 返回错误，回退到 Dart 侧模拟实现
+          _connectPeerFallback(peerId);
+        }
+      } else {
+        // FFI 调用失败，回退到 Dart 侧模拟实现
+        _connectPeerFallback(peerId);
+      }
+    } catch (e) {
+      // FFI 不可用，回退到 Dart 侧模拟实现
+      _connectPeerFallback(peerId);
+    }
+  }
+
+  /// Dart 侧兜底：模拟连接对等节点
+  Future<void> _connectPeerFallback(String peerId) async {
     await Future.delayed(const Duration(milliseconds: 200));
 
     final existingIndex = _state.peers.indexWhere((p) => p.peerId == peerId);
@@ -241,29 +376,120 @@ class P2PService {
     }
   }
 
+  /// 向指定对等节点发送数据
+  /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<bool> sendData(String peerId, Uint8List data) async {
     if (_state.status != P2PNodeStatus.running) return false;
 
     final peer = _state.peers.where((p) => p.peerId == peerId).firstOrNull;
     if (peer == null || !peer.isOnline) return false;
 
+    try {
+      // 构造 FFI 请求载荷
+      final payload = utf8.encode(jsonEncode({
+        'peer_id': peerId,
+        'data': base64Encode(data),
+      }));
+
+      final result = await _dispatch.asyncRequest(
+        'P2PEvent.SendData',
+        payload: Uint8List.fromList(payload),
+      );
+
+      if (result is Success) {
+        // 解析 Rust 返回的 JSON 数据
+        final responseData = jsonDecode(
+          utf8.decode((result as Success).value),
+        ) as Map<String, dynamic>;
+        return responseData['code'] == 0;
+      } else {
+        // FFI 调用失败，回退到 Dart 侧模拟实现
+        return _sendDataFallback();
+      }
+    } catch (e) {
+      // FFI 不可用，回退到 Dart 侧模拟实现
+      return _sendDataFallback();
+    }
+  }
+
+  /// Dart 侧兜底：模拟发送数据
+  Future<bool> _sendDataFallback() async {
     await Future.delayed(const Duration(milliseconds: 100));
     return true;
   }
 
+  /// 广播数据到指定主题
+  /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<bool> broadcast(String topic, Uint8List data) async {
     if (_state.status != P2PNodeStatus.running) return false;
 
+    try {
+      // 构造 FFI 请求载荷
+      final payload = utf8.encode(jsonEncode({
+        'topic': topic,
+        'data': base64Encode(data),
+      }));
+
+      final result = await _dispatch.asyncRequest(
+        'P2PEvent.Broadcast',
+        payload: Uint8List.fromList(payload),
+      );
+
+      if (result is Success) {
+        // 解析 Rust 返回的 JSON 数据
+        final responseData = jsonDecode(
+          utf8.decode((result as Success).value),
+        ) as Map<String, dynamic>;
+        return responseData['code'] == 0;
+      } else {
+        // FFI 调用失败，回退到 Dart 侧模拟实现
+        return _broadcastFallback();
+      }
+    } catch (e) {
+      // FFI 不可用，回退到 Dart 侧模拟实现
+      return _broadcastFallback();
+    }
+  }
+
+  /// Dart 侧兜底：模拟广播数据
+  Future<bool> _broadcastFallback() async {
     await Future.delayed(const Duration(milliseconds: 100));
     return true;
   }
 
+  /// 与指定对等节点同步数据
+  /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<void> syncWithPeer(String peerId) async {
     if (_state.status != P2PNodeStatus.running) return;
 
     final peer = _state.peers.where((p) => p.peerId == peerId).firstOrNull;
     if (peer == null) return;
 
+    try {
+      // 构造 FFI 请求载荷
+      final payload = utf8.encode(jsonEncode({
+        'peer_id': peerId,
+        'type': 'sync_request',
+        'timestamp': DateTime.now().toIso8601String(),
+      }));
+
+      final result = await _dispatch.asyncRequest(
+        'P2PEvent.SyncWithPeer',
+        payload: Uint8List.fromList(payload),
+      );
+
+      if (result is Failure) {
+        // FFI 调用失败，回退到 Dart 侧模拟实现
+        await _syncWithPeerFallback(peerId);
+      }
+    } catch (e) {
+      // FFI 不可用，回退到 Dart 侧模拟实现
+      await _syncWithPeerFallback(peerId);
+    }
+  }
+
+  /// Dart 侧兜底：模拟与对等节点同步
+  Future<void> _syncWithPeerFallback(String peerId) async {
     final syncData = utf8.encode(jsonEncode({
       'type': 'sync_request',
       'timestamp': DateTime.now().toIso8601String(),

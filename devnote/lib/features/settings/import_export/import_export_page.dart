@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/core/persistence/folder_repository.dart';
+import 'package:devnote/core/persistence/note_repository.dart';
+import 'package:devnote/core/persistence/tag_repository.dart';
 import 'package:devnote/features/settings/import_export/import_service.dart';
 import 'package:devnote/features/settings/import_export/export_service.dart';
 import 'package:devnote/features/settings/import_export/widgets/import_progress_dialog.dart';
@@ -17,8 +21,24 @@ class _ImportExportPageState extends State<ImportExportPage> {
   ExportRange _exportRange = ExportRange.all;
   ExportFormat _exportFormat = ExportFormat.markdown;
 
-  final _importService = ImportService();
-  final _exportService = ExportService();
+  late final ImportService _importService;
+  late final ExportService _exportService;
+
+  @override
+  void initState() {
+    super.initState();
+    final dbHelper = DatabaseHelper();
+    _importService = ImportService(
+      noteRepository: SqliteNoteRepository(dbHelper),
+      folderRepository: SqliteFolderRepository(dbHelper),
+      tagRepository: SqliteTagRepository(dbHelper),
+    );
+    _exportService = ExportService(
+      noteRepository: SqliteNoteRepository(dbHelper),
+      folderRepository: SqliteFolderRepository(dbHelper),
+      tagRepository: SqliteTagRepository(dbHelper),
+    );
+  }
 
   @override
   void dispose() {

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/di/injection.dart';
@@ -49,6 +50,13 @@ class SyncServiceState {
 
 class SyncService {
   SyncService();
+
+  // 默认同步服务器地址
+  static const String _defaultServerUrl = 'https://sync.devnote.app';
+
+  // SharedPreferences 中存储服务器地址和认证令牌的键名
+  static const String _keyServerUrl = 'sync_server_url';
+  static const String _keyAuthToken = 'sync_auth_token';
 
   static const String _keyLastSyncTime = 'sync_last_sync_time';
   static const String _keyPendingChanges = 'sync_pending_changes';
@@ -193,13 +201,77 @@ class SyncService {
     );
   }
 
-  Future<void> _performPush(Uint8List data) async {
-    await Future.delayed(const Duration(milliseconds: 100));
+  /// 获取配置的服务器地址，优先从 SharedPreferences 读取，否则使用默认值
+  Future<String> _getServerUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyServerUrl) ?? _defaultServerUrl;
   }
 
+  /// 获取 JWT 认证令牌
+  Future<String?> _getAuthToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyAuthToken);
+  }
+
+  /// 执行推送：将加密后的数据通过 POST 请求发送到同步服务器
+  ///
+  /// 请求地址: POST /api/v1/sync/push
+  /// 请求头: Content-Type: application/octet-stream, Authorization: Bearer {token}
+  /// 请求体: 加密后的 Uint8List 数据
+  /// 网络异常或服务端非 2xx 响应时抛出异常，由上层 pushChanges 捕获处理
+  Future<void> _performPush(Uint8List data) async {
+    final serverUrl = await _getServerUrl();
+    final token = await _getAuthToken();
+
+    final uri = Uri.parse('$serverUrl/api/v1/sync/push');
+    final headers = <String, String>{
+      'Content-Type': 'application/octet-stream',
+    };
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+
+    final response = await http.post(uri, headers: headers, body: data);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      // 推送成功
+      return;
+    }
+
+    // 服务端返回错误，抛出异常
+    throw Exception('推送失败: HTTP ${response.statusCode} - ${response.body}');
+  }
+
+  /// 执行拉取：从同步服务器获取数据
+  ///
+  /// 请求地址: GET /api/v1/sync/pull
+  /// 请求头: Authorization: Bearer {token}
+  /// 返回: 服务端响应的原始字节数据（Uint8List），无新数据时返回 null
+  /// 网络异常或服务端非 2xx 响应时抛出异常，由上层 pullChanges 捕获处理
   Future<Uint8List?> _performPull() async {
-    await Future.delayed(const Duration(milliseconds: 100));
-    return null;
+    final serverUrl = await _getServerUrl();
+    final token = await _getAuthToken();
+
+    final uri = Uri.parse('$serverUrl/api/v1/sync/pull');
+    final headers = <String, String>{};
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+
+    final response = await http.get(uri, headers: headers);
+
+    if (response.statusCode == 204) {
+      // 无新数据
+      return null;
+    }
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      // 拉取成功，返回原始字节数据
+      return response.bodyBytes;
+    }
+
+    // 服务端返回错误，抛出异常
+    throw Exception('拉取失败: HTTP ${response.statusCode} - ${response.body}');
   }
 
   void _notifyListeners() {}

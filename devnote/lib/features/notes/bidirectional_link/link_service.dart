@@ -1,4 +1,11 @@
+// 双向链接服务 —— 解析 [[笔记名]] 格式的维基链接并查找反向引用
+// 借鉴 Obsidian 的双向链接设计
+// 来源: https://obsidian.md
+// 借鉴内容: [[笔记名]] 维基链接语法、反向链接(backlinks)查找、
+//         链接解析与目标解析(resolution)、链接创建与移除
+
 import 'package:devnote/core/persistence/note_repository.dart';
+import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 
 class LinkInfo {
@@ -10,11 +17,15 @@ class LinkInfo {
 
 class BidirectionalLinkService {
   final NoteRepository _noteRepository;
+  final FolderRepository _folderRepository;
 
-  BidirectionalLinkService(this._noteRepository);
+  BidirectionalLinkService(this._noteRepository, this._folderRepository);
 
+  /// 匹配 [[笔记名]] 格式的维基链接
+  /// 借鉴 Obsidian 的 Wikilink 语法
   static final linkPattern = RegExp(r'\[\[(.+?)\]\]');
 
+  /// 解析内容中的所有 [[链接]]
   List<LinkInfo> parseLinks(String content) {
     final matches = linkPattern.allMatches(content);
     return matches.map((match) {
@@ -23,6 +34,7 @@ class BidirectionalLinkService {
     }).toList();
   }
 
+  /// 解析链接并解析目标笔记 ID
   Future<List<LinkInfo>> parseLinksResolved(String content) async {
     final links = parseLinks(content);
     final resolved = <LinkInfo>[];
@@ -33,6 +45,9 @@ class BidirectionalLinkService {
     return resolved;
   }
 
+  /// 查找指向指定笔记的所有反向链接(backlinks)
+  /// 借鉴 Obsidian 的反向链接面板设计
+  /// 来源: https://help.obsidian.md/Plugins/Backlinks
   Future<List<NoteModel>> findBacklinks(String noteId) async {
     final note = await _noteRepository.getNote(noteId);
     if (note == null) return [];
@@ -54,14 +69,17 @@ class BidirectionalLinkService {
     return backlinks;
   }
 
+  /// 创建 [[笔记名]] 格式的链接
   String createLink(String noteName) {
     return '[[$noteName]]';
   }
 
+  /// 从内容中移除链接语法，保留纯文本
   String removeLink(String content, String noteName) {
     return content.replaceAll('[[$noteName]]', noteName);
   }
 
+  /// 通过笔记名查找笔记 ID
   Future<String?> _findNoteByName(String name) async {
     final allFolders = await _getAllNoteFolders();
     for (final folderId in allFolders) {
@@ -73,7 +91,9 @@ class BidirectionalLinkService {
     return null;
   }
 
+  /// 获取所有文件夹 ID —— 通过 FolderRepository 获取真实数据
   Future<List<String>> _getAllNoteFolders() async {
-    return [];
+    final folders = await _folderRepository.listFolders();
+    return folders.map((f) => f.id).toList();
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/performance/virtual_scroll_controller.dart';
 import 'package:devnote/features/notes/bloc/notes_bloc.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
@@ -38,6 +39,23 @@ class NoteList extends StatelessWidget {
       return Semantics(
         label: '暂无笔记',
         child: const Center(child: Text('暂无笔记')),
+      );
+    }
+    // 笔记数量超过阈值时启用虚拟滚动，提升长列表性能
+    if (notes.length > 100) {
+      return Semantics(
+        label: '笔记列表（虚拟滚动）',
+        child: VirtualScrollView(
+          controller: VirtualScrollController(),
+          itemCount: notes.length,
+          itemHeight: 72.0, // NoteCard 的预估高度
+          itemBuilder: (context, index) {
+            return NoteCard(
+              note: notes[index],
+              isSelected: notes[index].id == selectedNoteId,
+            );
+          },
+        ),
       );
     }
     return Semantics(
