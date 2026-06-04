@@ -15,6 +15,61 @@
 //! 借鉴 Obsidian 的社区插件模型
 //! 来源: https://github.com/obsidianmd/obsidian-sample-plugin
 //! 借鉴内容: 插件清单(manifest)元数据、插件生命周期管理、权限系统设计
+//!
+//! ## 插件系统架构
+//!
+//! 本模块实现了 DevNote 的 WASM 插件系统，采用分层架构：
+//!
+//! ```text
+//! ┌─────────────────────────────────────────┐
+//! │           Dart 前端 (Flutter)            │
+//! │  通过 FFI Bridge 调用 Rust 插件管理 API   │
+//! └──────────────────┬──────────────────────┘
+//!                    │ FFI (flutter_rust_bridge)
+//! ┌──────────────────▼──────────────────────┐
+//! │         PluginManager (高层 API)         │
+//! │  注册/发现/管理插件，权限授予/撤销         │
+//! ├──────────────────────────────────────────┤
+//! │         PluginSandbox (低层 API)          │
+//! │  基于 extism Runtime 的 WASM 沙箱执行     │
+//! ├──────────────────────────────────────────┤
+//! │         extism Runtime (WASM 引擎)       │
+//! │  wasmtime 引擎 + Fuel 限制 + 内存隔离    │
+//! └──────────────────────────────────────────┘
+//! ```
+//!
+//! ## Plugin FFI Contract
+//!
+//! ### Dart↔Rust 接口约定
+//!
+//! Dart 前端通过 `flutter_rust_bridge` (FRB) 调用 Rust 插件 API，
+//! 所有跨 FFI 边界的数据结构必须实现 `Serialize`/`Deserialize`，
+//! FRB 使用 SSE 编解码器自动处理序列化。
+//!
+//! ### FFI 函数清单
+//!
+//! | Dart 调用 | Rust 实现 | 说明 |
+//! |-----------|-----------|------|
+//! | `loadPlugin(wasmBytes, manifest)` | `PluginManager::load_plugin()` | 加载 WASM 插件到沙箱 |
+//! | `unloadPlugin(id)` | `PluginManager::unload_plugin()` | 卸载插件并释放资源 |
+//! | `enablePlugin(id)` | `PluginManager::enable_plugin()` | 启用已加载的插件 |
+//! | `disablePlugin(id)` | `PluginManager::disable_plugin()` | 禁用插件（保留在内存中） |
+//! | `executePlugin(id, method, params)` | `PluginManager::execute_plugin()` | 执行插件导出的函数 |
+//! | `grantPermission(id, permission)` | `PluginManager::grant_permission()` | 授予插件权限 |
+//! | `revokePermission(id, permission)` | `PluginManager::revoke_permission()` | 撤销插件权限 |
+//! | `listPlugins()` | `PluginManager::list_plugins()` | 列出所有已注册插件 |
+//! | `checkPluginHealth(id)` | `PluginManager::check_plugin_health()` | 检查插件健康状态 |
+//!
+//! ### 数据类型映射
+//!
+//! | Rust 类型 | Dart 类型 | 说明 |
+//! |-----------|-----------|------|
+//! | `PluginManifest` | `Map<String, dynamic>` | 插件清单元数据 |
+//! | `PluginPermission` | `String` (enum name) | 插件权限枚举 |
+//! | `PluginLifecycleState` | `String` (enum name) | 插件生命周期状态 |
+//! | `PluginMethodResult` | `Map<String, dynamic>` | 插件函数执行结果 |
+//! | `PluginHealth` | `Map<String, dynamic>` | 插件健康检查结果 |
+//! | `PluginError` | `String` (error message) | 插件错误（通过 FRB Result 传递） |
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -97,6 +152,38 @@ pub enum PluginError {
 /// - 执行时间限制（Fuel 消耗追踪）
 /// - Host Function 注册
 /// - WASM 模块缓存
+///
+/// ## 可用权限
+///
+/// 插件通过 [`PluginPermission`] 枚举声明所需权限，宿主通过
+/// `grant_permission()` / `revoke_permission()` 管理权限授予状态。
+///
+/// | 权限 | 说明 |
+/// |------|------|
+/// | `ReadNotes` | 读取笔记内容 |
+/// | `WriteNotes` | 写入/修改笔记内容 |
+/// | `AccessNetwork` | 访问网络（HTTP 请求） |
+/// | `AccessFileSystem` | 访问本地文件系统 |
+/// | `AccessUI` | 访问/修改 UI 界面 |
+/// | `AccessCanvas` | 访问 Canvas 画布数据 |
+/// | `AccessDatabase` | 访问数据库（CRUD 操作） |
+///
+/// ## 插件加载流程
+///
+/// 1. 宿主调用 `load_plugin(wasm_bytes, manifest)` 加载 WASM 模块
+/// 2. extism 编译 WASM 字节码并缓存编译结果
+/// 3. 创建 extism Plugin 实例，启用 WASI 支持
+/// 4. 插件进入 `Loaded` 状态，需调用 `enable_plugin()` 激活
+///
+/// ## 插件生命周期
+///
+/// ```text
+/// Loaded → Enabled ⇄ Disabled → (unload)
+/// ```
+///
+/// - `Loaded`: WASM 模块已编译并实例化，但尚未激活
+/// - `Enabled`: 插件已激活，可执行导出函数
+/// - `Disabled`: 插件已停用，保留在内存中，可重新启用
 pub struct PluginSandbox {
     // extism Runtime —— 替代原自研的 wasmtime Engine + Store
     runtime: extism::Runtime,
@@ -279,6 +366,31 @@ pub struct PluginHealth {
 }
 
 /// 插件管理器 —— 封装 PluginSandbox，提供高层 API
+///
+/// ## 注册与发现
+///
+/// - `load_plugin()`: 从 WASM 字节码加载插件到沙箱
+/// - `register_lazy()`: 延迟注册插件字节码，不立即加载
+/// - `load_lazy()`: 按需加载之前延迟注册的插件
+/// - `list_plugins()`: 列出所有已注册的插件
+/// - `get_plugin()`: 按 ID 获取插件信息
+///
+/// ## 生命周期管理
+///
+/// - `enable_plugin()` / `disable_plugin()`: 切换插件启用/禁用状态
+/// - `unload_plugin()`: 从沙箱中卸载插件并释放资源
+///
+/// ## 权限管理
+///
+/// - `grant_permission()`: 授予插件指定权限
+/// - `revoke_permission()`: 撤销插件指定权限
+/// - `check_permission()`: 检查插件是否拥有指定权限
+///
+/// ## 执行与监控
+///
+/// - `execute_plugin()`: 调用插件导出的函数
+/// - `check_plugin_health()`: 检查插件运行健康状态
+/// - `get_plugin_version()`: 获取插件版本号
 pub struct PluginManager {
     sandbox: PluginSandbox,
     lazy_loaded: HashMap<String, Vec<u8>>,

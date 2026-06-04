@@ -14,6 +14,7 @@
 /// 借鉴 AppFlowy 的 Dispatch 模式（已升级为 FRB 直接调用）
 
 import 'dart:convert';
+import 'dart:developer';
 import 'dart:typed_data';
 
 import 'package:devnote/core/bridge/ffi_bridge.dart';
@@ -203,6 +204,23 @@ class Dispatch {
 
   /// 兼容旧 Event-Dispatch 调用方式
   /// 新代码应直接使用上面的类型安全方法
+  ///
+  /// TODO(R10-06): 迁移迁移指南
+  /// 以下文件仍在使用 asyncRequest，需逐步迁移到类型安全方法：
+  /// - lib/features/knowledge_graph/graph_service.dart (9 处调用)
+  /// - lib/features/canvas/canvas_service.dart (13 处调用)
+  /// - lib/features/flashcard/flashcard_service.dart (11 处调用)
+  /// - lib/features/sync/p2p/p2p_service.dart (6 处调用)
+  /// - lib/features/workflow/git_service.dart (7 处调用)
+  /// - lib/features/workflow/file_watcher_service.dart (1 处调用)
+  /// - lib/features/workflow/external_editor_sync.dart (3 处调用)
+  /// - lib/features/search/search_service.dart (2 处调用)
+  /// - lib/features/knowledge/knowledge_service.dart (2 处调用)
+  /// - lib/features/knowledge/knowledge_map/knowledge_map_service.dart (4 处调用)
+  /// - lib/features/knowledge/learning_stats/learning_stats_service.dart (4 处调用)
+  /// - lib/features/knowledge/dashboard/dashboard_service.dart (3 处调用)
+  /// 迁移方法：将 asyncRequest('XxxEvent.Yyy', payload: ...) 替换为
+  /// 对应的类型安全方法如 dispatch.createNote(title: ..., content: ..., folderId: ...)
   @Deprecated('Use type-safe methods instead of Event-Dispatch strings')
   Future<FlowyResult> asyncRequest(String event, {Uint8List? payload}) async {
     try {
@@ -214,7 +232,9 @@ class Dispatch {
   }
 
   /// 旧事件路由兼容层 —— 将字符串事件名映射到 FRB 函数调用
+  /// TODO(R10-06): 迁移所有 asyncRequest 调用方到类型安全方法后移除此方法
   Future<Uint8List> _dispatchLegacy(String event, Uint8List? payload) async {
+    log('Warning: asyncRequest legacy path used for event: $event. Migrate to type-safe method.', name: 'Dispatch');
     final payloadMap = payload != null
         ? jsonDecode(utf8.decode(payload)) as Map<String, dynamic>
         : <String, dynamic>{};

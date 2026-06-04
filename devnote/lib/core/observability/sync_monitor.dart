@@ -56,6 +56,9 @@
 /// print(monitor.totalSyncedBytes); // 总同步字节数
 /// ```
 
+import 'dart:async';
+import 'dart:io';
+
 // 借鉴 OpenTelemetry Dart SDK —— 来源: https://pub.dev/packages/opentelemetry
 // 使用 OTel API 和 SDK 中的类型（Attributes、Resource 等）
 import 'package:opentelemetry/api.dart' as otel_api;
@@ -270,6 +273,47 @@ class OTelMeter {
   OTelHistogram? getHistogram(String name) => _histograms[name];
 }
 
+/// OTLP/Prometheus 导出配置 —— 借鉴 OTel 规范的 MetricExporter 配置
+///
+/// 来源: https://opentelemetry.io/docs/specs/otel/protocol/exporter/
+/// 规范定义: 配置指标导出的目标端点、间隔和超时。
+class OTelExporterConfig {
+  /// 导出目标端点 URL
+  final String endpoint;
+
+  /// 导出间隔 —— 每隔多长时间收集并推送一次指标
+  final Duration exportInterval;
+
+  /// 导出超时 —— 单次导出 HTTP 请求的超时时间
+  final Duration exportTimeout;
+
+  OTelExporterConfig({
+    required this.endpoint,
+    this.exportInterval = const Duration(seconds: 10),
+    this.exportTimeout = const Duration(seconds: 5),
+  });
+
+  /// 默认 OTLP 配置 —— 导出至 OTLP HTTP 接收端
+  /// 端点: http://localhost:4318/v1/metrics
+  factory OTelExporterConfig.otlp() {
+    return OTelExporterConfig(
+      endpoint: 'http://localhost:4318/v1/metrics',
+      exportInterval: const Duration(seconds: 10),
+      exportTimeout: const Duration(seconds: 5),
+    );
+  }
+
+  /// 默认 Prometheus 配置 —— 推送至 Prometheus pushgateway
+  /// 端点: http://localhost:9090/metrics
+  factory OTelExporterConfig.prometheus() {
+    return OTelExporterConfig(
+      endpoint: 'http://localhost:9090/metrics',
+      exportInterval: const Duration(seconds: 15),
+      exportTimeout: const Duration(seconds: 5),
+    );
+  }
+}
+
 /// OpenTelemetry MeterProvider —— 借鉴 OTel 规范 MeterProvider
 ///
 /// 来源: https://opentelemetry.io/docs/specs/otel/metrics/api/#meterprovider
@@ -285,7 +329,13 @@ class OTelMeterProvider {
   /// 用于标识产生遥测数据的实体
   otel_sdk.Resource? resource;
 
-  OTelMeterProvider({this.resource});
+  /// 导出配置 —— 借鉴 OTel 规范的 MetricExporter 配置
+  OTelExporterConfig? exporterConfig;
+
+  /// 定时导出 Timer
+  Timer? _exportTimer;
+
+  OTelMeterProvider({this.resource, this.exporterConfig});
 
   /// 获取 Meter —— 对应 OTel 规范 MeterProvider.GetMeter() 操作
   /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#get-a-meter
@@ -295,6 +345,107 @@ class OTelMeterProvider {
       key,
       () => OTelMeter(name: name, version: version),
     );
+  }
+
+  /// 收集所有 Meter 的指标数据，格式化为 OTLP JSON
+  Map<String, dynamic> _collectMetrics() {
+    final scopeMetrics = <Map<String, dynamic>>[];
+    for (final meter in _meters.values) {
+      final counters = <Map<String, dynamic>>[];
+      for (final counter in meter._counters.values) {
+        counters.add({
+          'name': counter.name,
+          'description': counter.description,
+          'unit': counter.unit,
+          'data': {
+            'dataPoints': [
+              {
+                'asInt': counter.value,
+                'timeUnixNano': DateTime.now().microsecondsSinceEpoch * 1000,
+              }
+            ],
+            'isMonotonic': true,
+          },
+        });
+      }
+
+      final histograms = <Map<String, dynamic>>[];
+      for (final histogram in meter._histograms.values) {
+        histograms.add({
+          'name': histogram.name,
+          'description': histogram.description,
+          'unit': histogram.unit,
+          'data': {
+            'dataPoints': [
+              {
+                'count': histogram.count,
+                'sum': histogram.sum,
+                'bucketCounts': histogram.buckets,
+                'explicitBounds': histogram.bucketBoundaries,
+                'timeUnixNano': DateTime.now().microsecondsSinceEpoch * 1000,
+              }
+            ],
+          },
+        });
+      }
+
+      if (counters.isNotEmpty || histograms.isNotEmpty) {
+        scopeMetrics.add({
+          'scope': {'name': meter.name, 'version': meter.version},
+          'metrics': [
+            ...counters,
+            ...histograms,
+          ],
+        });
+      }
+    }
+
+    return {
+      'resourceMetrics': [
+        {
+          'resource': {
+            'attributes': [
+              {'key': 'service.name', 'value': {'stringValue': 'devnote'}},
+            ],
+          },
+          'scopeMetrics': scopeMetrics,
+        }
+      ],
+    };
+  }
+
+  /// 启动定时导出 —— 借鉴 OTel 规范的 PeriodicExportingMetricReader
+  /// 规范: https://opentelemetry.io/docs/specs/otel/sdk/metric/export/
+  ///
+  /// 每隔 [exportInterval] 收集所有指标并通过 HTTP POST 推送至配置的端点
+  void startExport() {
+    if (exporterConfig == null) return;
+    stopExport();
+    _exportTimer = Timer.periodic(exporterConfig!.exportInterval, (_) async {
+      try {
+        final metrics = _collectMetrics();
+        // 借鉴 OTLP HTTP 导出协议: Content-Type 为 application/json
+        // 规范: https://opentelemetry.io/docs/specs/otel/protocol/exporter/
+        final uri = Uri.parse(exporterConfig!.endpoint);
+        final client = HttpClient();
+        try {
+          final request = await client.postUrl(uri);
+          request.headers.set('Content-Type', 'application/json');
+          request.write(metrics.toString());
+          await request.close().timeout(exporterConfig!.exportTimeout);
+        } finally {
+          client.close();
+        }
+      } catch (_) {
+        // 导出失败时静默忽略，避免影响主流程
+      }
+    });
+  }
+
+  /// 停止定时导出
+  void stopExport() {
+    _exportTimer?.cancel();
+    _exportTimer = null;
   }
 }
 

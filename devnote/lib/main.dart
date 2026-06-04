@@ -25,6 +25,7 @@ import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
 import 'package:devnote/core/i18n/app_localizations.dart' show LocaleProvider;
+import 'package:devnote/core/platform/platform_channel.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,6 +39,16 @@ void main() async {
   } catch (e) {
     debugPrint('Warning: FFI bridge initialization failed: $e');
     // Continue without FFI - graceful degradation
+  }
+
+  // Initialize platform channel
+  try {
+    final platformChannel = DevNotePlatformChannel();
+    final deviceInfo = await platformChannel.getDeviceInfo();
+    debugPrint('Platform channel initialized. Device info: $deviceInfo');
+  } catch (e) {
+    debugPrint('Warning: Platform channel initialization failed: $e');
+    // Continue without platform channel - graceful degradation
   }
 
   // Initialize performance systems

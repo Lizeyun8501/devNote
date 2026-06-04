@@ -18,12 +18,17 @@
 /// Flutter Favorite: ✅
 
 import 'dart:convert';
+import 'dart:developer';
 import 'dart:typed_data';
 
 // ============================================================
 // FRB 生成的绑定导入
 // flutter_rust_bridge_codegen generate 会自动生成此文件
 // 包含所有 Rust frb_api.rs 中导出函数的 Dart 绑定
+//
+// TODO(codegen): 运行 flutter_rust_bridge_codegen generate 后，
+//   取消下方注释并删除 flutter_rust_bridge 的通用导入：
+//   import 'package:devnote_ffi/src/rust/api/frb_api.dart' as rust_api;
 // ============================================================
 import 'package:flutter_rust_bridge/flutter_rust_bridge.dart';
 
@@ -80,20 +85,34 @@ class FFIBridge {
 
   // FRB 生成的 API 实例
   // flutter_rust_bridge_codegen generate 后会创建对应的 Dart 类
-  // 这里使用动态类型，实际类型由 FRB 代码生成器生成
+  // 实际类型为 DevNoteApi（由 FRB 代码生成器生成），此处使用 dynamic
+  // 直到 codegen 运行后才能确定具体类型
   dynamic _frbApi;
 
   /// 初始化 FRB 桥接
   ///
-  /// FRB 自动处理：
-  /// - 加载 native 库（跨平台路径适配）
-  /// - 初始化 wasmtime 运行时
-  /// - 建立 SSE 通信通道
+  /// FRB v2 初始化模式：
+  /// 1. 构造 FRB 生成的 API 实例（如 DevNoteApi()）
+  /// 2. 调用 Rust 端 initEngines() 初始化引擎
+  ///
+  /// TODO(codegen): 运行 flutter_rust_bridge_codegen generate 后，
+  ///   将下方替换为：
+  ///   final api = DevNoteApi();
+  ///   await api.initEngines();
+  ///   _frbApi = api;
   Future<void> init() async {
     try {
-      // FRB 初始化 —— 替代原 DynamicLibrary.open + lookupFunction
-      // FRB 自动处理跨平台库路径适配
-      final api = await FlutterRustBridge.init();
+      // FRB v2 初始化 —— 替代原 DynamicLibrary.open + lookupFunction
+      // FRB v2 正确模式: 直接构造 FRB codegen 生成的 API 类
+      // TODO(codegen): 运行 flutter_rust_bridge_codegen generate 后，
+      //   取消下方注释并删除 placeholder:
+      //   final api = DevNoteApi();
+      //   _frbApi = api;
+      //   await _frbApi.initEngines();
+      //
+      // 当前 placeholder: 使用 RustApi 基类初始化（FRB v2 标准模式）
+      // RustApi 是 FRB v2 所有生成 API 的基类，构造时自动加载 native 库
+      final api = RustApi();
       _frbApi = api;
 
       // 调用 Rust 端 initEngines() —— 替代原 devnote_init + register_all_handlers
@@ -114,7 +133,8 @@ class FFIBridge {
       // 直接调用 Rust 函数，无需 JSON 序列化
       final version = await _frbApi.getVersion();
       return FfiVersionInfo.fromFrb(version);
-    } catch (_) {
+    } catch (e) {
+      log('FRB negotiateVersion failed: $e', name: 'FFIBridge');
       return null;
     }
   }
@@ -125,7 +145,8 @@ class FFIBridge {
     try {
       final health = await _frbApi.healthCheck();
       return Map<String, bool>.from(health.engines as Map);
-    } catch (_) {
+    } catch (e) {
+      log('FRB healthCheck failed: $e', name: 'FFIBridge');
       return null;
     }
   }
@@ -420,7 +441,8 @@ class FFIBridge {
     try {
       final json = (obj as dynamic).toJson();
       return Map<String, dynamic>.from(json as Map);
-    } catch (_) {
+    } catch (e) {
+      log('FRB _toMap failed: $e', name: 'FFIBridge');
       return {'value': obj.toString()};
     }
   }

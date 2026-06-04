@@ -61,7 +61,8 @@ pub trait BlockEditor: Send + Sync {
     fn update_block(&mut self, id: &Uuid, content: String) -> anyhow::Result<()>;
     fn delete_block(&mut self, id: &Uuid) -> anyhow::Result<()>;
     fn move_block(&mut self, id: &Uuid, new_position: usize) -> anyhow::Result<()>;
-    fn list_blocks(&mut self, note_id: &Uuid) -> anyhow::Result<Vec<Block>>;
+    fn list_blocks(&mut self, note_id: &Uuid, offset: Option<usize>, limit: Option<usize>) -> anyhow::Result<Vec<Block>>;
+    fn list_blocks_paged(&mut self, note_id: &Uuid, page: usize, page_size: usize) -> anyhow::Result<Vec<Block>>;
     fn parse_markdown(&mut self, content: &str, note_id: Uuid) -> anyhow::Result<Vec<Block>>;
 
     fn insert_block(&mut self, parent_id: Option<&Uuid>, index: usize, block: Block) -> anyhow::Result<()>;
@@ -163,14 +164,27 @@ impl BlockEditor for DefaultBlockEditor {
         Ok(())
     }
 
-    fn list_blocks(&mut self, note_id: &Uuid) -> anyhow::Result<Vec<Block>> {
+    fn list_blocks(&mut self, note_id: &Uuid, offset: Option<usize>, limit: Option<usize>) -> anyhow::Result<Vec<Block>> {
         self.reindex_positions(note_id);
         let mut blocks: Vec<Block> = self.blocks.iter()
             .filter(|b| b.note_id == *note_id)
             .cloned()
             .collect();
         blocks.sort_by_key(|b| b.position);
-        Ok(blocks)
+        let start = offset.unwrap_or(0);
+        if start >= blocks.len() {
+            return Ok(Vec::new());
+        }
+        let end = match limit {
+            Some(lim) => (start + lim).min(blocks.len()),
+            None => blocks.len(),
+        };
+        Ok(blocks[start..end].to_vec())
+    }
+
+    fn list_blocks_paged(&mut self, note_id: &Uuid, page: usize, page_size: usize) -> anyhow::Result<Vec<Block>> {
+        let offset = page * page_size;
+        self.list_blocks(note_id, Some(offset), Some(page_size))
     }
 
     #[instrument]
@@ -1057,7 +1071,7 @@ mod tests {
         let b1 = editor.create_block(note_id, BlockType::Paragraph, "First".to_string(), 0).unwrap();
         let _b2 = editor.create_block(note_id, BlockType::Paragraph, "Second".to_string(), 1).unwrap();
         editor.move_block(&b1.id, 1).unwrap();
-        let blocks = editor.list_blocks(&note_id).unwrap();
+        let blocks = editor.list_blocks(&note_id, None, None).unwrap();
         assert_eq!(blocks[0].content, "Second");
         assert_eq!(blocks[1].content, "First");
     }

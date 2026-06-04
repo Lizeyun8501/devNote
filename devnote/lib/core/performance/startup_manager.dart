@@ -39,6 +39,8 @@ class StartupManager {
   final List<StartupTask> _lazyTasks = [];
   /// 任务耗时埋点（key: 任务名, value: 单次执行耗时）
   final Map<String, Duration> _taskDurations = {};
+  /// 任务依赖关系（key: 任务名, value: 该任务依赖的任务名列表）
+  final Map<String, List<String>> _taskDependencies = {};
   /// `runStartup` 调用时刻，用于计算总启动耗时
   DateTime? _startupTime;
 
@@ -65,8 +67,11 @@ class StartupManager {
   /// 注册关键任务
   ///
   /// 借鉴 Android App Startup `Initializer.create()` API：显式声明任务与依赖。
-  void registerCritical(String name, Future<void> Function() task) {
+  void registerCritical(String name, Future<void> Function() task, {List<String>? dependsOn}) {
     _criticalTasks.add(StartupTask(name: name, task: task));
+    if (dependsOn != null) {
+      _taskDependencies[name] = dependsOn;
+    }
   }
 
   /// 注册普通任务
@@ -107,6 +112,9 @@ class StartupManager {
     totalStopwatch.stop();
     developer.log('应用启动总耗时: ${totalStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
 
+    // 关键路径分析 —— 借鉴项目管理中的关键路径法(CPM)
+    _analyzeCriticalPath();
+
     unawaited(_runLazyTasks());
   }
 
@@ -125,12 +133,95 @@ class StartupManager {
     }
   }
 
+  /// 关键路径分析 —— 借鉴项目管理中的关键路径法(Critical Path Method, CPM)
+  ///
+  /// 识别启动流程中最长的依赖链，计算关键路径总耗时，并标记关键路径上的任务。
+  /// 关键路径决定了启动的最短可能时间：只有缩短关键路径上的任务才能缩短总启动时间。
+  void _analyzeCriticalPath() {
+    // 构建所有任务的耗时表（关键 + 普通）
+    final allTasks = <String, Duration>{};
+    for (final task in _criticalTasks) {
+      allTasks[task.name] = _taskDurations[task.name] ?? Duration.zero;
+    }
+    for (final task in _normalTasks) {
+      allTasks[task.name] = _taskDurations[task.name] ?? Duration.zero;
+    }
+
+    // 使用动态规划计算每个任务的最长依赖链耗时
+    // memo[name] = 从该任务开始（含自身）沿依赖链回溯的最长路径耗时
+    final memo = <String, Duration>{};
+
+    Duration longestPath(String taskName) {
+      if (memo.containsKey(taskName)) return memo[taskName]!;
+      final deps = _taskDependencies[taskName];
+      if (deps == null || deps.isEmpty) {
+        memo[taskName] = allTasks[taskName] ?? Duration.zero;
+        return memo[taskName]!;
+      }
+      Duration maxDepPath = Duration.zero;
+      for (final dep in deps) {
+        final depPath = longestPath(dep);
+        if (depPath > maxDepPath) {
+          maxDepPath = depPath;
+        }
+      }
+      memo[taskName] = maxDepPath + (allTasks[taskName] ?? Duration.zero);
+      return memo[taskName]!;
+    }
+
+    // 计算每个任务的依赖链最长路径
+    for (final taskName in allTasks.keys) {
+      longestPath(taskName);
+    }
+
+    // 找到全局最长路径（关键路径总耗时）
+    Duration criticalPathTotal = Duration.zero;
+    String? criticalPathEnd;
+    for (final entry in memo.entries) {
+      if (entry.value > criticalPathTotal) {
+        criticalPathTotal = entry.value;
+        criticalPathEnd = entry.key;
+      }
+    }
+
+    if (criticalPathEnd == null) return;
+
+    // 回溯关键路径上的任务
+    final criticalPathTasks = <String>[];
+    String? current = criticalPathEnd;
+    while (current != null) {
+      criticalPathTasks.add(current);
+      final deps = _taskDependencies[current];
+      if (deps == null || deps.isEmpty) break;
+      // 选择依赖中路径最长的那个
+      String? longestDep;
+      Duration longestDepDuration = Duration.zero;
+      for (final dep in deps) {
+        final depDuration = memo[dep] ?? Duration.zero;
+        if (depDuration > longestDepDuration) {
+          longestDepDuration = depDuration;
+          longestDep = dep;
+        }
+      }
+      current = longestDep;
+    }
+
+    criticalPathTasks.reverse();
+
+    developer.log(
+      '关键路径分析: 总耗时=${criticalPathTotal.inMilliseconds}ms, '
+      '路径=${criticalPathTasks.join(' → ')}',
+      name: 'StartupManager',
+    );
+  }
+
   /// 重置管理器（清空所有任务与耗时记录），主要用于测试场景
   void reset() {
     _criticalTasks.clear();
     _normalTasks.clear();
     _lazyTasks.clear();
     _taskDurations.clear();
+    _taskDependencies.clear();
     _startupTime = null;
   }
 }

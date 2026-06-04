@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
+import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
 import 'package:devnote/features/sync/p2p/p2p_settings_page.dart';
 
@@ -25,11 +28,94 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _autoSave = true;
   double _fontSize = 14.0;
   String _defaultEditMode = 'rich';
+  List<Map<String, dynamic>> _featureFlags = [];
+  bool _featureFlagsLoading = true;
+  String? _featureFlagsError;
 
   @override
   void initState() {
     super.initState();
     _loadDefaultEditMode();
+    _loadFeatureFlags();
+  }
+
+  Future<void> _loadFeatureFlags() async {
+    final bridge = getIt<FFIBridge>();
+    if (!bridge.isAvailable) {
+      if (!mounted) return;
+      setState(() {
+        _featureFlagsLoading = false;
+        _featureFlagsError = 'Feature Flags 不可用（FFI 未初始化）';
+      });
+      return;
+    }
+    try {
+      final dispatch = Dispatch();
+      final result = await dispatch.asyncRequest('FeatureFlagEvent.ListFlags');
+      result.when(
+        success: (data) {
+          if (!mounted) return;
+          final decoded = String.fromCharCodes(data);
+          final List<dynamic> flags = [];
+          // Parse the JSON response
+          try {
+            final parsed = _parseJsonList(decoded);
+            if (mounted) {
+              setState(() {
+                _featureFlags = parsed;
+                _featureFlagsLoading = false;
+                _featureFlagsError = null;
+              });
+            }
+          } catch (_) {
+            if (mounted) {
+              setState(() {
+                _featureFlags = [];
+                _featureFlagsLoading = false;
+                _featureFlagsError = null;
+              });
+            }
+          }
+        },
+        failure: (error) {
+          if (!mounted) return;
+          setState(() {
+            _featureFlagsLoading = false;
+            _featureFlagsError = error.message;
+          });
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _featureFlagsLoading = false;
+        _featureFlagsError = e.toString();
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> _parseJsonList(String json) {
+    final decoded = const JsonDecoder().convert(json);
+    if (decoded is List) {
+      return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    return [];
+  }
+
+  Future<void> _toggleFeatureFlag(String key, bool value) async {
+    final dispatch = Dispatch();
+    try {
+      await dispatch.asyncRequest('FeatureFlagEvent.SetFlag');
+      if (!mounted) return;
+      setState(() {
+        final idx = _featureFlags.indexWhere((f) => f['key'] == key);
+        if (idx >= 0) {
+          _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
+        }
+      });
+    } catch (_) {
+      // Silently fail - flag state remains unchanged
+    }
   }
 
   Future<void> _loadDefaultEditMode() async {
@@ -155,6 +241,33 @@ class _SettingsPageState extends State<SettingsPage> {
               trailing: const Icon(Icons.chevron_right),
               onTap: _pickDefaultEditMode,
             ),
+          ]),
+          _SettingsSection(title: 'Feature Flags', children: [
+            if (_featureFlagsLoading)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_featureFlagsError != null)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  _featureFlagsError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              )
+            else if (_featureFlags.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('暂无可用的 Feature Flags'),
+              )
+            else
+              ..._featureFlags.map((flag) => SwitchListTile(
+                    title: Text(flag['name'] as String? ?? flag['key'] as String? ?? ''),
+                    subtitle: Text(flag['description'] as String? ?? ''),
+                    value: flag['enabled'] as bool? ?? false,
+                    onChanged: (value) => _toggleFeatureFlag(flag['key'] as String, value),
+                  )),
           ]),
           _SettingsSection(title: '数据', children: [
             ListTile(

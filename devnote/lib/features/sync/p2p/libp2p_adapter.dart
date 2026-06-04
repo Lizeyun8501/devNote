@@ -34,7 +34,9 @@
 /// - FFI 桥接点（可调用 rust-core 的 devnote-p2p 模块）
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 /// PeerID —— P2P 网络中节点的唯一标识符
@@ -242,6 +244,27 @@ class IceServerConfig {
   ];
 }
 
+/// FFI 桥接 —— 用于调用 Rust devnote-p2p 模块的 WebRTC 实现
+///
+/// 由于 dart_webrtc 是平台特定包，无法在所有平台使用，
+/// 通过 FFI 桥接模式将 WebRTC 操作委托给 Rust 侧的 devnote-p2p crate。
+///
+/// Rust 侧提供以下 FFI 接口:
+/// - webrtc_create_offer: 创建 SDP Offer
+/// - webrtc_set_remote_description: 设置远程 SDP 描述
+/// - webrtc_add_ice_candidate: 添加 ICE 候选
+/// - webrtc_datachannel_send: 通过 DataChannel 发送数据
+/// - webrtc_peerconnection_close: 关闭 PeerConnection
+/// - webrtc_datachannel_close: 关闭 DataChannel
+abstract class FFIBridge {
+  /// 调用 Rust FFI 函数
+  ///
+  /// [method] - FFI 函数名（如 'webrtc_create_offer'）
+  /// [params] - 函数参数
+  /// 返回 FFI 调用结果
+  Future<Map<String, dynamic>> call(String method, Map<String, dynamic> params);
+}
+
 /// LibP2PAdapter —— 基于 WebRTC 的 P2P 连接适配器
 ///
 /// 核心设计借鉴:
@@ -298,7 +321,40 @@ class LibP2PAdapter {
   final Set<String> _activeConnections = {};
 
   /// 信令 WebSocket 连接
+  WebSocket? _signalingSocket;
+
+  /// 信令 WebSocket 消息订阅
   StreamSubscription? _signalingSubscription;
+
+  /// FFI 桥接实例 —— 用于调用 Rust WebRTC 实现
+  final FFIBridge? _ffiBridge;
+
+  /// 发送缓冲区 —— 背压支持，防止数据发送过快导致内存溢出
+  final Map<String, Queue<Uint8List>> _sendBuffers = {};
+
+  /// 发送缓冲区最大长度 —— 超过此值时丢弃最旧的数据
+  static const int _maxSendBufferSize = 1024;
+
+  /// 信令重连退避基数（毫秒）
+  static const int _reconnectBaseDelayMs = 500;
+
+  /// 信令最大重连退避时间（毫秒）
+  static const int _reconnectMaxDelayMs = 30000;
+
+  /// 信令最大重连次数
+  static const int _maxReconnectAttempts = 10;
+
+  /// 信令重连当前尝试次数
+  int _reconnectAttempts = 0;
+
+  /// 待处理的信令响应 Completer —— key 为请求 ID
+  final Map<String, Completer<Map<String, dynamic>>> _pendingSignalingRequests = {};
+
+  /// 待处理的 SDP Answer Completer —— key 为目标 PeerID
+  final Map<String, Completer<SessionDescription>> _pendingAnswers = {};
+
+  /// ICE 连接状态 Completer —— key 为 PeerID
+  final Map<String, Completer<void>> _iceConnectionCompleters = {};
 
   /// 状态监听器
   final List<void Function(LibP2PConnectionState)> _stateListeners = [];
@@ -315,8 +371,10 @@ class LibP2PAdapter {
   LibP2PAdapter({
     List<IceServerConfig>? iceServers,
     String? signalingUrl,
+    FFIBridge? ffiBridge,
   })  : _iceServers = iceServers ?? IceServerConfig.defaultServers,
-        _signalingUrl = signalingUrl ?? 'https://signal.devnote.app';
+        _signalingUrl = signalingUrl ?? 'https://signal.devnote.app',
+        _ffiBridge = ffiBridge;
 
   /// 添加状态监听器
   void addStateListener(void Function(LibP2PConnectionState) listener) {
@@ -342,6 +400,101 @@ class LibP2PAdapter {
     for (final listener in _stateListeners) {
       listener(_state);
     }
+  }
+
+  /// 处理信令服务器发来的消息
+  ///
+  /// 消息类型:
+  /// - 'answer': SDP Answer 响应，完成 _exchangeOffer 中的等待
+  /// - 'ice_candidate': ICE 候选信息，转发给 Rust WebRTC
+  /// - 'list_peers_response': 节点列表查询响应
+  /// - 'data': 通过 DataChannel 接收的数据
+  void _handleSignalingMessage(String message) {
+    try {
+      final json = jsonDecode(message) as Map<String, dynamic>;
+      final action = json['action'] as String?;
+
+      switch (action) {
+        case 'answer':
+          // SDP Answer 响应 —— 完成 _exchangeOffer 中的 Completer
+          final targetPeerId = json['target_peer_id'] as String?;
+          final sdpJson = json['sdp'] as Map<String, dynamic>?;
+          if (targetPeerId != null && sdpJson != null) {
+            final answer = SessionDescription.fromJson(sdpJson);
+            final completer = _pendingAnswers.remove(targetPeerId);
+            completer?.complete(answer);
+          }
+          break;
+
+        case 'ice_candidate':
+          // ICE 候选信息 —— 转发给 Rust WebRTC 处理
+          final candidateJson = json['candidate'] as Map<String, dynamic>?;
+          final peerId = json['peer_id'] as String?;
+          if (candidateJson != null && peerId != null) {
+            _callRustWebRTC('webrtc_add_ice_candidate', {
+              'peer_id': peerId,
+              'candidate': candidateJson,
+            }).catchError((_) {
+              // ICE 候选添加失败，忽略（Trickle ICE 允许部分失败）
+            });
+          }
+          break;
+
+        case 'ice_connection_state':
+          // ICE 连接状态变更
+          final peerId = json['peer_id'] as String?;
+          final state = json['state'] as String?;
+          if (peerId != null && state == 'connected') {
+            final completer = _iceConnectionCompleters.remove(peerId);
+            completer?.complete();
+          }
+          break;
+
+        case 'list_peers_response':
+          // 节点列表查询响应 —— 完成 _querySignalingServer 中的 Completer
+          final requestId = json['request_id'] as String?;
+          if (requestId != null) {
+            final completer = _pendingSignalingRequests.remove(requestId);
+            completer?.complete(json);
+          }
+          break;
+
+        case 'data':
+          // DataChannel 接收的数据
+          final sourcePeerId = json['source_peer_id'] as String?;
+          final dataBase64 = json['data'] as String?;
+          if (sourcePeerId != null && dataBase64 != null) {
+            final data = base64Decode(dataBase64);
+            for (final listener in _dataListeners) {
+              listener(PeerId(sourcePeerId), data);
+            }
+          }
+          break;
+      }
+    } catch (e) {
+      // 信令消息解析失败，忽略无效消息
+    }
+  }
+
+  /// 调用 Rust FFI 桥接执行 WebRTC 操作
+  ///
+  /// 将 WebRTC 操作委托给 Rust 侧的 devnote-p2p crate。
+  /// 如果未配置 FFIBridge，抛出异常。
+  ///
+  /// [method] - FFI 函数名（如 'webrtc_create_offer'）
+  /// [params] - 函数参数
+  Future<Map<String, dynamic>> _callRustWebRTC(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    final bridge = _ffiBridge;
+    if (bridge == null) {
+      throw UnsupportedError(
+        'FFIBridge 未配置，无法执行 WebRTC 操作: $method。'
+        '请在构造 LibP2PAdapter 时传入 FFIBridge 实例。',
+      );
+    }
+    return bridge.call(method, params);
   }
 
   // ==================== 初始化 ====================
@@ -385,14 +538,90 @@ class LibP2PAdapter {
   /// 连接信令服务器
   ///
   /// 信令服务器用于交换 WebRTC 的 SDP 和 ICE 候选信息。
-  /// 借鉴 webrtc-rs 的信令交换模式，实际实现可通过 WebSocket。
+  /// 借鉴 webrtc-rs 的信令交换模式，通过 WebSocket 实现。
+  ///
+  /// 连接流程:
+  /// 1. 建立 WebSocket 连接到信令服务器
+  /// 2. 监听 incoming messages (SDP offer/answer, ICE candidates)
+  /// 3. 转发消息到本地 WebRTC PeerConnection
+  ///
+  /// 断线重连使用指数退避策略:
+  /// 延迟 = min(base * 2^attempt, maxDelay)
   Future<void> _connectSignalingServer() async {
-    // TODO: 实际实现应通过 WebSocket 连接信令服务器
-    // 借鉴 webrtc-rs 的信令协议设计:
-    // 1. 建立 WebSocket 连接到信令服务器
-    // 2. 监听 incoming messages (SDP offer/answer, ICE candidates)
-    // 3. 转发消息到本地 WebRTC PeerConnection
-    await Future.delayed(const Duration(milliseconds: 100));
+    _reconnectAttempts = 0;
+    await _connectSignalingWithRetry();
+  }
+
+  /// 带指数退避重试的信令服务器连接
+  Future<void> _connectSignalingWithRetry() async {
+    while (true) {
+      try {
+        // 将 https:// 或 http:// 转换为 wss:// 或 ws://
+        final wsUrl = _signalingUrl
+            .replaceFirst('https://', 'wss://')
+            .replaceFirst('http://', 'ws://');
+        final uri = Uri.parse(wsUrl);
+
+        _signalingSocket = await WebSocket.connect(uri.toString());
+        _reconnectAttempts = 0;
+
+        _signalingSubscription = _signalingSocket!.listen(
+          (dynamic message) {
+            if (message is String) {
+              _handleSignalingMessage(message);
+            }
+          },
+          onError: (Object error) {
+            _onSignalingDisconnected();
+          },
+          onDone: () {
+            _onSignalingDisconnected();
+          },
+          cancelOnError: false,
+        );
+
+        return;
+      } catch (e) {
+        _reconnectAttempts++;
+        if (_reconnectAttempts > _maxReconnectAttempts) {
+          throw Exception(
+            '信令服务器连接失败，已达到最大重试次数 ($_maxReconnectAttempts): $e',
+          );
+        }
+
+        // 指数退避: delay = min(base * 2^attempt, maxDelay)
+        final delayMs = (_reconnectBaseDelayMs *
+                (1 << _reconnectAttempts.clamp(0, 20)))
+            .clamp(0, _reconnectMaxDelayMs);
+        await Future.delayed(Duration(milliseconds: delayMs));
+      }
+    }
+  }
+
+  /// 信令连接断开时的处理 —— 自动尝试重连
+  void _onSignalingDisconnected() {
+    _signalingSocket = null;
+    _signalingSubscription?.cancel();
+    _signalingSubscription = null;
+
+    // 仅在非主动关闭状态下尝试重连
+    if (_state == LibP2PConnectionState.connected ||
+        _state == LibP2PConnectionState.connecting) {
+      _reconnectAttempts++;
+      if (_reconnectAttempts <= _maxReconnectAttempts) {
+        final delayMs = (_reconnectBaseDelayMs *
+                (1 << _reconnectAttempts.clamp(0, 20)))
+            .clamp(0, _reconnectMaxDelayMs);
+        Future.delayed(Duration(milliseconds: delayMs), () {
+          _connectSignalingWithRetry().then((_) {
+            // 重连成功后重新注册
+            _registerWithSignaling();
+          }).catchError((_) {
+            // 重连失败，状态由 _connectSignalingWithRetry 管理
+          });
+        });
+      }
+    }
   }
 
   /// 向信令服务器注册本节点
@@ -405,13 +634,16 @@ class LibP2PAdapter {
   /// - Addresses: 可达地址列表
   /// - Protocols: 支持的协议列表
   Future<void> _registerWithSignaling() async {
-    // TODO: 发送注册消息到信令服务器
     final registrationPayload = jsonEncode({
       'action': 'register',
       'peer_id': _localPeerId?.id,
       'timestamp': DateTime.now().toIso8601String(),
     });
-    // 通过 WebSocket 发送 registrationPayload
+
+    final socket = _signalingSocket;
+    if (socket != null) {
+      socket.add(registrationPayload);
+    }
   }
 
   // ==================== 设备发现 ====================
@@ -459,15 +691,45 @@ class LibP2PAdapter {
   /// 借鉴 libp2p 的 DHT FindPeers 查询:
   /// https://github.com/libp2p/specs/blob/master/kad-dht/README.md#findpeers
   Future<List<LibP2PPeerInfo>> _querySignalingServer() async {
-    // TODO: 实际实现应通过信令服务器查询
-    // 查询协议:
-    // 1. 发送 'list_peers' 请求到信令服务器
-    // 2. 接收节点列表响应
-    // 3. 解析为 LibP2PPeerInfo 对象
-    await Future.delayed(const Duration(milliseconds: 200));
+    final socket = _signalingSocket;
+    if (socket == null) return _peers.values.toList();
 
-    // 模拟返回缓存的节点
-    return _peers.values.toList();
+    final requestId = 'list_${DateTime.now().microsecondsSinceEpoch}';
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingSignalingRequests[requestId] = completer;
+
+    // 发送 list_peers 请求
+    final request = jsonEncode({
+      'action': 'list_peers',
+      'request_id': requestId,
+      'peer_id': _localPeerId?.id,
+    });
+    socket.add(request);
+
+    try {
+      // 等待响应，设置超时
+      final response = await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => {'peers': <dynamic>[]},
+      );
+
+      final peersList = response['peers'] as List<dynamic>? ?? [];
+      return peersList.map((dynamic p) {
+        final peerMap = p as Map<String, dynamic>;
+        return LibP2PPeerInfo(
+          peerId: PeerId(peerMap['peer_id'] as String),
+          addresses: (peerMap['addresses'] as List<dynamic>?)
+                  ?.cast<String>() ??
+              [],
+          state: LibP2PConnectionState.disconnected,
+          lastSeenAt: peerMap['last_seen'] != null
+              ? DateTime.parse(peerMap['last_seen'] as String)
+              : null,
+        );
+      }).toList();
+    } finally {
+      _pendingSignalingRequests.remove(requestId);
+    }
   }
 
   /// 清理过期的 Peer 缓存
@@ -543,60 +805,100 @@ class LibP2PAdapter {
   ///
   /// 借鉴 webrtc-rs 的 PeerConnection.CreateOffer():
   /// https://github.com/webrtc-rs/webrtc/blob/master/webrtc/src/api/peerconnection/peerconnection.go
+  ///
+  /// 通过 FFI 桥接调用 Rust 侧的 webrtc_create_offer 实现。
   Future<SessionDescription> _createOffer() async {
-    // TODO: 实际实现应使用 dart_webrtc 或 FFI 调用原生 WebRTC
-    // 创建 RTCPeerConnection 配置:
-    // final configuration = RTCConfiguration(
-    //   iceServers: _iceServers.map((s) => RTCIceServer(
-    //     urls: [s.url],
-    //     username: s.username,
-    //     credential: s.credential,
-    //   )).toList(),
-    // );
-    // final pc = await createPeerConnection(configuration);
-    // await pc.createDataChannel('devnote', RTCDataChannelInit());
-    // final offer = await pc.createOffer();
-    // await pc.setLocalDescription(offer);
+    final result = await _callRustWebRTC('webrtc_create_offer', {
+      'peer_id': _localPeerId?.id ?? '',
+      'ice_servers': _iceServers
+          .map((s) => {
+                'url': s.url,
+                'username': s.username,
+                'credential': s.credential,
+              })
+          .toList(),
+    });
 
-    // 模拟创建 Offer
-    await Future.delayed(const Duration(milliseconds: 100));
-    return const SessionDescription(
-      type: 'offer',
-      sdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n',
+    return SessionDescription(
+      type: result['type'] as String? ?? 'offer',
+      sdp: result['sdp'] as String? ?? '',
     );
   }
 
   /// 通过信令服务器交换 SDP Offer/Answer
   ///
-  /// 借鉴 webrtc-rs 的信令交换模式
+  /// 借鉴 webrtc-rs 的信令交换模式:
+  /// 1. 通过 WebSocket 发送 offer 到目标 peer
+  /// 2. 等待目标 peer 创建 answer
+  /// 3. 接收 answer 并返回
   Future<SessionDescription> _exchangeOffer(
     String peerId,
     SessionDescription offer,
   ) async {
-    // TODO: 实际实现应通过信令服务器:
-    // 1. 发送 offer 到目标 peer
-    // 2. 等待目标 peer 创建 answer
-    // 3. 接收 answer 并返回
-    await Future.delayed(const Duration(milliseconds: 200));
-    return const SessionDescription(
-      type: 'answer',
-      sdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n',
-    );
+    final socket = _signalingSocket;
+    if (socket == null) {
+      throw Exception('信令服务器未连接，无法交换 SDP');
+    }
+
+    final completer = Completer<SessionDescription>();
+    _pendingAnswers[peerId] = completer;
+
+    // 通过信令服务器发送 offer
+    final message = jsonEncode({
+      'action': 'offer',
+      'target_peer_id': peerId,
+      'source_peer_id': _localPeerId?.id,
+      'sdp': offer.toJson(),
+    });
+    socket.add(message);
+
+    try {
+      // 等待 answer 响应，设置超时
+      return await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => throw TimeoutException(
+          '等待 SDP Answer 超时 (peer: $peerId)',
+        ),
+      );
+    } finally {
+      _pendingAnswers.remove(peerId);
+    }
   }
 
   /// 建立 WebRTC 连接
   ///
   /// 借鉴 webrtc-rs 的 ICE 连接建立流程:
   /// https://github.com/webrtc-rs/webrtc/blob/master/webrtcice/src/agent/agent.go
+  ///
+  /// 通过 FFI 桥接调用 Rust 侧:
+  /// 1. webrtc_set_remote_description: 设置远程 SDP 描述
+  /// 2. 等待 ICE 连接状态变为 connected
+  /// 3. 监听 DataChannel 的 onmessage 事件
   Future<void> _establishConnection(
     String peerId,
     SessionDescription answer,
   ) async {
-    // TODO: 实际实现:
-    // 1. pc.setRemoteDescription(answer)
-    // 2. 等待 ICE 连接状态变为 connected
-    // 3. 监听 DataChannel 的 onmessage 事件
-    await Future.delayed(const Duration(milliseconds: 100));
+    // 通过 FFI 设置远程描述
+    await _callRustWebRTC('webrtc_set_remote_description', {
+      'peer_id': peerId,
+      'sdp_type': answer.type,
+      'sdp': answer.sdp,
+    });
+
+    // 等待 ICE 连接建立
+    final completer = Completer<void>();
+    _iceConnectionCompleters[peerId] = completer;
+
+    try {
+      await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () => throw TimeoutException(
+          'ICE 连接超时 (peer: $peerId)',
+        ),
+      );
+    } finally {
+      _iceConnectionCompleters.remove(peerId);
+    }
   }
 
   // ==================== 数据传输 ====================
@@ -610,13 +912,30 @@ class LibP2PAdapter {
   /// - 有序/无序传输
   /// - 可靠/部分可靠模式
   /// - 二进制和文本数据
+  ///
+  /// 背压支持: 当发送速度超过 DataChannel 缓冲区容量时，
+  /// 数据暂存到本地 Queue 中，Queue 满时丢弃最旧的数据。
   Future<bool> send(String peerId, Uint8List data) async {
     if (!_activeConnections.contains(peerId)) return false;
 
     try {
-      // TODO: 实际实现应通过 DataChannel 发送:
-      // final channel = _dataChannels[peerId];
-      // channel?.send(Uint8List.fromList(data));
+      // 背压: 将数据加入发送缓冲区
+      final buffer = _sendBuffers.putIfAbsent(peerId, () => Queue<Uint8List>());
+
+      // 缓冲区满时丢弃最旧的数据
+      while (buffer.length >= _maxSendBufferSize) {
+        buffer.removeFirst();
+      }
+      buffer.add(data);
+
+      // 通过 FFI DataChannel 发送缓冲区中的数据
+      while (buffer.isNotEmpty) {
+        final chunk = buffer.removeFirst();
+        await _callRustWebRTC('webrtc_datachannel_send', {
+          'peer_id': peerId,
+          'data': base64Encode(chunk),
+        });
+      }
 
       return true;
     } catch (e) {
@@ -635,9 +954,38 @@ class LibP2PAdapter {
 
     _signalingSubscription?.cancel();
     _signalingSubscription = null;
+    _signalingSocket?.close();
+    _signalingSocket = null;
+
+    // 清理待处理的信令请求
+    for (final completer in _pendingSignalingRequests.values) {
+      completer.completeError(Exception('适配器已停止'));
+    }
+    _pendingSignalingRequests.clear();
+
+    for (final completer in _pendingAnswers.values) {
+      completer.completeError(Exception('适配器已停止'));
+    }
+    _pendingAnswers.clear();
+
+    for (final completer in _iceConnectionCompleters.values) {
+      completer.completeError(Exception('适配器已停止'));
+    }
+    _iceConnectionCompleters.clear();
+
+    // 清理发送缓冲区
+    _sendBuffers.clear();
 
     // 关闭所有活跃连接 —— 借鉴 webrtc-rs 的 PeerConnection.Close()
     for (final peerId in _activeConnections) {
+      // 通过 FFI 关闭 PeerConnection 和 DataChannel
+      await _callRustWebRTC('webrtc_datachannel_close', {
+        'peer_id': peerId,
+      }).catchError((_) {});
+      await _callRustWebRTC('webrtc_peerconnection_close', {
+        'peer_id': peerId,
+      }).catchError((_) {});
+
       if (_peers.containsKey(peerId)) {
         _peers[peerId] = _peers[peerId]!.copyWith(
           state: LibP2PConnectionState.closed,
@@ -651,16 +999,33 @@ class LibP2PAdapter {
   }
 
   /// 断开指定对等设备的连接
+  ///
+  /// 通过 FFI 桥接调用 Rust 侧关闭 PeerConnection 和 DataChannel。
   Future<void> disconnectPeer(String peerId) async {
     _activeConnections.remove(peerId);
+
+    // 清理发送缓冲区
+    _sendBuffers.remove(peerId);
+
+    // 清理待处理的信令请求
+    _pendingAnswers.remove(peerId);
+    _iceConnectionCompleters.remove(peerId);
+
+    // 通过 FFI 关闭 DataChannel
+    await _callRustWebRTC('webrtc_datachannel_close', {
+      'peer_id': peerId,
+    });
+
+    // 通过 FFI 关闭 PeerConnection
+    await _callRustWebRTC('webrtc_peerconnection_close', {
+      'peer_id': peerId,
+    });
 
     if (_peers.containsKey(peerId)) {
       _peers[peerId] = _peers[peerId]!.copyWith(
         state: LibP2PConnectionState.disconnected,
       );
     }
-
-    // TODO: 实际实现应关闭对应的 DataChannel 和 PeerConnection
   }
 
   /// 获取当前已知的对等节点信息

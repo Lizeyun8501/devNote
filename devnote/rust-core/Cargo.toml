@@ -29,7 +29,8 @@ members = [
     "devnote-perf",
     "devnote-grpc",
     "devnote-websocket",
-    "devnote-qt",
+    # devnote-qt removed: Qt 桥接 crate 已从 workspace 中移除，不再作为成员编译
+    # "devnote-qt",
     "devnote-ipfs",
     "devnote-events",
     "devnote-database",
@@ -62,7 +63,8 @@ devnote-workflow = { path = "devnote-workflow" }
 devnote-graph = { path = "devnote-graph" }
 devnote-flashcard = { path = "devnote-flashcard" }
 devnote-perf = { path = "devnote-perf" }
-devnote-qt = { path = "devnote-qt" }
+# devnote-qt removed: Qt 桥接 crate 已从 workspace 依赖中移除
+# devnote-qt = { path = "devnote-qt" }
 devnote-ipfs = { path = "devnote-ipfs" }
 devnote-grpc = { path = "devnote-grpc" }
 devnote-websocket = { path = "devnote-websocket" }
