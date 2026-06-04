@@ -59,18 +59,10 @@ class _EditorViewState extends State<_EditorView> {
       },
       onUndo: () => context.read<EditorBloc>().add(const UndoEvent()),
       onRedo: () => context.read<EditorBloc>().add(const RedoEvent()),
-      onBold: () {
-        // Bold formatting placeholder
-      },
-      onItalic: () {
-        // Italic formatting placeholder
-      },
-      onLink: () {
-        // Link insertion placeholder
-      },
-      onSearch: () {
-        // Search placeholder
-      },
+      onBold: _applyBold,
+      onItalic: _applyItalic,
+      onLink: _insertLink,
+      onSearch: _searchInNote,
       child: Scaffold(
         appBar: AppBar(
           leading: Semantics(
@@ -93,7 +85,7 @@ class _EditorViewState extends State<_EditorView> {
               hint: '显示更多操作',
               child: IconButton(
                 icon: const Icon(Icons.more_vert),
-                onPressed: () {},
+                onPressed: _showMoreActions,
               ),
             ),
           ],
@@ -271,5 +263,183 @@ class _EditorViewState extends State<_EditorView> {
           content: '',
           position: state.blocks.length,
         ));
+  }
+
+  void _applyBold() {
+    final bloc = context.read<EditorBloc>();
+    final state = bloc.state;
+    if (state is EditorLoaded && state.activeBlockId != null) {
+      final block = state.blocks.firstWhere((b) => b.id == state.activeBlockId);
+      final content = block.content;
+      final updated = '**$content**';
+      bloc.add(UpdateBlock(blockId: block.id, content: updated));
+    }
+  }
+
+  void _applyItalic() {
+    final bloc = context.read<EditorBloc>();
+    final state = bloc.state;
+    if (state is EditorLoaded && state.activeBlockId != null) {
+      final block = state.blocks.firstWhere((b) => b.id == state.activeBlockId);
+      final updated = '_${block.content}_';
+      bloc.add(UpdateBlock(blockId: block.id, content: updated));
+    }
+  }
+
+  Future<void> _insertLink() async {
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('插入链接'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(hintText: 'https://example.com'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('插入')),
+        ],
+      ),
+    );
+    if (url != null && url.isNotEmpty) {
+      final bloc = context.read<EditorBloc>();
+      final state = bloc.state;
+      if (state is EditorLoaded && state.activeBlockId != null) {
+        final block = state.blocks.firstWhere((b) => b.id == state.activeBlockId);
+        final text = block.content.isEmpty ? '链接' : block.content;
+        final link = '[$text]($url)';
+        bloc.add(UpdateBlock(blockId: block.id, content: link));
+      }
+    }
+  }
+
+  Future<void> _searchInNote() async {
+    final controller = TextEditingController();
+    final keyword = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('在笔记中搜索'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(hintText: '输入关键词'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('搜索')),
+        ],
+      ),
+    );
+    if (keyword != null && keyword.isNotEmpty) {
+      final bloc = context.read<EditorBloc>();
+      final state = bloc.state;
+      if (state is EditorLoaded) {
+        final match = state.blocks.indexWhere((b) => b.content.contains(keyword));
+        if (match >= 0) {
+          bloc.add(SelectBlock(state.blocks[match].id));
+        }
+      }
+    }
+  }
+
+  void _showMoreActions() {
+    final bloc = context.read<EditorBloc>();
+    final state = bloc.state;
+    if (state is! EditorLoaded) return;
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: const Text('复制笔记ID'),
+              onTap: () {
+                Navigator.pop(context);
+                Clipboard.setData(ClipboardData(text: state.noteId));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('笔记ID已复制到剪贴板')),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.share),
+              title: const Text('导出笔记'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportNote(state);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('删除笔记', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(context);
+                _confirmDeleteNote(state);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportNote(EditorLoaded state) async {
+    final content = state.blocks.map((b) => b.content).join('\n\n');
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导出笔记'),
+        content: SelectableText(
+          content.isEmpty ? '（空笔记）' : content,
+          maxHeight: 300,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: content));
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('笔记内容已复制到剪贴板')),
+              );
+            },
+            child: const Text('复制内容'),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmDeleteNote(EditorLoaded state) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除笔记'),
+        content: const Text('确定要删除这篇笔记吗？此操作不可撤销。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      // Delete all blocks in the note through the bloc
+      for (final block in state.blocks) {
+        bloc.add(DeleteBlock(block.id));
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('笔记已删除')),
+        );
+        Navigator.of(context).pop();
+      }
+    }
   }
 }

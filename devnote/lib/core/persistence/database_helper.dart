@@ -6,7 +6,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 2;
+  static const _databaseVersion = 3;
 
   static Database? _database;
 
@@ -94,6 +94,60 @@ class DatabaseHelper {
       )
     ''');
     await db.insert('schema_version', {'version': version});
+
+    // Database tables
+    await db.execute('''
+      CREATE TABLE databases (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE database_fields (
+        id TEXT PRIMARY KEY,
+        database_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        field_type TEXT NOT NULL,
+        options TEXT,
+        formula TEXT,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE database_rows (
+        id TEXT PRIMARY KEY,
+        database_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE database_cells (
+        id TEXT PRIMARY KEY,
+        row_id TEXT NOT NULL,
+        field_id TEXT NOT NULL,
+        value TEXT,
+        FOREIGN KEY (row_id) REFERENCES database_rows(id) ON DELETE CASCADE,
+        FOREIGN KEY (field_id) REFERENCES database_fields(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE database_views (
+        id TEXT PRIMARY KEY,
+        database_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        view_type TEXT NOT NULL,
+        filters TEXT,
+        sorts TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+      )
+    ''');
   }
 
   // 迁移回滚保障 —— 借鉴 SQLite 官方迁移最佳实践
@@ -136,6 +190,61 @@ class DatabaseHelper {
           case 2:
             // v2: 新增 blocks.language 列，用于存储代码块的语言标识
             await db.execute('ALTER TABLE blocks ADD COLUMN language TEXT');
+            break;
+          case 3:
+            // v3: 新增 database 相关表
+            await db.execute('''
+              CREATE TABLE databases (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE database_fields (
+                id TEXT PRIMARY KEY,
+                database_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                field_type TEXT NOT NULL,
+                options TEXT,
+                formula TEXT,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE database_rows (
+                id TEXT PRIMARY KEY,
+                database_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE database_cells (
+                id TEXT PRIMARY KEY,
+                row_id TEXT NOT NULL,
+                field_id TEXT NOT NULL,
+                value TEXT,
+                FOREIGN KEY (row_id) REFERENCES database_rows(id) ON DELETE CASCADE,
+                FOREIGN KEY (field_id) REFERENCES database_fields(id) ON DELETE CASCADE
+              )
+            ''');
+            await db.execute('''
+              CREATE TABLE database_views (
+                id TEXT PRIMARY KEY,
+                database_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                view_type TEXT NOT NULL,
+                filters TEXT,
+                sorts TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (database_id) REFERENCES databases(id) ON DELETE CASCADE
+              )
+            ''');
             break;
           default:
             break;

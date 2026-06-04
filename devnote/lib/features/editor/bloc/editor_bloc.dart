@@ -16,6 +16,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<ToggleBlockType>(_onToggleBlockType);
     on<UndoEvent>(_onUndo);
     on<RedoEvent>(_onRedo);
+    on<SelectBlock>(_onSelectBlock);
   }
 
   Future<void> _onLoadNote(LoadNote event, Emitter<EditorState> emit) async {
@@ -156,6 +157,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     final state = this.state;
     if (state is EditorLoaded) {
       emit(state.redo(state.blocks));
+    }
+  }
+
+  void _onSelectBlock(SelectBlock event, Emitter<EditorState> emit) {
+    final state = this.state;
+    if (state is EditorLoaded) {
+      emit(state.copyWith(activeBlockId: event.blockId));
     }
   }
 }

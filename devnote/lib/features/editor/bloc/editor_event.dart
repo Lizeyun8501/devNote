@@ -85,3 +85,12 @@ class ToggleBlockType extends EditorEvent {
 class UndoEvent extends EditorEvent {}
 
 class RedoEvent extends EditorEvent {}
+
+class SelectBlock extends EditorEvent {
+  final String blockId;
+
+  const SelectBlock(this.blockId);
+
+  @override
+  List<Object?> get props => [blockId];
+}
