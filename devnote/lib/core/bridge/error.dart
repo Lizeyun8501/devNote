@@ -1,3 +1,23 @@
+/// FFI 错误处理模块 —— 统一 FFI 通信错误类型
+///
+/// ## 设计来源
+/// 借鉴 AppFlowy 的 FlowyResult / FlowyError 模式，提供类型安全的 FFI 错误处理。
+///
+/// ## 核心类型
+/// - `FFIStatusCode`: 标准 FFI 状态码枚举
+/// - `FlowyInternalError`: FFI 内部错误
+/// - `FlowyResult<S, F>`: 密封类，表示成功或失败结果
+///
+/// ## 使用示例
+/// ```dart
+/// final result = await dispatch.asyncRequest('NoteEvent.CreateNote', payload: bytes);
+/// result.when(
+///   success: (data) => print('Success: $data'),
+///   failure: (error) => print('Error: $error'),
+/// );
+/// ```
+
+/// FFI 通信标准状态码
 enum FFIStatusCode {
   ok,
   err,
@@ -6,6 +26,7 @@ enum FFIStatusCode {
   unauthorized,
 }
 
+/// FFI 内部错误
 class FlowyInternalError implements Exception {
   final int code;
   final String message;
@@ -45,6 +66,10 @@ class FlowyInternalError implements Exception {
   String toString() => 'FlowyInternalError(code: $code, message: $message)';
 }
 
+/// 密封类：表示 FFI 操作的结果（成功或失败）
+///
+/// 使用 Dart 3 sealed class 提供编译时穷举检查，
+/// 替代原 dispatch.dart 中内联的简单 FlowyResult 实现。
 sealed class FlowyResult<S, F> {
   const FlowyResult();
 }

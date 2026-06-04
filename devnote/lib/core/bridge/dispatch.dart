@@ -18,6 +18,7 @@ import 'dart:developer';
 import 'dart:typed_data';
 
 import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/bridge/error.dart';
 import 'package:get_it/get_it.dart';
 
 final getIt = GetIt.instance;
@@ -333,6 +334,10 @@ class Dispatch {
 }
 
 /// 兼容类型 —— 保持原有 FlowyResult 接口
+///
+/// 新代码请使用 `error.dart` 中的 `FlowyResult<S, F>` 密封类，
+/// 提供编译时穷举检查和泛型类型安全。
+/// 此版本仅用于 asyncRequest 旧 API 的向后兼容。
 class FlowyResult {
   final Uint8List? data;
   final FlowyInternalError? error;
@@ -349,6 +354,11 @@ class FlowyResult {
   }
 }
 
+/// 兼容类型 —— 保持原有 FlowyInternalError 接口
+///
+/// 新代码请使用 `error.dart` 中的 `FlowyInternalError` 类，
+/// 支持 `FFIStatusCode` 枚举和 `fromCode()` 工厂方法。
+/// 此版本仅用于 asyncRequest 旧 API 的向后兼容。
 class FlowyInternalError {
   final String message;
   FlowyInternalError({required this.message});
