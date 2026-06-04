@@ -5,14 +5,16 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-[features]
-default = []
-wasm = ["wasmtime"]
-
 [dependencies]
 devnote-observe = { workspace = true }
 tracing = { workspace = true }
-wasmtime = { version = "29", optional = true }
+# ============================================================
+# 开源替代 extism 替换自研 wasmtime 沙箱
+# extism 提供多语言插件开发(Rust/Go/Python/JS等16+语言)、
+# 内置缓存、HTTP请求、日志等插件API，降低插件开发门槛
+# 来源: https://extism.org/
+# ============================================================
+extism = { workspace = true, features = ["wasmtime"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

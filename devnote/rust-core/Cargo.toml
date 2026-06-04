@@ -83,6 +83,14 @@ tracing-opentelemetry = "0.25"
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
 
+# ============================================================
+# 开源模块替换依赖
+# devnote-plugin 从自研 wasmtime 沙箱 → extism 通用插件框架
+# devnote-graph  从自研图算法 → petgraph 专业图结构库
+# ============================================================
+extism = { version = "1", features = ["wasmtime"] }
+petgraph = "0.7"
+
 [dev-dependencies]
 devnote-ffi = { workspace = true }
 devnote-crdt = { workspace = true }

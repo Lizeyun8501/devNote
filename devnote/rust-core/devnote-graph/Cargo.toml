@@ -15,3 +15,10 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+# ============================================================
+# 开源替代 petgraph 替换自研图算法实现
+# petgraph 是 Rust 最成熟的图数据结构库，内置 Dijkstra/DFS/BFS/
+# 拓扑排序/强连通分量/PageRank 等 20+ 图算法
+# 来源: https://crates.io/crates/petgraph
+# ============================================================
+petgraph = { workspace = true }
