@@ -7,6 +7,13 @@
 
 mod handlers;
 
+// ============================================================
+// FRB API 模块 —— flutter_rust_bridge v2 类型安全绑定
+// 替代自研 C ABI FFI 桥接层，自动生成 Dart 绑定
+// 来源: https://pub.dev/packages/flutter_rust_bridge
+// ============================================================
+pub mod frb_api;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use devnote_observe::{debug, info, instrument, warn};
 use parking_lot::Mutex;

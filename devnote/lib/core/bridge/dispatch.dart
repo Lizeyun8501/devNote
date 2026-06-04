@@ -1,297 +1,335 @@
-// 消息分发模块 —— 将 Flutter UI 操作转发到 Rust 核心引擎
-// 通信模式借鉴 AppFlowy 的 Event-Dispatch 模式
-//
-// 借鉴 AppFlowy 的 Event-Dispatch 模式
-// 来源: https://github.com/AppFlowy-IO/AppFlowy
-// 借鉴内容: 事件枚举定义(NoteEvent/FolderEvent/EditorEvent 等)、Dispatch 类的事件路由分发、
-//         三种通信模式(local FFI / gRPC / WebSocket)的统一抽象
+/// Dispatch 层 —— 基于 flutter_rust_bridge 的直接函数调用
+///
+/// ## 替换说明
+/// 原实现：Event-Dispatch 模式，通过字符串事件名路由到 Rust handler
+/// 替换为：FRB 直接函数调用，类型安全，无需字符串路由
+///
+/// ## 核心变更
+/// 1. 消除 Event-Dispatch 字符串路由（"NoteEvent.CreateNote" → createNote()）
+/// 2. 消除 JSON 序列化/反序列化（FRB 使用 SSE 编解码器）
+/// 3. 消除 FlowyResult 包装（FRB 直接使用 Result 类型）
+/// 4. 消除 asyncRequest 的回调模式（FRB 直接返回 Future）
+///
+/// 来源: https://pub.dev/packages/flutter_rust_bridge
+/// 借鉴 AppFlowy 的 Dispatch 模式（已升级为 FRB 直接调用）
 
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/ffi_request.dart';
-import 'package:devnote/core/bridge/grpc_bridge.dart';
-import 'package:devnote/core/bridge/websocket_bridge.dart';
-import 'package:devnote/core/di/injection.dart';
+import 'package:get_it/get_it.dart';
 
-enum NoteEvent {
-  createNote('NoteEvent.CreateNote'),
-  readNote('NoteEvent.ReadNote'),
-  updateNote('NoteEvent.UpdateNote'),
-  deleteNote('NoteEvent.DeleteNote'),
-  listNotes('NoteEvent.ListNotes');
+final getIt = GetIt.instance;
 
-  const NoteEvent(this.name);
-  final String name;
-}
-
-enum FolderEvent {
-  createFolder('FolderEvent.CreateFolder'),
-  readFolder('FolderEvent.ReadFolder'),
-  updateFolder('FolderEvent.UpdateFolder'),
-  deleteFolder('FolderEvent.DeleteFolder'),
-  listFolders('FolderEvent.ListFolders');
-
-  const FolderEvent(this.name);
-  final String name;
-}
-
-enum EditorEvent {
-  insertBlock('EditorEvent.InsertBlock'),
-  updateBlock('EditorEvent.UpdateBlock'),
-  deleteBlock('EditorEvent.DeleteBlock'),
-  loadDocument('EditorEvent.LoadDocument');
-
-  const EditorEvent(this.name);
-  final String name;
-}
-
-enum SearchEvent {
-  searchNotes('SearchEvent.SearchNotes'),
-  searchContent('SearchEvent.SearchContent');
-
-  const SearchEvent(this.name);
-  final String name;
-}
-
-enum SyncEvent {
-  startSync('SyncEvent.StartSync'),
-  getSyncStatus('SyncEvent.GetSyncStatus'),
-  resolveConflict('SyncEvent.ResolveConflict');
-
-  const SyncEvent(this.name);
-  final String name;
-}
-
-/// Dispatch mode: local (in-process via FFI) or remote (via gRPC/WebSocket)
-enum DispatchMode {
-  local,
-  grpc,
-  websocket,
-}
-
+/// FRB Dispatch —— 替代原 Event-Dispatch 模式
+///
+/// 原模式：dispatch.asyncRequest("NoteEvent.CreateNote", payload: bytes)
+/// 新模式：dispatch.createNote(title: "xxx", content: "xxx", folderId: "xxx")
+///
+/// 优势：
+/// - 编译时类型检查（拼写错误在编译时发现）
+/// - 无需 JSON 序列化/反序列化
+/// - 无需手动管理 payload 编码
+/// - IDE 自动补全和重构支持
 class Dispatch {
-  Dispatch();
+  FFIBridge get _bridge => getIt<FFIBridge>();
 
-  final FFIBridge _bridge = getIt<FFIBridge>();
-  final GrpcBridge _grpcBridge = getIt<GrpcBridge>();
-  final WebSocketBridge _wsBridge = getIt<WebSocketBridge>();
+  // ============================================================
+  // 笔记操作 —— 替代原 NoteEvent.* 事件路由
+  // ============================================================
 
-  DispatchMode _mode = DispatchMode.local;
+  Future<Map<String, dynamic>> createNote({
+    required String title,
+    required String content,
+    required String folderId,
+  }) => _bridge.createNote(title: title, content: content, folderId: folderId);
 
-  /// Set the dispatch mode
-  void setMode(DispatchMode mode) {
-    _mode = mode;
-  }
+  Future<Map<String, dynamic>?> getNote(String id) => _bridge.getNote(id);
 
-  /// Get the current dispatch mode
-  DispatchMode get mode => _mode;
+  Future<Map<String, dynamic>> updateNote({
+    required String id,
+    required String title,
+    required String content,
+  }) => _bridge.updateNote(id: id, title: title, content: content);
 
-  /// Initialize remote bridges (gRPC and WebSocket)
-  void initRemote() {
-    _grpcBridge.init();
-    _wsBridge.init();
-  }
+  Future<void> deleteNote(String id) => _bridge.deleteNote(id);
 
-  /// Connect to a gRPC server
-  bool grpcConnect(String serverAddr) {
-    final response = _grpcBridge.connect(serverAddr);
-    return response.isOk;
-  }
+  Future<List<Map<String, dynamic>>> listNotes(String folderId) =>
+      _bridge.listNotes(folderId);
 
-  /// Disconnect from the gRPC server
-  bool grpcDisconnect() {
-    final response = _grpcBridge.disconnect();
-    return response.isOk;
-  }
+  // ============================================================
+  // 文件夹操作 —— 替代原 FolderEvent.* 事件路由
+  // ============================================================
 
-  /// Connect to a WebSocket server
-  bool wsConnect(String url) {
-    final response = _wsBridge.connect(url);
-    return response.isOk;
-  }
+  Future<Map<String, dynamic>> createFolder({
+    required String name,
+    String? parentId,
+  }) => _bridge.createFolder(name: name, parentId: parentId);
 
-  /// Disconnect from the WebSocket server
-  bool wsDisconnect() {
-    final response = _wsBridge.disconnect();
-    return response.isOk;
-  }
+  Future<List<Map<String, dynamic>>> listFolders({String? parentId}) =>
+      _bridge.listFolders(parentId: parentId);
 
-  Future<FlowyResult<Uint8List, FlowyInternalError>> asyncRequest(
-    String event, {
-    Uint8List? payload,
-  }) async {
-    switch (_mode) {
-      case DispatchMode.grpc:
-        return _grpcRequest(event, payload: payload);
-      case DispatchMode.websocket:
-        return _wsRequest(event, payload: payload);
-      case DispatchMode.local:
-        return _localRequest(event, payload: payload);
-    }
-  }
+  Future<void> deleteFolder(String id) => _bridge.deleteFolder(id);
 
-  Future<FlowyResult<Uint8List, FlowyInternalError>> _localRequest(
-    String event, {
-    Uint8List? payload,
-  }) async {
-    // Check if FFI bridge is available before making FFI calls
-    if (!_bridge.isAvailable) {
-      return _localFallback(event, payload: payload);
-    }
+  // ============================================================
+  // 标签操作 —— 替代原 TagEvent.* 事件路由
+  // ============================================================
+
+  Future<Map<String, dynamic>> createTag(String name) => _bridge.createTag(name);
+
+  Future<List<Map<String, dynamic>>> listTags() => _bridge.listTags();
+
+  Future<void> deleteTag(String id) => _bridge.deleteTag(id);
+
+  // ============================================================
+  // 编辑器操作 —— 替代原 EditorEvent.* 事件路由
+  // ============================================================
+
+  Future<Map<String, dynamic>> insertBlock({
+    required String noteId,
+    required String blockType,
+    required String content,
+    int? position,
+  }) => _bridge.insertBlock(
+    noteId: noteId, blockType: blockType, content: content, position: position,
+  );
+
+  Future<void> updateBlock({required String id, required String content}) =>
+      _bridge.updateBlock(id: id, content: content);
+
+  Future<void> deleteBlock(String id) => _bridge.deleteBlock(id);
+
+  Future<List<Map<String, dynamic>>> getBlocks(String noteId) =>
+      _bridge.getBlocks(noteId);
+
+  // ============================================================
+  // 搜索操作 —— 替代原 SearchEvent.* 事件路由
+  // ============================================================
+
+  Future<List<Map<String, dynamic>>> searchNotes({
+    required String query,
+    int? limit,
+    int? offset,
+  }) => _bridge.searchNotes(query: query, limit: limit, offset: offset);
+
+  // ============================================================
+  // 加密操作 —— 替代原 CryptoEvent.* 事件路由
+  // ============================================================
+
+  Future<String> encrypt({required String plaintextBase64, required String keyBase64}) =>
+      _bridge.encrypt(plaintextBase64: plaintextBase64, keyBase64: keyBase64);
+
+  Future<String> decrypt({required String ciphertextBase64, required String keyBase64}) =>
+      _bridge.decrypt(ciphertextBase64: ciphertextBase64, keyBase64: keyBase64);
+
+  Future<String> deriveKey({required String password, required String saltBase64}) =>
+      _bridge.deriveKey(password: password, saltBase64: saltBase64);
+
+  // ============================================================
+  // 同步操作 —— 替代原 SyncEvent.* 事件路由
+  // ============================================================
+
+  Future<void> pushChanges() => _bridge.pushChanges();
+  Future<void> pullChanges() => _bridge.pullChanges();
+  Future<Map<String, dynamic>> getSyncStatus() => _bridge.getSyncStatus();
+
+  // ============================================================
+  // Canvas 操作 —— 替代原 CanvasEvent.* 事件路由
+  // ============================================================
+
+  Future<void> canvasAddNode({required String canvasId, required String nodeJson}) =>
+      _bridge.canvasAddNode(canvasId: canvasId, nodeJson: nodeJson);
+
+  Future<void> canvasRemoveNode({required String canvasId, required String nodeId}) =>
+      _bridge.canvasRemoveNode(canvasId: canvasId, nodeId: nodeId);
+
+  Future<void> canvasAutoLayout({required String canvasId, required String layoutType}) =>
+      _bridge.canvasAutoLayout(canvasId: canvasId, layoutType: layoutType);
+
+  // ============================================================
+  // 数据库操作 —— 替代原 DatabaseEvent.* 事件路由
+  // ============================================================
+
+  Future<String> createDatabase(String name) => _bridge.createDatabase(name);
+
+  Future<String> evaluateFormula({
+    required String formula,
+    required String rowValues,
+    required String allRows,
+  }) => _bridge.evaluateFormula(formula: formula, rowValues: rowValues, allRows: allRows);
+
+  // ============================================================
+  // 图谱操作 —— 替代原 GraphEvent.* 事件路由
+  // ============================================================
+
+  Future<String> calculateCentrality() => _bridge.calculateCentrality();
+  Future<String> detectClusters() => _bridge.detectClusters();
+
+  // ============================================================
+  // 闪卡操作 —— 替代原 FlashcardEvent.* 事件路由
+  // ============================================================
+
+  Future<String> createDeck({required String name, required String description}) =>
+      _bridge.createDeck(name: name, description: description);
+
+  Future<String> reviewFlashcard({required String flashcardId, required int quality}) =>
+      _bridge.reviewFlashcard(flashcardId: flashcardId, quality: quality);
+
+  Future<String> getDueCards({required String deckId, int? limit}) =>
+      _bridge.getDueCards(deckId: deckId, limit: limit);
+
+  // ============================================================
+  // CRDT 操作 —— 替代原 CRDTEvent.* 事件路由
+  // ============================================================
+
+  Future<Map<String, dynamic>> crdtMerge({
+    required String docId,
+    required String deviceId,
+    required String remoteOpsJson,
+  }) => _bridge.crdtMerge(docId: docId, deviceId: deviceId, remoteOpsJson: remoteOpsJson);
+
+  // ============================================================
+  // 格式操作 —— 替代原 FormatEvent.* 事件路由
+  // ============================================================
+
+  Future<String> importMarkdown(String path) => _bridge.importMarkdown(path);
+  Future<void> exportMarkdown({required String notesJson, required String path}) =>
+      _bridge.exportMarkdown(notesJson: notesJson, path: path);
+
+  // ============================================================
+  // 兼容接口 —— 保持原有 asyncRequest 签名，内部转换为 FRB 调用
+  // 用于尚未迁移到新 API 的调用方
+  // ============================================================
+
+  /// 兼容旧 Event-Dispatch 调用方式
+  /// 新代码应直接使用上面的类型安全方法
+  @Deprecated('Use type-safe methods instead of Event-Dispatch strings')
+  Future<FlowyResult> asyncRequest(String event, {Uint8List? payload}) async {
     try {
-      final request = FFIRequest(
-        event: event,
-        payload: payload,
-      );
-      final response = _bridge.invoke(request);
-
-      if (response.isOk) {
-        return Success(response.data ?? Uint8List(0));
-      } else {
-        return Failure(FlowyInternalError(
-          code: response.code,
-          message: response.message,
-        ));
-      }
+      final result = await _dispatchLegacy(event, payload);
+      return FlowyResult.success(result);
     } catch (e) {
-      return Failure(FlowyInternalError(
-        code: FFIStatusCode.internal.index,
-        message: e.toString(),
-      ));
+      return FlowyResult.failure(FlowyInternalError(message: e.toString()));
     }
   }
 
-  /// Local Dart fallback when FFI is not available
-  Future<FlowyResult<Uint8List, FlowyInternalError>> _localFallback(
-    String event, {
-    Uint8List? payload,
-  }) async {
-    try {
-      final result = _handleLocalEvent(event, payload);
-      return Success(result);
-    } catch (e) {
-      return Failure(FlowyInternalError(
-        code: FFIStatusCode.internal.index,
-        message: e.toString(),
-      ));
-    }
-  }
-
-  /// Handle events locally in Dart when FFI is not available
-  Uint8List _handleLocalEvent(String event, Uint8List? payload) {
-    final payloadJson = payload != null
+  /// 旧事件路由兼容层 —— 将字符串事件名映射到 FRB 函数调用
+  Future<Uint8List> _dispatchLegacy(String event, Uint8List? payload) async {
+    final payloadMap = payload != null
         ? jsonDecode(utf8.decode(payload)) as Map<String, dynamic>
         : <String, dynamic>{};
-    final response = <String, dynamic>{
-      'code': 0,
-      'message': 'ok (local fallback)',
-      'data': payloadJson,
-    };
-    return utf8.encode(jsonEncode(response));
-  }
 
-  Future<FlowyResult<Uint8List, FlowyInternalError>> _grpcRequest(
-    String event, {
-    Uint8List? payload,
-  }) async {
-    try {
-      final payloadStr = payload != null ? utf8.decode(payload) : null;
-      final response = _grpcBridge.dispatch(event, payload: payloadStr);
-
-      if (response.isOk) {
-        return Success(response.data ?? Uint8List(0));
-      } else {
-        return Failure(FlowyInternalError(
-          code: response.code,
-          message: response.message,
-        ));
-      }
-    } catch (e) {
-      return Failure(FlowyInternalError(
-        code: FFIStatusCode.internal.index,
-        message: e.toString(),
-      ));
+    // 笔记事件
+    if (event == 'NoteEvent.CreateNote') {
+      final result = await createNote(
+        title: payloadMap['title'] as String,
+        content: payloadMap['content'] as String,
+        folderId: payloadMap['folder_id'] as String,
+      );
+      return utf8.encode(jsonEncode(result));
     }
-  }
-
-  Future<FlowyResult<Uint8List, FlowyInternalError>> _wsRequest(
-    String event, {
-    Uint8List? payload,
-  }) async {
-    try {
-      final message = jsonEncode({
-        'event': event,
-        'payload':
-            payload != null ? base64Encode(payload) : null,
-      });
-      final response = _wsBridge.send(message);
-
-      if (response.isOk) {
-        return Success(response.data ?? Uint8List(0));
-      } else {
-        return Failure(FlowyInternalError(
-          code: response.code,
-          message: response.message,
-        ));
-      }
-    } catch (e) {
-      return Failure(FlowyInternalError(
-        code: FFIStatusCode.internal.index,
-        message: e.toString(),
-      ));
+    if (event == 'NoteEvent.GetNote') {
+      final result = await getNote(payloadMap['id'] as String);
+      return utf8.encode(jsonEncode(result));
     }
-  }
-
-  Future<FlowyResult<T, FlowyInternalError>> asyncRequestJson<T>(
-    String event, {
-    Uint8List? payload,
-    required T Function(Map<String, dynamic>) fromJson,
-  }) async {
-    final result = await asyncRequest(event, payload: payload);
-    return result.when(
-      success: (data) {
-        final json = jsonDecode(utf8.decode(data)) as Map<String, dynamic>;
-        return Success(fromJson(json));
-      },
-      failure: (error) => Failure(error),
-    );
-  }
-
-  /// Send a WebSocket message directly (useful for real-time updates)
-  Future<FlowyResult<bool, FlowyInternalError>> wsSend(Map<String, dynamic> json) async {
-    try {
-      final response = _wsBridge.sendJson(json);
-      if (response.isOk) {
-        return const Success(true);
-      } else {
-        return Failure(FlowyInternalError(
-          code: response.code,
-          message: response.message,
-        ));
-      }
-    } catch (e) {
-      return Failure(FlowyInternalError(
-        code: FFIStatusCode.internal.index,
-        message: e.toString(),
-      ));
+    if (event == 'NoteEvent.UpdateNote') {
+      final result = await updateNote(
+        id: payloadMap['id'] as String,
+        title: payloadMap['title'] as String,
+        content: payloadMap['content'] as String,
+      );
+      return utf8.encode(jsonEncode(result));
     }
-  }
+    if (event == 'NoteEvent.DeleteNote') {
+      await deleteNote(payloadMap['id'] as String);
+      return Uint8List(0);
+    }
+    if (event == 'NoteEvent.ListNotes') {
+      final result = await listNotes(payloadMap['folder_id'] as String);
+      return utf8.encode(jsonEncode(result));
+    }
 
-  String ping() => _bridge.isAvailable ? _bridge.ping() : 'FFI not available';
+    // 文件夹事件
+    if (event == 'FolderEvent.CreateFolder') {
+      final result = await createFolder(
+        name: payloadMap['name'] as String,
+        parentId: payloadMap['parent_id'] as String?,
+      );
+      return utf8.encode(jsonEncode(result));
+    }
+    if (event == 'FolderEvent.ListFolders') {
+      final result = await listFolders(parentId: payloadMap['parent_id'] as String?);
+      return utf8.encode(jsonEncode(result));
+    }
+    if (event == 'FolderEvent.DeleteFolder') {
+      await deleteFolder(payloadMap['id'] as String);
+      return Uint8List(0);
+    }
+
+    // 标签事件
+    if (event == 'TagEvent.CreateTag') {
+      final result = await createTag(payloadMap['name'] as String);
+      return utf8.encode(jsonEncode(result));
+    }
+    if (event == 'TagEvent.ListTags') {
+      final result = await listTags();
+      return utf8.encode(jsonEncode(result));
+    }
+    if (event == 'TagEvent.DeleteTag') {
+      await deleteTag(payloadMap['id'] as String);
+      return Uint8List(0);
+    }
+
+    // 搜索事件
+    if (event == 'SearchEvent.Search') {
+      final result = await searchNotes(
+        query: payloadMap['query'] as String,
+        limit: payloadMap['limit'] as int?,
+        offset: payloadMap['offset'] as int?,
+      );
+      return utf8.encode(jsonEncode(result));
+    }
+
+    // 系统事件
+    if (event == 'SystemEvent.GetVersion') {
+      final version = await _bridge.negotiateVersion();
+      return utf8.encode(jsonEncode({
+        'api_version': version?.apiVersion ?? 0,
+        'rust_version': version?.rustVersion ?? 'unknown',
+        'compatible_min': version?.compatibleMin ?? 1,
+        'features': version?.features ?? [],
+      }));
+    }
+    if (event == 'SystemEvent.HealthCheck') {
+      final health = await _bridge.healthCheck();
+      return utf8.encode(jsonEncode({
+        'status': 'ok',
+        'engines': health ?? {},
+      }));
+    }
+
+    throw UnimplementedError('Event not mapped to FRB: $event');
+  }
 }
 
-extension _FlowyResultWhen<S, F> on FlowyResult<S, F> {
-  R when<R>({
-    required R Function(S) success,
-    required R Function(F) failure,
+/// 兼容类型 —— 保持原有 FlowyResult 接口
+class FlowyResult {
+  final Uint8List? data;
+  final FlowyInternalError? error;
+
+  FlowyResult.success(this.data) : error = null;
+  FlowyResult.failure(this.error) : data = null;
+
+  T when<T>({
+    required T Function(Uint8List data) success,
+    required T Function(FlowyInternalError error) failure,
   }) {
-    if (this is Success<S, F>) {
-      return success((this as Success<S, F>).value);
-    } else {
-      return failure((this as Failure<S, F>).error);
-    }
+    if (error != null) return failure(error!);
+    return success(data ?? Uint8List(0));
   }
+}
+
+class FlowyInternalError {
+  final String message;
+  FlowyInternalError({required this.message});
 }

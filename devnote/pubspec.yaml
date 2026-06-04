@@ -58,6 +58,14 @@ dependencies:
   # 借鉴 pluto_grid，支持列拖拽、排序、过滤、分页、内联编辑
   # 来源: https://pub.dev/packages/pluto_grid
   pluto_grid: ^3.1.0
+  # ============================================================
+  # flutter_rust_bridge v2 —— 替代自研 FFI 桥接层
+  # 自动生成类型安全的 Dart-Rust 绑定，消除手写 malloc/free 和 JSON 序列化
+  # 支持 async/await、Stream、SSE 编解码器（比 JSON 快数倍）
+  # Flutter Favorite 认证
+  # 来源: https://pub.dev/packages/flutter_rust_bridge
+  # ============================================================
+  flutter_rust_bridge: ^2.12.0
 
 dev_dependencies:
   flutter_test:

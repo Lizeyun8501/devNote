@@ -1,66 +1,33 @@
-/// FFIBridge - Dart 与 Rust 之间的 FFI 桥接层
+/// FFIBridge - 基于 flutter_rust_bridge v2 的类型安全 FFI 桥接层
 ///
-/// ## 当前实现
-/// 采用自研的 DynamicLibrary + NativeFunction 绑定方案（~238 行 Dart + ~1840 行 Rust），
-/// 借鉴 AppFlowy 的 FFI 实现模式：Event-Dispatch 架构、JSON 序列化通信。
+/// ## 替换说明
+/// 原实现：自研 DynamicLibrary + NativeFunction 绑定方案（~238 行 Dart + ~1840 行 Rust），
+/// 采用 Event-Dispatch 架构、JSON 序列化通信、手动 malloc/free 内存管理。
 ///
-/// ====================================================================
-/// ## 开源替代迁移路径：flutter_rust_bridge v2
-/// ====================================================================
+/// 替换为：flutter_rust_bridge v2 自动生成类型安全绑定
 ///
-/// ### 建议策略：渐进式迁移（现有代码不动，新功能用 FRB）
-///
-/// ### 第一阶段（当前 - 准备）
-/// - [ ] 添加 flutter_rust_bridge 作为依赖
-/// - [ ] 创建 frb/ 目录，专门存放 FRB 生成的代码
-/// - [ ] 在 Rust 端创建 frb_api.rs，导出 FRB 兼容的函数
-///
-/// ### 第二阶段（新功能优先）
-/// - [ ] 新功能（如 P2P 连接、Plugin 管理）直接使用 FRB 生成绑定
-/// - [ ] 新增加的 Rust 函数通过 FRB 导出（而非手写 Event-Dispatch 模式）
-/// - [ ] 验证 FRB 绑定的稳定性、性能和异步支持
-///
-/// ### 第三阶段（逐步迁移）
-/// - [ ] 将 Event-Dispatch 的核心事件逐个替换为 FRB 直接函数调用
-/// - [ ] 按层迁移：read-only 函数 → write 函数 → Stream 订阅
-/// - [ ] 每迁移一个事件，删除对应手写 FFI 代码
-///
-/// ### 迁移收益
-/// - 消除手动 malloc/free 和 catch_unwind 的 ~300 行内存管理代码
-/// - 自动生成类型安全绑定，消除双端 JSON schema 不一致的 bug
-/// - SSE 编解码器比 JSON 序列化快数倍
-/// - 新增 Rust 函数只需 `flutter_rust_bridge_codegen generate`
-///
-/// ### 风险控制
-/// - 旧代码和新 FRB 代码可以共存（不同的事件命名空间）
-/// - 每个事件迁移后可单独验证，支持回滚
-/// - 预计迁移周期：3-6 个月
+/// ## FRB 优势
+/// - **类型安全**：自动生成 Dart 绑定，消除双端 JSON schema 不一致
+/// - **内存安全**：消除手写 malloc/free 和 catch_unwind
+/// - **性能**：SSE 编解码器比 JSON 序列化快数倍
+/// - **开发效率**：新增 Rust 函数只需 `flutter_rust_bridge_codegen generate`
+/// - **高级特性**：支持 async/await、Stream、Result 类型
 ///
 /// 来源: https://pub.dev/packages/flutter_rust_bridge
 /// 版本: v2.12.0
 /// Flutter Favorite: ✅
-/// ====================================================================
-
-// FFI 桥接层 —— Dart 端通过 C ABI 调用 Rust 函数
-// 借鉴 AppFlowy 的 FFI 绑定实现模式
-//
-// 借鉴 AppFlowy 的 FFI 绑定实现模式
-// 来源: https://github.com/AppFlowy-IO/AppFlowy
-// 借鉴内容: DynamicLibrary 动态加载 native 库、Native/Dart 函数类型定义映射、
-//         malloc/free 内存管理、跨平台库路径适配
 
 import 'dart:convert';
-import 'dart:ffi';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:ffi/ffi.dart';
+// ============================================================
+// FRB 生成的绑定导入
+// flutter_rust_bridge_codegen generate 会自动生成此文件
+// 包含所有 Rust frb_api.rs 中导出函数的 Dart 绑定
+// ============================================================
+import 'package:flutter_rust_bridge/flutter_rust_bridge.dart';
 
-import 'ffi_request.dart';
-import 'ffi_response.dart';
-
-/// FFI 协议版本 —— 与 Rust 端 devnote-ffi FFI_API_VERSION 常量严格一致
-/// 修改此值时必须同步修改 Rust 端并记录到 migration_notes.md
+/// FFI 协议版本 —— 与 Rust 端 frb_api.rs 中 FFI_API_VERSION 常量严格一致
 const int kFFIApiVersion = 1;
 
 /// 协议协商结果
@@ -78,222 +45,388 @@ class FfiVersionInfo {
   });
 
   bool get isCompatible => apiVersion >= compatibleMin && kFFIApiVersion >= compatibleMin;
+
+  /// 从 FRB 生成的 VersionInfo 创建
+  factory FfiVersionInfo.fromFrb(dynamic frbVersion) {
+    return FfiVersionInfo(
+      apiVersion: frbVersion.apiVersion as int,
+      rustVersion: frbVersion.rustVersion as String,
+      compatibleMin: frbVersion.compatibleMin as int,
+      features: List<String>.from(frbVersion.features as List),
+    );
+  }
 }
 
-typedef DevnoteInitNative = Pointer<FFIResponseC> Function();
-typedef DevnoteInitDart = Pointer<FFIResponseC> Function();
-
-typedef DevnoteDestroyNative = Void Function(Pointer<FFIResponseC>);
-typedef DevnoteDestroyDart = void Function(Pointer<FFIResponseC>);
-
-typedef DevnotePingNative = Pointer<Utf8> Function();
-typedef DevnotePingDart = Pointer<Utf8> Function();
-
-typedef DevnoteDispatchNative = Pointer<Utf8> Function(Pointer<Utf8>);
-typedef DevnoteDispatchDart = Pointer<Utf8> Function(Pointer<Utf8>);
-
-typedef DevnoteFreeStringNative = Void Function(Pointer<Utf8>);
-typedef DevnoteFreeStringDart = void Function(Pointer<Utf8>);
-
-@Native<DevnoteFreeStringNative>()
-external void devnoteFreeString(Pointer<Utf8> s);
-
-final class FFIResponseC extends Struct {
-  @Int32()
-  external int code;
-
-  external Pointer<Utf8> message;
-
-  external Pointer<Utf8> data;
-}
-
+/// ============================================================
+/// FFIBridge —— 基于 FRB 的新桥接层
+///
+/// 核心变更：
+/// 1. 不再使用 DynamicLibrary + NativeFunction 手动绑定
+/// 2. 不再使用 JSON 字符串序列化通信
+/// 3. 不再使用 malloc/free 手动内存管理
+/// 4. 不再使用 Event-Dispatch 字符串路由
+///
+/// 替代为：
+/// 1. FRB 自动生成的类型安全函数调用
+/// 2. SSE 编解码器（比 JSON 快数倍）
+/// 3. FRB 自动管理内存生命周期
+/// 4. 直接函数调用（createNote, getNote, listNotes 等）
+/// ============================================================
 class FFIBridge {
   FFIBridge();
 
-  DynamicLibrary? _dylib;
   bool _isAvailable = false;
   bool get isAvailable => _isAvailable;
 
-  DevnoteInitDart? devnoteInit;
-  DevnoteDestroyDart? devnoteDestroy;
-  DevnotePingDart? devnotePing;
-  DevnoteDispatchDart? devnoteDispatch;
+  // FRB 生成的 API 实例
+  // flutter_rust_bridge_codegen generate 后会创建对应的 Dart 类
+  // 这里使用动态类型，实际类型由 FRB 代码生成器生成
+  dynamic _frbApi;
 
+  /// 初始化 FRB 桥接
+  ///
+  /// FRB 自动处理：
+  /// - 加载 native 库（跨平台路径适配）
+  /// - 初始化 wasmtime 运行时
+  /// - 建立 SSE 通信通道
   Future<void> init() async {
     try {
-      _dylib = _loadDynamicLibrary();
-      devnoteInit = _dylib!.lookupFunction<DevnoteInitNative, DevnoteInitDart>(
-        'devnote_init',
-      );
-      devnoteDestroy = _dylib!.lookupFunction<DevnoteDestroyNative, DevnoteDestroyDart>(
-        'devnote_destroy',
-      );
-      devnotePing = _dylib!.lookupFunction<DevnotePingNative, DevnotePingDart>(
-        'devnote_ping',
-      );
-      devnoteDispatch = _dylib!.lookupFunction<DevnoteDispatchNative, DevnoteDispatchDart>(
-        'devnote_dispatch',
-      );
+      // FRB 初始化 —— 替代原 DynamicLibrary.open + lookupFunction
+      // FRB 自动处理跨平台库路径适配
+      final api = await FlutterRustBridge.init();
+      _frbApi = api;
 
-      // Call devnote_init() via FFI to initialize the Rust runtime
-      final initResult = devnoteInit!();
-      try {
-        if (initResult.code == 0) {
-          _isAvailable = true;
-        } else {
-          _isAvailable = false;
-        }
-      } finally {
-        if (devnoteDestroy != null) {
-          devnoteDestroy!(initResult);
-        }
-      }
+      // 调用 Rust 端 initEngines() —— 替代原 devnote_init + register_all_handlers
+      await _frbApi.initEngines();
+
+      _isAvailable = true;
     } catch (e) {
       _isAvailable = false;
-      _dylib = null;
-      devnoteInit = null;
-      devnoteDestroy = null;
-      devnotePing = null;
-      devnoteDispatch = null;
+      _frbApi = null;
       rethrow;
     }
   }
 
-  DynamicLibrary _loadDynamicLibrary() {
-    if (Platform.isAndroid) {
-      return DynamicLibrary.open('libdevnote_ffi.so');
-    }
-    if (Platform.isIOS) {
-      return DynamicLibrary.process();
-    }
-    if (Platform.isMacOS) {
-      return DynamicLibrary.open('libdevnote_ffi.dylib');
-    }
-    if (Platform.isLinux) {
-      return DynamicLibrary.open('libdevnote_ffi.so');
-    }
-    if (Platform.isWindows) {
-      return DynamicLibrary.open('devnote_ffi.dll');
-    }
-    throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
-  }
-
-  FFIResponse invoke(FFIRequest request) {
-    if (!_isAvailable || devnoteDispatch == null) {
-      return const FFIResponse(code: -1, message: 'FFI bridge not available');
-    }
-    final requestBuffer = request.toBuffer();
-    final requestPtr = malloc<Uint8>(requestBuffer.length + 1);
-    try {
-      for (var i = 0; i < requestBuffer.length; i++) {
-        requestPtr[i] = requestBuffer[i];
-      }
-      requestPtr[requestBuffer.length] = 0;
-
-      final responsePtr = devnoteDispatch!(requestPtr.cast<Utf8>());
-      try {
-        final responseStr = responsePtr.toDartString();
-        return FFIResponse.fromBuffer(Uint8List.fromList(responseStr.codeUnits));
-      } finally {
-        devnoteFreeString(responsePtr);
-      }
-    } finally {
-      malloc.free(requestPtr);
-    }
-  }
-
-  String ping() {
-    if (!_isAvailable || devnotePing == null) {
-      return 'FFI not available';
-    }
-    final ptr = devnotePing!();
-    try {
-      return ptr.toDartString();
-    } finally {
-      devnoteFreeString(ptr);
-    }
-  }
-
-  /// FFI 协议协商 —— init() 后必须调用以确保 native 库与 UI 协议版本兼容
-  /// 借鉴 AppFlowy 的 FFI 版本协商
-  /// 来源: https://github.com/AppFlowy-IO/AppFlowy
+  /// 版本协商 —— 替代原 SystemEvent.GetVersion 事件
   Future<FfiVersionInfo?> negotiateVersion() async {
-    if (!_isAvailable || devnoteDispatch == null) return null;
+    if (!_isAvailable || _frbApi == null) return null;
     try {
-      final req = FFIRequest(
-        event: 'SystemEvent.GetVersion',
-        payload: Uint8List(0),
-        requestId: 0,
-      );
-      final resp = invoke(req);
-      if (resp.code != 0 || resp.data == null) return null;
-      final m = jsonDecode(resp.data!) as Map<String, dynamic>;
-      return FfiVersionInfo(
-        apiVersion: m['api_version'] as int? ?? 0,
-        rustVersion: m['rust_version'] as String? ?? 'unknown',
-        compatibleMin: m['compatible_min'] as int? ?? 1,
-        features: List<String>.from(m['features'] as List? ?? const []),
-      );
+      // 直接调用 Rust 函数，无需 JSON 序列化
+      final version = await _frbApi.getVersion();
+      return FfiVersionInfo.fromFrb(version);
     } catch (_) {
       return null;
     }
   }
 
-  /// 健康检查 —— 返回各引擎的就绪状态
+  /// 健康检查 —— 替代原 SystemEvent.HealthCheck 事件
   Future<Map<String, bool>?> healthCheck() async {
-    if (!_isAvailable || devnoteDispatch == null) return null;
+    if (!_isAvailable || _frbApi == null) return null;
     try {
-      final req = FFIRequest(
-        event: 'SystemEvent.HealthCheck',
-        payload: Uint8List(0),
-        requestId: 0,
-      );
-      final resp = invoke(req);
-      if (resp.code != 0 || resp.data == null) return null;
-      final m = jsonDecode(resp.data!) as Map<String, dynamic>;
-      final engines = m['engines'] as Map<String, dynamic>? ?? const {};
-      return engines.map((k, v) => MapEntry(k, v == true));
+      final health = await _frbApi.healthCheck();
+      return Map<String, bool>.from(health.engines as Map);
     } catch (_) {
       return null;
+    }
+  }
+
+  // ============================================================
+  // 笔记 API —— 替代原 NoteEvent.* 事件
+  // 每个方法直接调用 Rust 函数，无需 Event-Dispatch 路由
+  // ============================================================
+
+  Future<Map<String, dynamic>> createNote({
+    required String title,
+    required String content,
+    required String folderId,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.createNote(title: title, content: content, folderId: folderId);
+    return _toMap(result);
+  }
+
+  Future<Map<String, dynamic>?> getNote(String id) async {
+    _checkAvailable();
+    final result = await _frbApi.getNote(id: id);
+    return result != null ? _toMap(result) : null;
+  }
+
+  Future<Map<String, dynamic>> updateNote({
+    required String id,
+    required String title,
+    required String content,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.updateNote(id: id, title: title, content: content);
+    return _toMap(result);
+  }
+
+  Future<void> deleteNote(String id) async {
+    _checkAvailable();
+    await _frbApi.deleteNote(id: id);
+  }
+
+  Future<List<Map<String, dynamic>>> listNotes(String folderId) async {
+    _checkAvailable();
+    final result = await _frbApi.listNotes(folderId: folderId);
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
+  // ============================================================
+  // 文件夹 API —— 替代原 FolderEvent.* 事件
+  // ============================================================
+
+  Future<Map<String, dynamic>> createFolder({
+    required String name,
+    String? parentId,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.createFolder(name: name, parentId: parentId);
+    return _toMap(result);
+  }
+
+  Future<List<Map<String, dynamic>>> listFolders({String? parentId}) async {
+    _checkAvailable();
+    final result = await _frbApi.listFolders(parentId: parentId);
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
+  Future<void> deleteFolder(String id) async {
+    _checkAvailable();
+    await _frbApi.deleteFolder(id: id);
+  }
+
+  // ============================================================
+  // 标签 API —— 替代原 TagEvent.* 事件
+  // ============================================================
+
+  Future<Map<String, dynamic>> createTag(String name) async {
+    _checkAvailable();
+    final result = await _frbApi.createTag(name: name);
+    return _toMap(result);
+  }
+
+  Future<List<Map<String, dynamic>>> listTags() async {
+    _checkAvailable();
+    final result = await _frbApi.listTags();
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
+  Future<void> deleteTag(String id) async {
+    _checkAvailable();
+    await _frbApi.deleteTag(id: id);
+  }
+
+  // ============================================================
+  // 编辑器 API —— 替代原 EditorEvent.* 事件
+  // ============================================================
+
+  Future<Map<String, dynamic>> insertBlock({
+    required String noteId,
+    required String blockType,
+    required String content,
+    int? position,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.insertBlock(
+      noteId: noteId, blockType: blockType, content: content, position: position,
+    );
+    return _toMap(result);
+  }
+
+  Future<void> updateBlock({required String id, required String content}) async {
+    _checkAvailable();
+    await _frbApi.updateBlock(id: id, content: content);
+  }
+
+  Future<void> deleteBlock(String id) async {
+    _checkAvailable();
+    await _frbApi.deleteBlock(id: id);
+  }
+
+  Future<List<Map<String, dynamic>>> getBlocks(String noteId) async {
+    _checkAvailable();
+    final result = await _frbApi.getBlocks(noteId: noteId);
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
+  // ============================================================
+  // 搜索 API —— 替代原 SearchEvent.* 事件
+  // ============================================================
+
+  Future<List<Map<String, dynamic>>> searchNotes({
+    required String query,
+    int? limit,
+    int? offset,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.searchNotes(query: query, limit: limit, offset: offset);
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
+  // ============================================================
+  // 加密 API —— 替代原 CryptoEvent.* 事件
+  // ============================================================
+
+  Future<String> encrypt({required String plaintextBase64, required String keyBase64}) async {
+    _checkAvailable();
+    return await _frbApi.encrypt(plaintextBase64: plaintextBase64, keyBase64: keyBase64);
+  }
+
+  Future<String> decrypt({required String ciphertextBase64, required String keyBase64}) async {
+    _checkAvailable();
+    return await _frbApi.decrypt(ciphertextBase64: ciphertextBase64, keyBase64: keyBase64);
+  }
+
+  Future<String> deriveKey({required String password, required String saltBase64}) async {
+    _checkAvailable();
+    return await _frbApi.deriveKey(password: password, saltBase64: saltBase64);
+  }
+
+  // ============================================================
+  // 同步 API —— 替代原 SyncEvent.* 事件
+  // ============================================================
+
+  Future<void> pushChanges() async {
+    _checkAvailable();
+    await _frbApi.pushChanges();
+  }
+
+  Future<void> pullChanges() async {
+    _checkAvailable();
+    await _frbApi.pullChanges();
+  }
+
+  Future<Map<String, dynamic>> getSyncStatus() async {
+    _checkAvailable();
+    final result = await _frbApi.getSyncStatus();
+    return _toMap(result);
+  }
+
+  // ============================================================
+  // Canvas API —— 替代原 CanvasEvent.* 事件
+  // ============================================================
+
+  Future<void> canvasAddNode({required String canvasId, required String nodeJson}) async {
+    _checkAvailable();
+    await _frbApi.canvasAddNode(canvasId: canvasId, nodeJson: nodeJson);
+  }
+
+  Future<void> canvasRemoveNode({required String canvasId, required String nodeId}) async {
+    _checkAvailable();
+    await _frbApi.canvasRemoveNode(canvasId: canvasId, nodeId: nodeId);
+  }
+
+  Future<void> canvasAutoLayout({required String canvasId, required String layoutType}) async {
+    _checkAvailable();
+    await _frbApi.canvasAutoLayout(canvasId: canvasId, layoutType: layoutType);
+  }
+
+  // ============================================================
+  // 数据库 API —— 替代原 DatabaseEvent.* 事件
+  // ============================================================
+
+  Future<String> createDatabase(String name) async {
+    _checkAvailable();
+    return await _frbApi.createDatabase(name: name);
+  }
+
+  Future<String> evaluateFormula({
+    required String formula,
+    required String rowValues,
+    required String allRows,
+  }) async {
+    _checkAvailable();
+    return await _frbApi.evaluateFormula(formula: formula, rowValues: rowValues, allRows: allRows);
+  }
+
+  // ============================================================
+  // 图谱 API —— 替代原 GraphEvent.* 事件
+  // ============================================================
+
+  Future<String> calculateCentrality() async {
+    _checkAvailable();
+    return await _frbApi.calculateCentrality();
+  }
+
+  Future<String> detectClusters() async {
+    _checkAvailable();
+    return await _frbApi.detectClusters();
+  }
+
+  // ============================================================
+  // 闪卡 API —— 替代原 FlashcardEvent.* 事件
+  // ============================================================
+
+  Future<String> createDeck({required String name, required String description}) async {
+    _checkAvailable();
+    return await _frbApi.createDeck(name: name, description: description);
+  }
+
+  Future<String> reviewFlashcard({required String flashcardId, required int quality}) async {
+    _checkAvailable();
+    return await _frbApi.reviewFlashcard(flashcardId: flashcardId, quality: quality);
+  }
+
+  Future<String> getDueCards({required String deckId, int? limit}) async {
+    _checkAvailable();
+    return await _frbApi.getDueCards(deckId: deckId, limit: limit);
+  }
+
+  // ============================================================
+  // CRDT API —— 替代原 CRDTEvent.* 事件
+  // ============================================================
+
+  Future<Map<String, dynamic>> crdtMerge({
+    required String docId,
+    required String deviceId,
+    required String remoteOpsJson,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.crdtMerge(docId: docId, deviceId: deviceId, remoteOpsJson: remoteOpsJson);
+    return _toMap(result);
+  }
+
+  // ============================================================
+  // 格式 API —— 替代原 FormatEvent.* 事件
+  // ============================================================
+
+  Future<String> importMarkdown(String path) async {
+    _checkAvailable();
+    return await _frbApi.importMarkdown(path: path);
+  }
+
+  Future<void> exportMarkdown({required String notesJson, required String path}) async {
+    _checkAvailable();
+    await _frbApi.exportMarkdown(notesJson: notesJson, path: path);
+  }
+
+  // ============================================================
+  // 工具方法
+  // ============================================================
+
+  void _checkAvailable() {
+    if (!_isAvailable || _frbApi == null) {
+      throw StateError('FFI bridge not available. Call init() first.');
+    }
+  }
+
+  /// 将 FRB 生成的 Dart 对象转换为 Map
+  /// FRB 生成的类包含 toJson() 方法，可直接序列化
+  Map<String, dynamic> _toMap(dynamic obj) {
+    if (obj == null) return {};
+    if (obj is Map) return Map<String, dynamic>.from(obj);
+    // FRB 生成的类有 toJson() 方法
+    try {
+      final json = (obj as dynamic).toJson();
+      return Map<String, dynamic>.from(json as Map);
+    } catch (_) {
+      return {'value': obj.toString()};
     }
   }
 
   void dispose() {
-    _dylib = null;
+    _frbApi = null;
+    _isAvailable = false;
   }
-
-  /// FfiV2Adapter —— flutter_rust_bridge 渐进迁移适配器
-  ///
-  /// 使用方式：
-  ///   final bridge = FFIBridge();
-  ///   // 旧代码继续使用 bridge.dispatch()
-  ///   // 新代码使用 bridge.v2Adapter.noteSearch()
-  FfiV2Adapter? _v2Adapter;
-  FfiV2Adapter get v2Adapter {
-    _v2Adapter ??= FfiV2Adapter(this);
-    return _v2Adapter!;
-  }
-}
-
-/// FfiV2Adapter —— flutter_rust_bridge 迁移适配器
-///
-/// 当添加新功能到 Rust 端时：
-/// 1. 在 Rust 端用 FRB 宏标注导出的函数
-/// 2. 运行 `flutter_rust_bridge_codegen generate` 生成 Dart 绑定
-/// 3. 在此适配器中封装生成的绑定，提供与 FFIBridge 一致的接口
-///
-/// 当迁移现有功能时：
-/// 1. 在 Rust 端重新实现对应函数，添加 FRB 注解
-/// 2. 生成绑定后，在适配器中实现新方法
-/// 3. 逐步替换调用方，最后移除旧的自研 FFI 代码
-class FfiV2Adapter {
-  final FFIBridge legacy;
-
-  FfiV2Adapter(this.legacy);
-
-  /// 示例：FRB 生成的搜索函数（迁移完成后替换 SearchEvent）
-  /// Future<List<SearchResult>> noteSearch(String query) =>
-  ///     frbGeneratedSearch(query);
-
-  /// 所有新 Rust 功能都通过此类方法暴露，而非直接新建 dispatch handler
 }
