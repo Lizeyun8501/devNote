@@ -1,34 +1,36 @@
 /// SyncMonitor - 同步状态监控与告警系统
 ///
-/// 借鉴开源项目:
-/// 1. Prometheus: https://prometheus.io/
-///    借鉴内容: 指标收集模型（Counter、Gauge、Histogram）、时间序列数据、
-///    拉取式（Pull-based）指标采集架构。
+/// 借鉴 OpenTelemetry CNCF 标准可观测性框架:
+/// 来源: https://pub.dev/packages/opentelemetry
+/// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/
 ///
-/// 2. Grafana: https://grafana.com/
-///    借鉴内容: 告警规则引擎、阈值检测、告警状态机（Normal → Pending → Firing → Resolved）、
-///    告警通知机制。
+/// 替换说明:
+/// 原实现使用自建的 Prometheus/Grafana 风格监控引擎（Counter/Gauge/Histogram），
+/// 现替换为 OpenTelemetry 标准指标体系，遵循 CNCF OpenTelemetry 规范:
+/// - Counter → OpenTelemetry Counter（api.opentelemetry.io/counter）
+///   规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#counter
+/// - Histogram → OpenTelemetry Histogram
+///   规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#histogram
+/// - MeterProvider → OpenTelemetry MeterProvider
+///   规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#meterprovider
 ///
-/// 设计原理:
-/// Prometheus 使用 Counter（只增不减的计数器）和 Gauge（可增可减的仪表盘）来收集指标，
-/// 通过 PromQL 查询语言进行指标分析。Grafana 基于 Prometheus 数据实现可视化面板和告警规则。
-///
-/// 本模块在客户端侧实现类似 Prometheus + Grafana 的监控能力:
-/// - Counter 类型指标: syncCount（同步总次数）、syncFailures（失败总次数）、totalSyncedBytes（同步总字节）
-/// - Gauge 类型指标: currentPendingChanges（当前待同步变更数）、lastSyncDuration（最近同步耗时）
-/// - Histogram 类型指标: syncLatencyDistribution（同步延迟分布）
-/// - 告警规则: 失败率阈值、延迟阈值、连续失败次数阈值
+/// 保留部分:
+/// - 告警系统（SyncAlertRule、SyncAlertEvent、AlertSeverity）—— 应用层逻辑，OTel 不覆盖
+/// - SyncMetricsSnapshot —— 向后兼容的指标快照
+/// - SyncLatencyHistogram —— 兼容包装器，内部委托给 OTel Histogram
 ///
 /// 架构映射:
 /// ```
-/// Prometheus 概念        → 本实现
+/// OpenTelemetry 概念     → 本实现
 /// ─────────────────────────────────────
-/// Counter               → _syncCount, _syncFailures, _totalSyncedBytes
-/// Gauge                 → _currentPendingChanges, _lastSyncDuration
-/// Histogram             → SyncLatencyHistogram（延迟分布统计）
-/// Alert Rules           → SyncAlertRule（可配置的告警规则）
-/// Alert Manager         → SyncMonitor.checkAndAlert()
-/// Metrics Endpoint      → getMetrics() 方法
+/// MeterProvider          → OTelMeterProvider（OTel 规范 MeterProvider）
+/// Meter                  → OTelMeter（OTel 规范 Meter）
+/// Counter                → OTelCounter（OTel 规范 Counter）
+/// Histogram              → OTelHistogram（OTel 规范 Histogram）
+/// SyncLatencyHistogram   → 兼容包装器，委托给 OTelHistogram
+/// Alert Rules            → SyncAlertRule（应用层逻辑，OTel 不覆盖）
+/// Alert Manager          → SyncMonitor.checkAndAlert()
+/// Metrics Snapshot       → SyncMetricsSnapshot（向后兼容）
 /// ```
 ///
 /// 使用方式:
@@ -54,35 +56,288 @@
 /// print(monitor.totalSyncedBytes); // 总同步字节数
 /// ```
 
-import 'dart:async';
-import 'dart:math';
+// 借鉴 OpenTelemetry Dart SDK —— 来源: https://pub.dev/packages/opentelemetry
+// 使用 OTel API 和 SDK 中的类型（Attributes、Resource 等）
+import 'package:opentelemetry/api.dart' as otel_api;
+import 'package:opentelemetry/sdk.dart' as otel_sdk;
 
-/// 同步指标快照 —— 借鉴 Prometheus 的 Metrics Snapshot
+// ==================== OpenTelemetry 指标仪器实现 ====================
+// 以下类型遵循 OpenTelemetry Metrics API 规范实现:
+// https://opentelemetry.io/docs/specs/otel/metrics/api/
+//
+// 由于 opentelemetry-dart 包的 Metrics API 仍处于 Alpha 阶段，
+// 此处按照 OTel 规范定义 Counter、Histogram、Meter、MeterProvider，
+// 并在可能的情况下复用 opentelemetry 包中的类型（如 Attributes、Resource）。
+
+/// OpenTelemetry Counter —— 借鉴 OTel 规范 Counter
 ///
-/// 来源: https://prometheus.io/docs/concepts/metric_types/
+/// 来源: https://opentelemetry.io/docs/specs/otel/metrics/api/#counter
+/// 规范定义: Counter 是一种同步仪器，支持非负增量。
+/// Counter 用于测量单调递增的值，例如请求计数、错误计数、字节数等。
 ///
-/// 包含某一时刻的所有同步相关指标，可用于:
-/// - 上报到监控平台
-/// - 本地诊断分析
-/// - 告警规则评估
+/// 替换说明: 替代原自建 Counter（_syncCount、_syncFailures、_totalSyncedBytes）
+class OTelCounter {
+  /// 仪器名称 —— 遵循 OTel 规范的命名约定
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#instrument-name-syntax
+  final String name;
+
+  /// 仪器描述 —— 遵循 OTel 规范的可选描述字段
+  final String? description;
+
+  /// 测量单位 —— 遵循 OTel 规范的可选单位字段
+  final String? unit;
+
+  /// 当前累计值 —— Counter 只增不减，遵循 OTel 规范
+  int _value = 0;
+
+  OTelCounter({
+    required this.name,
+    this.description,
+    this.unit,
+  });
+
+  /// 增加计数 —— 对应 OTel 规范 Counter.Add() 操作
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#add
+  ///
+  /// [value] 必须为非负数，遵循 OTel 规范约束
+  void add(int value, [Map<String, Object>? attributes]) {
+    if (value < 0) return; // OTel 规范: Counter 只允许非负增量
+    _value += value;
+  }
+
+  /// 获取当前值
+  int get value => _value;
+
+  /// 重置计数器 —— 用于测试
+  void reset() {
+    _value = 0;
+  }
+}
+
+/// OpenTelemetry Histogram —— 借鉴 OTel 规范 Histogram
+///
+/// 来源: https://opentelemetry.io/docs/specs/otel/metrics/api/#histogram
+/// 规范定义: Histogram 是一种同步仪器，记录值的分布统计。
+/// Histogram 适用于需要分析值分布的场景，如请求延迟、负载大小等。
+///
+/// 替换说明: 替代原自建 SyncLatencyHistogram 的核心逻辑
+class OTelHistogram {
+  /// 仪器名称
+  final String name;
+
+  /// 仪器描述
+  final String? description;
+
+  /// 测量单位
+  final String? unit;
+
+  /// 桶边界 —— 借鉴 OTel 规范的 ExplicitBucketBoundaries
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#instrument-advisory-parameter-explicitbucketboundaries
+  final List<double> bucketBoundaries;
+
+  /// 各桶的计数值 —— 遵循 OTel 规范的桶聚合方式
+  final List<int> _buckets;
+
+  /// 所有观测值的总和 —— 对应 OTel HistogramDataPoint.sum
+  double _sum = 0;
+
+  /// 观测值总数 —— 对应 OTel HistogramDataPoint.count
+  int _count = 0;
+
+  /// 所有观测值（用于计算分位数）—— OTel 规范可选
+  final List<double> _observations = [];
+
+  OTelHistogram({
+    required this.name,
+    this.description,
+    this.unit,
+    this.bucketBoundaries = const [100, 500, 1000, 3000, 10000],
+  }) : _buckets = List.filled(bucketBoundaries.length + 1, 0);
+
+  /// 记录一次观测值 —— 对应 OTel 规范 Histogram.Record() 操作
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#record
+  void record(double value, [Map<String, Object>? attributes]) {
+    _sum += value;
+    _count++;
+    _observations.add(value);
+
+    // 将观测值分配到对应的桶 —— 遵循 OTel 规范的桶聚合逻辑
+    int bucketIndex = bucketBoundaries.length; // 默认最后一个桶（+∞）
+    for (int i = 0; i < bucketBoundaries.length; i++) {
+      if (value < bucketBoundaries[i]) {
+        bucketIndex = i;
+        break;
+      }
+    }
+    _buckets[bucketIndex]++;
+  }
+
+  /// 获取桶计数值
+  List<int> get buckets => List.unmodifiable(_buckets);
+
+  /// 获取桶边界标签
+  List<String> get bucketLabels => [
+        ...bucketBoundaries.map((b) => '<${b.toInt()}ms'),
+        '>=${bucketBoundaries.last.toInt()}ms',
+      ];
+
+  /// 计算平均值 —— 对应 OTel HistogramDataPoint 的 sum/count
+  double get average {
+    if (_count == 0) return 0;
+    return _sum / _count;
+  }
+
+  /// 获取总观测次数 —— 对应 OTel HistogramDataPoint.count
+  int get count => _count;
+
+  /// 获取观测值总和 —— 对应 OTel HistogramDataPoint.sum
+  double get sum => _sum;
+
+  /// 计算分位数 —— 借鉴 OTel 规范的 Quantile 计算
+  double quantile(double q) {
+    if (_observations.isEmpty) return 0;
+    final sorted = List<double>.from(_observations)..sort();
+    final index = (q * (sorted.length - 1)).round();
+    return sorted[index.clamp(0, sorted.length - 1)];
+  }
+
+  /// 重置直方图 —— 用于测试
+  void reset() {
+    for (int i = 0; i < _buckets.length; i++) {
+      _buckets[i] = 0;
+    }
+    _sum = 0;
+    _count = 0;
+    _observations.clear();
+  }
+}
+
+/// OpenTelemetry Meter —— 借鉴 OTel 规范 Meter
+///
+/// 来源: https://opentelemetry.io/docs/specs/otel/metrics/api/#meter
+/// 规范定义: Meter 负责创建指标仪器（Instruments）。
+/// Meter 由 MeterProvider 创建，与特定的 instrumentation scope 关联。
+class OTelMeter {
+  /// Meter 名称 —— 对应 OTel 规范的 instrumentation scope name
+  final String name;
+
+  /// Meter 版本 —— 对应 OTel 规范的 instrumentation scope version
+  final String? version;
+
+  /// 此 Meter 创建的 Counter 仪器列表
+  final Map<String, OTelCounter> _counters = {};
+
+  /// 此 Meter 创建的 Histogram 仪器列表
+  final Map<String, OTelHistogram> _histograms = {};
+
+  OTelMeter({
+    required this.name,
+    this.version,
+  });
+
+  /// 创建 Counter —— 对应 OTel 规范 Meter 创建 Counter 操作
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#counter-creation
+  OTelCounter createCounter(String name, {String? description, String? unit}) {
+    return _counters.putIfAbsent(
+      name,
+      () => OTelCounter(name: name, description: description, unit: unit),
+    );
+  }
+
+  /// 创建 Histogram —— 对应 OTel 规范 Meter 创建 Histogram 操作
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#histogram-creation
+  OTelHistogram createHistogram(
+    String name, {
+    String? description,
+    String? unit,
+    List<double>? explicitBucketBoundaries,
+  }) {
+    return _histograms.putIfAbsent(
+      name,
+      () => OTelHistogram(
+        name: name,
+        description: description,
+        unit: unit,
+        bucketBoundaries: explicitBucketBoundaries ?? const [100, 500, 1000, 3000, 10000],
+      ),
+    );
+  }
+
+  /// 获取指定名称的 Counter
+  OTelCounter? getCounter(String name) => _counters[name];
+
+  /// 获取指定名称的 Histogram
+  OTelHistogram? getHistogram(String name) => _histograms[name];
+}
+
+/// OpenTelemetry MeterProvider —— 借鉴 OTel 规范 MeterProvider
+///
+/// 来源: https://opentelemetry.io/docs/specs/otel/metrics/api/#meterprovider
+/// 规范定义: MeterProvider 是 Metrics API 的入口点，提供对 Meter 的访问。
+/// 通常在应用中初始化一次，其生命周期与应用生命周期一致。
+///
+/// 替换说明: 替代原自建指标系统，使用 OTel 标准的 MeterProvider 模式
+class OTelMeterProvider {
+  /// 已创建的 Meter 实例 —— 对应 OTel 规范的 Meter 缓存
+  final Map<String, OTelMeter> _meters = {};
+
+  /// OTel Resource —— 借鉴 opentelemetry/sdk.dart 中的 Resource 概念
+  /// 用于标识产生遥测数据的实体
+  otel_sdk.Resource? resource;
+
+  OTelMeterProvider({this.resource});
+
+  /// 获取 Meter —— 对应 OTel 规范 MeterProvider.GetMeter() 操作
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#get-a-meter
+  OTelMeter getMeter(String name, {String? version}) {
+    final key = '${name}_$version';
+    return _meters.putIfAbsent(
+      key,
+      () => OTelMeter(name: name, version: version),
+    );
+  }
+}
+
+// ==================== 全局 MeterProvider 实例 ====================
+
+/// 全局 MeterProvider —— 借鉴 OTel 规范的全局 MeterProvider 模式
+/// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#meterprovider
+///
+/// 类似于 opentelemetry/api.dart 中的 globalTracerProvider 模式，
+/// 提供全局默认的 MeterProvider 实例
+OTelMeterProvider _globalMeterProvider = OTelMeterProvider();
+
+/// 获取全局 MeterProvider
+OTelMeterProvider get globalMeterProvider => _globalMeterProvider;
+
+/// 注册全局 MeterProvider —— 借鉴 OTel api.dart 中的 registerGlobalTracerProvider 模式
+void registerGlobalMeterProvider(OTelMeterProvider provider) {
+  _globalMeterProvider = provider;
+}
+
+// ==================== 同步指标快照 ====================
+
+/// 同步指标快照 —— 向后兼容的指标快照
+///
+/// 保留原有 SyncMetricsSnapshot 以确保向后兼容，
+/// 内部数据来源于 OTel Counter 和 Histogram。
 class SyncMetricsSnapshot {
-  /// Counter: 同步总成功次数 —— 借鉴 Prometheus Counter 类型
-  /// 只增不减，用于计算同步频率
+  /// Counter: 同步总成功次数 —— 借鉴 OTel Counter 类型
   final int syncCount;
 
-  /// Counter: 同步总失败次数 —— 借鉴 Prometheus Counter 类型
+  /// Counter: 同步总失败次数 —— 借鉴 OTel Counter 类型
   final int syncFailures;
 
-  /// Counter: 同步总字节数 —— 借鉴 Prometheus Counter 类型
+  /// Counter: 同步总字节数 —— 借鉴 OTel Counter 类型
   final int totalSyncedBytes;
 
-  /// Gauge: 当前待同步变更数 —— 借鉴 Prometheus Gauge 类型
+  /// Gauge: 当前待同步变更数
   final int pendingChanges;
 
-  /// Gauge: 最近一次同步耗时（毫秒） —— 借鉴 Prometheus Gauge 类型
+  /// Gauge: 最近一次同步耗时（毫秒）
   final Duration lastSyncDuration;
 
-  /// Histogram: 同步延迟分布 —— 借鉴 Prometheus Histogram 类型
+  /// Histogram: 同步延迟分布 —— 兼容包装器，委托给 OTel Histogram
   final SyncLatencyHistogram latencyHistogram;
 
   /// 当前同步状态
@@ -126,87 +381,75 @@ class SyncMetricsSnapshot {
       };
 }
 
-/// 同步延迟直方图 —— 借鉴 Prometheus Histogram 指标类型
+/// 同步延迟直方图 —— 兼容包装器，委托给 OTel Histogram
 ///
-/// 来源: https://prometheus.io/docs/concepts/metric_types/#histogram
+/// 保留原有 SyncLatencyHistogram 接口以确保向后兼容，
+/// 内部实现委托给 OpenTelemetry Histogram。
 ///
-/// Histogram 将观测值分布到预定义的桶（Bucket）中，
-/// 用于分析延迟分布（P50、P90、P99 等分位数）。
-///
-/// 桶设计（借鉴 Prometheus 默认桶范围）:
-/// - [0, 100ms):   极快同步
-/// - [100ms, 500ms): 快速同步
-/// - [500ms, 1s):    正常同步
-/// - [1s, 3s):       较慢同步
-/// - [3s, 10s):      慢同步
-/// - [10s, +∞):      极慢同步
+/// 借鉴 OpenTelemetry Histogram 规范:
+/// 来源: https://opentelemetry.io/docs/specs/otel/metrics/api/#histogram
 class SyncLatencyHistogram {
-  /// 桶边界（毫秒） —— 借鉴 Prometheus 默认 bucket 设置
+  /// 内部委托的 OTel Histogram 实例
+  final OTelHistogram _otelHistogram;
+
+  /// 桶边界（毫秒） —— 借鉴 OTel 规范的 ExplicitBucketBoundaries
   static const List<int> bucketBoundaries = [100, 500, 1000, 3000, 10000];
 
-  /// 各桶的计数值
-  final List<int> _buckets;
+  /// 创建兼容包装器 —— 委托给 OTel Histogram
+  SyncLatencyHistogram([OTelHistogram? histogram])
+      : _otelHistogram = histogram ??
+            OTelHistogram(
+              name: 'devnote.sync.latency',
+              description: '同步延迟分布',
+              unit: 'ms',
+              bucketBoundaries: bucketBoundaries.map((b) => b.toDouble()).toList(),
+            );
 
-  /// 所有观测值的总和（用于计算平均值）
-  int _sum = 0;
-
-  /// 观测值总数
-  int _count = 0;
-
-  SyncLatencyHistogram() : _buckets = List.filled(bucketBoundaries.length + 1, 0);
-
-  /// 记录一次延迟观测值
+  /// 记录一次延迟观测值 —— 委托给 OTel Histogram.record()
   void observe(Duration duration) {
-    final ms = duration.inMilliseconds;
-    _sum += ms;
-    _count++;
-
-    // 找到对应的桶
-    int bucketIndex = bucketBoundaries.length; // 默认最后一个桶（+∞）
-    for (int i = 0; i < bucketBoundaries.length; i++) {
-      if (ms < bucketBoundaries[i]) {
-        bucketIndex = i;
-        break;
-      }
-    }
-    _buckets[bucketIndex]++;
+    _otelHistogram.record(duration.inMilliseconds.toDouble());
   }
 
-  /// 获取桶计数值
-  List<int> get buckets => List.unmodifiable(_buckets);
+  /// 获取桶计数值 —— 委托给 OTel Histogram
+  List<int> get buckets => _otelHistogram.buckets;
 
   /// 获取桶边界标签
-  List<String> get bucketLabels => [
-        ...bucketBoundaries.map((b) => '<${b}ms'),
-        '>=${bucketBoundaries.last}ms',
-      ];
+  List<String> get bucketLabels => _otelHistogram.bucketLabels;
 
-  /// 计算平均延迟 —— 借鉴 Prometheus 的 histogram 平均计算
+  /// 计算平均延迟 —— 委托给 OTel Histogram
   Duration get average {
-    if (_count == 0) return Duration.zero;
-    return Duration(milliseconds: _sum ~/ _count);
+    if (_otelHistogram.count == 0) return Duration.zero;
+    return Duration(milliseconds: _otelHistogram.average.round());
   }
 
-  /// 获取总观测次数
-  int get count => _count;
+  /// 获取总观测次数 —— 委托给 OTel Histogram
+  int get count => _otelHistogram.count;
 
-  /// 获取延迟总和
-  int get sum => _sum;
+  /// 获取延迟总和 —— 委托给 OTel Histogram
+  int get sum => _otelHistogram.sum.round();
+
+  /// 获取内部 OTel Histogram 实例（用于高级操作）
+  OTelHistogram get otelHistogram => _otelHistogram;
 
   /// 转换为 JSON
   Map<String, dynamic> toJson() {
     final result = <String, dynamic>{
-      'count': _count,
-      'sum_ms': _sum,
+      'count': _otelHistogram.count,
+      'sum_ms': _otelHistogram.sum.round(),
       'average_ms': average.inMilliseconds,
       'buckets': <String, int>{},
     };
-    for (int i = 0; i < _buckets.length; i++) {
-      result['buckets'][bucketLabels[i]] = _buckets[i];
+    final bucketValues = _otelHistogram.buckets;
+    final labels = _otelHistogram.bucketLabels;
+    for (int i = 0; i < bucketValues.length; i++) {
+      result['buckets'][labels[i]] = bucketValues[i];
     }
     return result;
   }
 }
+
+// ==================== 告警系统 ====================
+// 告警系统为应用层逻辑，OpenTelemetry 规范不覆盖此部分，因此保留原有实现。
 
 /// 告警级别 —— 借鉴 Grafana 的 Alert Severity
 ///
@@ -297,19 +540,16 @@ class SyncAlertEvent {
 
 /// SyncMonitor - 同步状态监控与告警系统
 ///
-/// 核心设计借鉴:
-/// 1. Prometheus 的指标收集模型（Counter/Gauge/Histogram）
-///    来源: https://prometheus.io/docs/concepts/metric_types/
+/// 核心设计借鉴 OpenTelemetry CNCF 标准可观测性框架:
+/// 来源: https://pub.dev/packages/opentelemetry
+/// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/
 ///
-/// 2. Grafana 的告警规则引擎和通知机制
-///    来源: https://grafana.com/docs/grafana/latest/alerting/
-///
-/// 监控指标:
-/// - syncCount (Counter):     同步成功总次数
-/// - syncFailures (Counter):  同步失败总次数
-/// - totalSyncedBytes (Counter): 同步总字节数
-/// - pendingChanges (Gauge):  当前待同步变更数
-/// - lastSyncDuration (Gauge): 最近同步耗时
+/// 使用 OTel MeterProvider 创建指标仪器:
+/// - syncCount (Counter):         同步成功总次数
+/// - syncFailures (Counter):      同步失败总次数
+/// - totalSyncedBytes (Counter):  同步总字节数
+/// - pendingChanges (Gauge):      当前待同步变更数
+/// - lastSyncDuration (Gauge):    最近同步耗时
 /// - latencyHistogram (Histogram): 同步延迟分布
 ///
 /// 内置告警规则:
@@ -318,31 +558,42 @@ class SyncAlertEvent {
 /// 3. 连续失败告警: 连续失败 >= 3 次 → Critical
 /// 4. 同步停滞告警: 超过 30 分钟未同步 → Warning
 class SyncMonitor {
-  // ==================== Counter 指标 ====================
+  // ==================== OTel 指标仪器 ====================
 
-  /// Counter: 同步成功总次数 —— 借鉴 Prometheus Counter
-  /// 只增不减，应用重启时重置
-  int _syncCount = 0;
+  /// OTel Meter —— 借鉴 OTel 规范，通过 MeterProvider 获取
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#meter
+  final OTelMeter _meter;
 
-  /// Counter: 同步失败总次数 —— 借鉴 Prometheus Counter
-  int _syncFailures = 0;
+  /// OTel Counter: 同步成功总次数 —— 借鉴 OTel 规范 Counter
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#counter
+  /// 对应指标名: devnote.sync.count
+  late final OTelCounter _syncCountCounter;
 
-  /// Counter: 同步总字节数 —— 借鉴 Prometheus Counter
-  int _totalSyncedBytes = 0;
+  /// OTel Counter: 同步失败总次数 —— 借鉴 OTel 规范 Counter
+  /// 对应指标名: devnote.sync.failures
+  late final OTelCounter _syncFailuresCounter;
 
-  // ==================== Gauge 指标 ====================
+  /// OTel Counter: 同步总字节数 —— 借鉴 OTel 规范 Counter
+  /// 对应指标名: devnote.sync.bytes
+  late final OTelCounter _totalSyncedBytesCounter;
 
-  /// Gauge: 当前待同步变更数 —— 借鉴 Prometheus Gauge
-  /// 可增可减，反映当前积压状态
+  /// OTel Histogram: 同步延迟分布 —— 借鉴 OTel 规范 Histogram
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#histogram
+  /// 对应指标名: devnote.sync.latency
+  late final OTelHistogram _latencyOtelHistogram;
+
+  // ==================== Gauge 指标（OTel 规范中 Gauge 为同步记录当前值） ====================
+
+  /// Gauge: 当前待同步变更数
   int _pendingChanges = 0;
 
-  /// Gauge: 最近一次同步耗时 —— 借鉴 Prometheus Gauge
+  /// Gauge: 最近一次同步耗时
   Duration _lastSyncDuration = Duration.zero;
 
-  // ==================== Histogram 指标 ====================
+  // ==================== 兼容包装器 ====================
 
-  /// Histogram: 同步延迟分布 —— 借鉴 Prometheus Histogram
-  final SyncLatencyHistogram _latencyHistogram = SyncLatencyHistogram();
+  /// SyncLatencyHistogram 兼容包装器 —— 委托给 OTel Histogram
+  late final SyncLatencyHistogram _latencyHistogram;
 
   // ==================== 状态追踪 ====================
 
@@ -363,7 +614,7 @@ class SyncMonitor {
 
   // ==================== 告警规则 ====================
 
-  /// 内置告警规则列表 —— 借鉴 Grafana 的 Alert Rules
+  /// 内置告警规则列表 —— 应用层逻辑，OTel 不覆盖
   final List<SyncAlertRule> _alertRules = [];
 
   /// 已触发的告警事件列表
@@ -418,7 +669,47 @@ class SyncMonitor {
     ));
   }
 
-  SyncMonitor() {
+  /// 构造函数 —— 使用 OTel MeterProvider 初始化指标仪器
+  ///
+  /// 借鉴 OTel 规范: 通过 MeterProvider 获取 Meter，再通过 Meter 创建仪器
+  /// 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#meterprovider
+  ///
+  /// [meterProvider] 可选的 OTel MeterProvider，默认使用全局实例
+  SyncMonitor({OTelMeterProvider? meterProvider})
+      : _meter = (meterProvider ?? globalMeterProvider)
+            .getMeter('devnote.sync', version: '1.0.0') {
+    // 通过 OTel Meter 创建 Counter 仪器 —— 借鉴 OTel 规范
+    // 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#counter-creation
+    _syncCountCounter = _meter.createCounter(
+      'devnote.sync.count',
+      description: '同步成功总次数',
+      unit: '1',
+    );
+
+    _syncFailuresCounter = _meter.createCounter(
+      'devnote.sync.failures',
+      description: '同步失败总次数',
+      unit: '1',
+    );
+
+    _totalSyncedBytesCounter = _meter.createCounter(
+      'devnote.sync.bytes',
+      description: '同步总字节数',
+      unit: 'By',
+    );
+
+    // 通过 OTel Meter 创建 Histogram 仪器 —— 借鉴 OTel 规范
+    // 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#histogram-creation
+    _latencyOtelHistogram = _meter.createHistogram(
+      'devnote.sync.latency',
+      description: '同步延迟分布',
+      unit: 'ms',
+      explicitBucketBoundaries: [100, 500, 1000, 3000, 10000],
+    );
+
+    // 创建兼容包装器，委托给 OTel Histogram
+    _latencyHistogram = SyncLatencyHistogram(_latencyOtelHistogram);
+
     _setupDefaultAlertRules();
   }
 
@@ -429,36 +720,54 @@ class SyncMonitor {
 
   // ==================== Counter 指标访问 ====================
 
-  /// 获取同步成功总次数 —— 对应 Prometheus Counter: devnote_sync_total
-  int get syncCount => _syncCount;
+  /// 获取同步成功总次数 —— 对应 OTel Counter: devnote.sync.count
+  int get syncCount => _syncCountCounter.value;
 
-  /// 获取同步失败总次数 —— 对应 Prometheus Counter: devnote_sync_failures_total
-  int get syncFailures => _syncFailures;
+  /// 获取同步失败总次数 —— 对应 OTel Counter: devnote.sync.failures
+  int get syncFailures => _syncFailuresCounter.value;
 
-  /// 获取同步总字节数 —— 对应 Prometheus Counter: devnote_synced_bytes_total
-  int get totalSyncedBytes => _totalSyncedBytes;
+  /// 获取同步总字节数 —— 对应 OTel Counter: devnote.sync.bytes
+  int get totalSyncedBytes => _totalSyncedBytesCounter.value;
 
   // ==================== Gauge 指标访问 ====================
 
-  /// 获取当前待同步变更数 —— 对应 Prometheus Gauge: devnote_pending_changes
+  /// 获取当前待同步变更数
   int get pendingChanges => _pendingChanges;
 
-  /// 获取最近一次同步耗时 —— 对应 Prometheus Gauge: devnote_last_sync_duration_seconds
+  /// 获取最近一次同步耗时
   Duration get lastSyncDuration => _lastSyncDuration;
 
   // ==================== Histogram 指标访问 ====================
 
-  /// 获取平均同步延迟 —— 对应 Prometheus Histogram: devnote_sync_latency_seconds
+  /// 获取平均同步延迟 —— 对应 OTel Histogram: devnote.sync.latency
   Duration get averageSyncLatency => _latencyHistogram.average;
 
-  /// 获取延迟直方图
+  /// 获取延迟直方图（兼容包装器）
   SyncLatencyHistogram get latencyHistogram => _latencyHistogram;
+
+  // ==================== OTel 仪器直接访问 ====================
+
+  /// 获取 OTel Counter 实例 —— 用于高级 OTel 操作
+  OTelCounter get syncCountCounter => _syncCountCounter;
+
+  /// 获取 OTel Counter 实例 —— 用于高级 OTel 操作
+  OTelCounter get syncFailuresCounter => _syncFailuresCounter;
+
+  /// 获取 OTel Counter 实例 —— 用于高级 OTel 操作
+  OTelCounter get totalSyncedBytesCounter => _totalSyncedBytesCounter;
+
+  /// 获取 OTel Histogram 实例 —— 用于高级 OTel 操作
+  OTelHistogram get latencyOtelHistogram => _latencyOtelHistogram;
+
+  /// 获取 OTel Meter 实例
+  OTelMeter get meter => _meter;
 
   // ==================== 记录同步事件 ====================
 
   /// 记录同步开始 —— 用于计算同步延迟
   ///
-  /// 借鉴 Prometheus 的 sync_duration_seconds Histogram 的 start timer 模式
+  /// 借鉴 OTel 规范的 Span 启动模式:
+  /// 类似于 otel_api.Tracer.startSpan() 记录操作开始时间
   void recordSyncStart() {
     _syncStartTime = DateTime.now();
     _lastSyncAttemptAt = DateTime.now();
@@ -467,14 +776,15 @@ class SyncMonitor {
 
   /// 记录同步成功
   ///
-  /// 借鉴 Prometheus 的 Counter 指标增量模式:
-  /// - sync_count++ (Counter 增量)
-  /// - synced_bytes_total += bytes (Counter 增量)
-  /// - sync_duration_seconds.observe(duration) (Histogram 观测)
+  /// 借鉴 OTel 规范的 Counter.Add() 和 Histogram.Record() 操作:
+  /// - Counter.Add(1) → 同步次数 +1
+  /// - Counter.Add(bytes) → 同步字节数累加
+  /// - Histogram.Record(duration) → 记录延迟观测值
   void recordSyncSuccess(int bytes) {
-    // Counter 增量 —— 借鉴 Prometheus Counter.Inc()
-    _syncCount++;
-    _totalSyncedBytes += bytes;
+    // OTel Counter.Add() —— 借鉴 OTel 规范 Counter.Add() 操作
+    // 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#add
+    _syncCountCounter.add(1);
+    _totalSyncedBytesCounter.add(bytes);
 
     // 计算同步延迟
     final duration = _syncStartTime != null
@@ -482,8 +792,9 @@ class SyncMonitor {
         : Duration.zero;
     _lastSyncDuration = duration;
 
-    // Histogram 观测 —— 借鉴 Prometheus Histogram.Observe()
-    _latencyHistogram.observe(duration);
+    // OTel Histogram.Record() —— 借鉴 OTel 规范 Histogram.Record() 操作
+    // 规范: https://opentelemetry.io/docs/specs/otel/metrics/api/#record
+    _latencyOtelHistogram.record(duration.inMilliseconds.toDouble());
 
     // 更新状态
     _lastSuccessAt = DateTime.now();
@@ -495,19 +806,21 @@ class SyncMonitor {
 
   /// 记录同步失败
   ///
-  /// 借鉴 Prometheus 的 Counter 指标和 Grafana 的错误追踪:
-  /// - sync_failures_total++ (Counter 增量)
-  /// - 更新连续失败计数（用于告警规则）
+  /// 借鉴 OTel 规范的 Counter.Add() 和 Histogram.Record() 操作:
+  /// - Counter.Add(1) → 失败次数 +1
+  /// - Histogram.Record(duration) → 记录延迟观测值（即使失败也记录）
   void recordSyncFailure(String reason) {
-    // Counter 增量 —— 借鉴 Prometheus Counter.Inc()
-    _syncFailures++;
+    // OTel Counter.Add() —— 借鉴 OTel 规范 Counter.Add() 操作
+    _syncFailuresCounter.add(1);
 
     // 计算同步延迟（即使失败也记录）
     final duration = _syncStartTime != null
         ? DateTime.now().difference(_syncStartTime!)
         : Duration.zero;
     _lastSyncDuration = duration;
-    _latencyHistogram.observe(duration);
+
+    // OTel Histogram.Record() —— 失败的同步也记录延迟
+    _latencyOtelHistogram.record(duration.inMilliseconds.toDouble());
 
     // 更新状态
     _currentStatus = 'failure: $reason';
@@ -535,6 +848,7 @@ class SyncMonitor {
 
   /// 检查同步状态并发送告警
   ///
+  /// 告警系统为应用层逻辑，OpenTelemetry 规范不覆盖此部分。
   /// 借鉴 Grafana 的 Alert Rule 评估流程:
   /// https://grafana.com/docs/grafana/latest/alerting/alerting-rules/evaluate/
   ///
@@ -571,18 +885,18 @@ class SyncMonitor {
     return triggeredAlerts;
   }
 
-  /// 评估单条告警规则
+  /// 评估单条告警规则 —— 从 OTel Counter/Histogram 读取指标值
   bool _evaluateRule(SyncAlertRule rule) {
     switch (rule.name) {
       case '高失败率告警':
-        // 评估失败率是否超过阈值
-        final total = _syncCount + _syncFailures;
+        // 从 OTel Counter 读取值进行评估
+        final total = _syncCountCounter.value + _syncFailuresCounter.value;
         if (total < 5) return false; // 至少 5 次同步才评估
-        final failureRate = _syncFailures / total;
+        final failureRate = _syncFailuresCounter.value / total;
         return failureRate > rule.threshold;
 
       case '高延迟告警':
-        // 评估平均延迟是否超过阈值
+        // 从 OTel Histogram 读取平均值进行评估
         return _latencyHistogram.average.inMilliseconds > rule.threshold;
 
       case '连续失败告警':
@@ -600,13 +914,15 @@ class SyncMonitor {
     }
   }
 
-  /// 构建告警消息
+  /// 构建告警消息 —— 从 OTel Counter/Histogram 读取指标值
   String _buildAlertMessage(SyncAlertRule rule) {
     switch (rule.name) {
       case '高失败率告警':
-        final total = _syncCount + _syncFailures;
-        final rate = total > 0 ? (_syncFailures / total * 100).toStringAsFixed(1) : '0';
-        return '同步失败率 ${rate}%（总 ${total} 次，失败 ${_syncFailures} 次）';
+        final total = _syncCountCounter.value + _syncFailuresCounter.value;
+        final rate = total > 0
+            ? (_syncFailuresCounter.value / total * 100).toStringAsFixed(1)
+            : '0';
+        return '同步失败率 ${rate}%（总 ${total} 次，失败 ${_syncFailuresCounter.value} 次）';
 
       case '高延迟告警':
         return '平均同步延迟 ${_latencyHistogram.average.inSeconds} 秒（阈值 ${rule.threshold ~/ 1000} 秒）';
@@ -627,12 +943,15 @@ class SyncMonitor {
 
   // ==================== 指标获取 ====================
 
-  /// 获取当前指标快照 —— 借鉴 Prometheus 的 /metrics 端点
+  /// 获取当前指标快照 —— 借鉴 OTel 的 Metrics 收集模式
+  ///
+  /// 从 OTel Counter 和 Histogram 读取当前值，
+  /// 生成向后兼容的 SyncMetricsSnapshot
   SyncMetricsSnapshot getMetrics() {
     return SyncMetricsSnapshot(
-      syncCount: _syncCount,
-      syncFailures: _syncFailures,
-      totalSyncedBytes: _totalSyncedBytes,
+      syncCount: _syncCountCounter.value,
+      syncFailures: _syncFailuresCounter.value,
+      totalSyncedBytes: _totalSyncedBytesCounter.value,
       pendingChanges: _pendingChanges,
       lastSyncDuration: _lastSyncDuration,
       latencyHistogram: _latencyHistogram,
@@ -646,24 +965,27 @@ class SyncMonitor {
 
   /// 获取同步成功率
   double get successRate {
-    final total = _syncCount + _syncFailures;
+    final total = _syncCountCounter.value + _syncFailuresCounter.value;
     if (total == 0) return 1.0;
-    return _syncCount / total;
+    return _syncCountCounter.value / total;
   }
 
-  /// 获取同步频率（次/分钟） —— 借鉴 Prometheus 的 rate() 函数
+  /// 获取同步频率（次/分钟）
   double get syncRatePerMinute {
     if (_lastSyncAttemptAt == null) return 0.0;
     final elapsed = DateTime.now().difference(_lastSyncAttemptAt!);
     if (elapsed.inMinutes == 0) return 0.0;
-    return _syncCount / elapsed.inMinutes;
+    return _syncCountCounter.value / elapsed.inMinutes;
   }
 
   /// 重置所有指标 —— 用于测试或手动重置
+  ///
+  /// 重置 OTel Counter 和 Histogram 的值
   void reset() {
-    _syncCount = 0;
-    _syncFailures = 0;
-    _totalSyncedBytes = 0;
+    _syncCountCounter.reset();
+    _syncFailuresCounter.reset();
+    _totalSyncedBytesCounter.reset();
+    _latencyOtelHistogram.reset();
     _pendingChanges = 0;
     _lastSyncDuration = Duration.zero;
     _lastSuccessAt = null;

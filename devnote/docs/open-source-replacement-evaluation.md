@@ -449,6 +449,11 @@
 | WASM 插件沙箱 | 自研 wasmtime 沙箱(544行) | **extism v1.21.0** | 本轮 | ✅ |
 | 图算法引擎 | 自研邻接表+手写BFS/PageRank(~600行) | **petgraph v0.7** | 本轮 | ✅ |
 | FFI桥接层 | 自研 Event-Dispatch (~2546行) | **FRB v2 标注+FfiV2Adapter** | 本轮 | ✅ 已规划渐进迁移路径 |
+| P2P网络层 | 自研抽象层 | **libp2p v0.54** | 此前 | ✅ 已在用 |
+| 代码语法高亮 | 自研tokenizer(3语言) | **flutter_highlight** | 本轮 | ✅ 190+语言87主题 |
+| 数据库表格视图 | Flutter DataTable | **pluto_grid v3.1** | 本轮 | ✅ 列拖拽/排序/过滤 |
+| 同步监控 | 自研Prometheus/Grafana风格 | **opentelemetry** | 本轮 | ✅ CNCF标准 |
+| Canvas画布 | 全量渲染10000x10000 | **视口裁剪虚拟化** | 本轮 | ✅ Excalidraw风格 |
 
 ### ✅ 已在用优秀开源库，无需替换
 

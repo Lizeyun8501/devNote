@@ -36,6 +36,41 @@ class _CanvasViewState extends State<_CanvasView> {
   double _resizeStartWidth = 0;
   double _resizeStartHeight = 0;
 
+  // ============================================================
+  // 画布虚拟化 —— 借鉴 Excalidraw 的视口裁剪渲染
+  // 来源: https://github.com/excalidraw/excalidraw
+  // 借鉴内容: 只渲染视口内可见的节点，跳过视口外的节点，
+  // 避免大量节点时全量渲染导致性能下降
+  // ============================================================
+  Rect _viewportRect = Rect.zero;
+  static const double _viewportPadding = 200; // 视口外额外渲染的距离
+
+  void _updateViewport() {
+    final transform = _transformationController.value;
+    final scale = transform.getMaxScaleOnAxis();
+    // 获取当前视口在画布坐标系中的范围
+    final size = MediaQuery.of(context).size;
+    final offsetX = transform.getTranslation().x / scale;
+    final offsetY = transform.getTranslation().y / scale;
+    final width = size.width / scale;
+    final height = size.height / scale;
+    setState(() {
+      _viewportRect = Rect.fromLTWH(
+        -offsetX - _viewportPadding,
+        -offsetY - _viewportPadding,
+        width + _viewportPadding * 2,
+        height + _viewportPadding * 2,
+      );
+    });
+  }
+
+  /// 判断节点是否在视口内（含边距）
+  /// 借鉴 Excalidraw 的 isVisibleElement 逻辑
+  bool _isNodeVisible(CanvasNodeModel node) {
+    final nodeRect = Rect.fromLTWH(node.x, node.y, node.width, node.height);
+    return _viewportRect.overlaps(nodeRect);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -92,6 +127,7 @@ class _CanvasViewState extends State<_CanvasView> {
               transformationController: _transformationController,
               minScale: 0.1,
               maxScale: 5.0,
+              onInteractionUpdate: (_) => _updateViewport(),
               child: GestureDetector(
                 onTapUp: (details) {
                   context.read<CanvasBloc>().add(const SelectNode(null));
@@ -119,7 +155,7 @@ class _CanvasViewState extends State<_CanvasView> {
                           toNode: toNode.first,
                         );
                       }),
-                      ...state.nodes.map((node) {
+                      ...state.nodes.where(_isNodeVisible).map((node) {
                         final isSelected = state.selectedNodeId == node.id;
                         return CanvasNodeWidget(
                           node: node,

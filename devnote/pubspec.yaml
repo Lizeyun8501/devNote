@@ -43,10 +43,21 @@ dependencies:
   # 知识图谱可视化 —— 替代自研 CustomPaint 渲染
   # 来源: https://pub.dev/packages/graphview
   graphview: ^1.2.0
+  # 代码语法高亮 —— 替代自研 tokenizer，支持 190+ 语言和 87 种主题
+  # 来源: https://pub.dev/packages/flutter_highlight
+  flutter_highlight: ^0.7.0
   # 虚拟滚动列表 —— 替代自研 VirtualScrollController
   # Google 官方维护，支持 scrollToIndex/jumpToIndex
   # 来源: https://pub.dev/packages/scrollable_positioned_list
   scrollable_positioned_list: ^0.3.8
+  # OpenTelemetry 可观测性框架 —— 替代自建 Prometheus/Grafana 风格监控引擎
+  # CNCF 标准，提供 Counter、Histogram、MeterProvider 等指标仪器
+  # 来源: https://pub.dev/packages/opentelemetry
+  opentelemetry: ^0.18.0
+  # 高级数据表格 —— 替代 Flutter 内置 DataTable
+  # 借鉴 pluto_grid，支持列拖拽、排序、过滤、分页、内联编辑
+  # 来源: https://pub.dev/packages/pluto_grid
+  pluto_grid: ^3.1.0
 
 dev_dependencies:
   flutter_test:

@@ -1,5 +1,20 @@
+// 代码语法高亮组件 —— 借鉴 flutter_highlight 替代自研 tokenizer
+// 原自研 tokenizer 仅支持 3 种语言（Rust、Python、JS/TS）的基础关键字匹配，
+// 现替换为 flutter_highlight，支持 190+ 语言和 87 种主题。
+// 来源: https://pub.dev/packages/flutter_highlight
 import 'package:flutter/material.dart';
+// 借鉴 flutter_highlight 核心库，提供 highlight.parse() 语法解析
+// 来源: https://pub.dev/packages/flutter_highlight
+import 'package:flutter_highlight/flutter_highlight.dart';
+// 借鉴 flutter_highlight 内置主题，替代自研的 3 套配色方案
+// 来源: https://pub.dev/packages/flutter_highlight
+import 'package:flutter_highlight/themes/monokai-sublime.dart';
+import 'package:flutter_highlight/themes/github.dart';
+import 'package:flutter_highlight/themes/vs2015.dart';
+// 借鉴 highlight 包的 Node 类型，用于遍历语法树生成 TextSpan
+import 'package:highlight/highlight.dart';
 
+/// 代码主题枚举 —— 保留原有的公开 API 名称，内部映射到 flutter_highlight 内置主题
 enum CodeTheme { vscodeDark, githubLight, monokai }
 
 class CodeBlockWidget extends StatefulWidget {
@@ -23,50 +38,73 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
   bool _wrapText = false;
   CodeTheme _theme = CodeTheme.vscodeDark;
 
-  static const Map<CodeTheme, _CodeThemeData> _themes = {
-    CodeTheme.vscodeDark: _CodeThemeData(
+  // 借鉴 flutter_highlight 内置主题映射，替代自研 _CodeThemeData
+  // 来源: https://pub.dev/packages/flutter_highlight
+  static const Map<CodeTheme, Map<String, TextStyle>> _highlightThemes = {
+    CodeTheme.vscodeDark: vs2015Theme,
+    CodeTheme.githubLight: githubTheme,
+    CodeTheme.monokai: monokaiSublimeTheme,
+  };
+
+  // 每个主题对应的背景色，用于容器和行号区域
+  static const Map<CodeTheme, _ThemeMeta> _themeMeta = {
+    CodeTheme.vscodeDark: _ThemeMeta(
       background: Color(0xFF1E1E1E),
       foreground: Color(0xFFD4D4D4),
-      keyword: Color(0xFF569CD6),
-      string: Color(0xFFCE9178),
-      comment: Color(0xFF6A9955),
-      number: Color(0xFFB5CEA8),
-      function: Color(0xFFDCDCAA),
-      operator: Color(0xFFD4D4D4),
-      punctuation: Color(0xFFD4D4D4),
-      identifier: Color(0xFF9CDCFE),
       lineNumber: Color(0xFF858585),
       lineNumberBackground: Color(0xFF1E1E1E),
     ),
-    CodeTheme.githubLight: _CodeThemeData(
+    CodeTheme.githubLight: _ThemeMeta(
       background: Color(0xFFF6F8FA),
       foreground: Color(0xFF24292E),
-      keyword: Color(0xFFD73A49),
-      string: Color(0xFF032F62),
-      comment: Color(0xFF6A737D),
-      number: Color(0xFF005CC5),
-      function: Color(0xFF6F42C1),
-      operator: Color(0xFFD73A49),
-      punctuation: Color(0xFF24292E),
-      identifier: Color(0xFF24292E),
       lineNumber: Color(0xFF959DA5),
       lineNumberBackground: Color(0xFFF6F8FA),
     ),
-    CodeTheme.monokai: _CodeThemeData(
+    CodeTheme.monokai: _ThemeMeta(
       background: Color(0xFF272822),
       foreground: Color(0xFFF8F8F2),
-      keyword: Color(0xFFF92672),
-      string: Color(0xFFE6DB74),
-      comment: Color(0xFF75715E),
-      number: Color(0xFFAE81FF),
-      function: Color(0xFFA6E22E),
-      operator: Color(0xFFF92672),
-      punctuation: Color(0xFFF8F8F2),
-      identifier: Color(0xFFF8F8F2),
       lineNumber: Color(0xFF90908A),
       lineNumberBackground: Color(0xFF272822),
     ),
   };
+
+  // 语言名称映射 —— 将用户传入的语言标识转换为 flutter_highlight 支持的语言标识
+  // flutter_highlight 支持 190+ 语言，详见:
+  // https://github.com/pd4d10/highlight/tree/master/highlight/lib/languages
+  static String _mapLanguage(String? language) {
+    if (language == null) return 'plaintext';
+    switch (language.toLowerCase()) {
+      case 'js':
+        return 'javascript';
+      case 'ts':
+        return 'typescript';
+      case 'py':
+        return 'python';
+      case 'rb':
+        return 'ruby';
+      case 'sh':
+      case 'bash':
+        return 'bash';
+      case 'yml':
+        return 'yaml';
+      case 'md':
+        return 'markdown';
+      case 'kt':
+        return 'kotlin';
+      case 'objc':
+        return 'objectivec';
+      case 'c++':
+      case 'cpp':
+        return 'cpp';
+      case 'c#':
+      case 'csharp':
+        return 'cs';
+      case 'golang':
+        return 'go';
+      default:
+        return language.toLowerCase();
+    }
+  }
 
   @override
   void initState() {
@@ -88,176 +126,81 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
     super.dispose();
   }
 
-  List<_SyntaxToken> _tokenize(String line) {
-    final keywords = _getKeywords(widget.language);
-    final tokens = <_SyntaxToken>[];
-    final chars = line.runes.toList();
-    var i = 0;
-    final isPython = keywords.contains('def');
+  // 借鉴 flutter_highlight 的 highlight.parse() 替代自研 _tokenize 方法
+  // 将语法解析结果（Node 树）转换为按行分割的 TextSpan 列表
+  // 来源: https://pub.dev/packages/flutter_highlight
+  List<List<TextSpan>> _buildHighlightedLines(String code, Map<String, TextStyle> theme) {
+    final lang = _mapLanguage(widget.language);
+    final result = highlight.parse(code, language: lang);
 
-    while (i < chars.length) {
-      final ch = String.fromCharCode(chars[i]);
-
-      if (!isPython && i + 1 < chars.length && ch == '/' && String.fromCharCode(chars[i + 1]) == '/') {
-        tokens.add(_SyntaxToken(_TokenType.comment, line.substring(i)));
-        break;
-      }
-
-      if (isPython && ch == '#') {
-        tokens.add(_SyntaxToken(_TokenType.comment, line.substring(i)));
-        break;
-      }
-
-      if (ch == '"' || ch == "'") {
-        var end = i + 1;
-        while (end < chars.length && String.fromCharCode(chars[end]) != ch) {
-          if (String.fromCharCode(chars[end]) == '\\' && end + 1 < chars.length) {
-            end += 2;
-          } else {
-            end += 1;
-          }
+    // 将 Node 树扁平化为 (文本, 样式类名) 对列表
+    final flatTokens = <_FlatToken>[];
+    void visitNodes(List<Node> nodes, [String? parentClass]) {
+      for (final node in nodes) {
+        final className = node.className ?? parentClass;
+        if (node.value != null) {
+          flatTokens.add(_FlatToken(node.value!, className));
         }
-        if (end < chars.length) end += 1;
-        tokens.add(_SyntaxToken(_TokenType.string, line.substring(i, end)));
-        i = end;
-        continue;
-      }
-
-      if (ch.trim().isEmpty) {
-        var end = i;
-        while (end < chars.length && String.fromCharCode(chars[end]).trim().isEmpty) {
-          end += 1;
+        if (node.children != null) {
+          visitNodes(node.children!, className);
         }
-        tokens.add(_SyntaxToken(_TokenType.whitespace, line.substring(i, end)));
-        i = end;
-        continue;
       }
-
-      final rune = chars[i];
-      if (rune >= 48 && rune <= 57) {
-        var end = i;
-        while (end < chars.length) {
-          final c = chars[end];
-          final s = String.fromCharCode(c);
-          if ((c >= 48 && c <= 57) || s == '.' || s == '_') {
-            end += 1;
-          } else {
-            break;
-          }
-        }
-        tokens.add(_SyntaxToken(_TokenType.number, line.substring(i, end)));
-        i = end;
-        continue;
-      }
-
-      final isAlpha = (rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) || ch == '_';
-      if (isAlpha) {
-        var end = i;
-        while (end < chars.length) {
-          final c = chars[end];
-          final s = String.fromCharCode(c);
-          final isAlphaNum = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || s == '_';
-          if (isAlphaNum) {
-            end += 1;
-          } else {
-            break;
-          }
-        }
-        final word = line.substring(i, end);
-        final tokenType = keywords.contains(word)
-            ? _TokenType.keyword
-            : (end < chars.length && String.fromCharCode(chars[end]) == '(' ? _TokenType.function : _TokenType.identifier);
-        tokens.add(_SyntaxToken(tokenType, word));
-        i = end;
-        continue;
-      }
-
-      const opChars = {'+', '-', '*', '/', '%', '=', '<', '>', '!', '&', '|', '^', '~', '?', ':', '.'};
-      if (opChars.contains(ch)) {
-        var end = i + 1;
-        while (end < chars.length && opChars.contains(String.fromCharCode(chars[end]))) {
-          end += 1;
-        }
-        tokens.add(_SyntaxToken(_TokenType.operator, line.substring(i, end)));
-        i = end;
-        continue;
-      }
-
-      const punctChars = {'(', ')', '{', '}', '[', ']', ',', ';'};
-      if (punctChars.contains(ch)) {
-        tokens.add(_SyntaxToken(_TokenType.punctuation, ch));
-        i += 1;
-        continue;
-      }
-
-      tokens.add(_SyntaxToken(_TokenType.identifier, ch));
-      i += 1;
     }
 
-    return tokens;
-  }
-
-  List<String> _getKeywords(String? language) {
-    switch (language?.toLowerCase()) {
-      case 'rust':
-        return ['fn', 'let', 'mut', 'if', 'else', 'match', 'loop', 'while', 'for', 'in', 'return', 'struct', 'enum', 'impl', 'trait', 'pub', 'use', 'mod', 'crate', 'self', 'super', 'where', 'type', 'const', 'static', 'ref', 'move', 'async', 'await', 'dyn', 'as', 'break', 'continue', 'true', 'false'];
-      case 'python':
-        return ['def', 'class', 'if', 'elif', 'else', 'for', 'while', 'return', 'import', 'from', 'as', 'try', 'except', 'finally', 'with', 'yield', 'lambda', 'pass', 'raise', 'and', 'or', 'not', 'in', 'is', 'True', 'False', 'None', 'global', 'nonlocal', 'assert', 'del', 'break', 'continue'];
-      case 'javascript':
-      case 'js':
-      case 'typescript':
-      case 'ts':
-        return ['function', 'var', 'let', 'const', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'return', 'class', 'extends', 'new', 'this', 'super', 'import', 'export', 'from', 'default', 'try', 'catch', 'finally', 'throw', 'typeof', 'instanceof', 'in', 'of', 'async', 'await', 'yield', 'void', 'delete', 'true', 'false', 'null', 'undefined'];
-      default:
-        return [];
+    if (result.nodes != null) {
+      visitNodes(result.nodes!);
     }
-  }
 
-  Color _getTokenColor(_TokenType type, _CodeThemeData theme) {
-    switch (type) {
-      case _TokenType.keyword:
-        return theme.keyword;
-      case _TokenType.string:
-        return theme.string;
-      case _TokenType.comment:
-        return theme.comment;
-      case _TokenType.number:
-        return theme.number;
-      case _TokenType.function:
-        return theme.function;
-      case _TokenType.operator:
-        return theme.operator;
-      case _TokenType.punctuation:
-        return theme.punctuation;
-      case _TokenType.identifier:
-        return theme.identifier;
-      case _TokenType.whitespace:
-        return theme.foreground;
+    // 按换行符分割为多行 TextSpan
+    final lines = <List<TextSpan>>[];
+    var currentLine = <TextSpan>[];
+    final baseStyle = TextStyle(fontFamily: 'monospace', fontSize: 13);
+
+    for (final token in flatTokens) {
+      final parts = token.text.split('\n');
+      for (var i = 0; i < parts.length; i++) {
+        if (i > 0) {
+          // 遇到换行符，结束当前行
+          lines.add(currentLine);
+          currentLine = <TextSpan>[];
+        }
+        if (parts[i].isNotEmpty) {
+          final style = token.className != null && theme.containsKey(token.className)
+              ? baseStyle.merge(theme[token.className])
+              : baseStyle;
+          currentLine.add(TextSpan(text: parts[i], style: style));
+        }
+      }
     }
+    // 添加最后一行
+    lines.add(currentLine);
+
+    return lines;
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = _themes[_theme]!;
-    final lines = widget.content.split('\n');
+    final themeMeta = _themeMeta[_theme]!;
+    final highlightTheme = _highlightThemes[_theme]!;
+    final highlightedLines = _buildHighlightedLines(widget.content, highlightTheme);
 
     return Container(
       decoration: BoxDecoration(
-        color: theme.background,
+        color: themeMeta.background,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildHeader(theme),
+          _buildHeader(themeMeta),
           const Divider(height: 1, thickness: 1, color: Color(0xFF444444)),
           Row(
             children: [
-              _buildLineNumbers(lines, theme),
+              _buildLineNumbers(highlightedLines.length, themeMeta),
               Expanded(
                 child: _wrapText
-                    ? _buildWrappedCode(lines, theme)
-                    : _buildScrollableCode(lines, theme),
+                    ? _buildWrappedCode(highlightedLines, themeMeta)
+                    : _buildScrollableCode(highlightedLines, themeMeta),
               ),
             ],
           ),
@@ -266,7 +209,7 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
     );
   }
 
-  Widget _buildHeader(_CodeThemeData theme) {
+  Widget _buildHeader(_ThemeMeta themeMeta) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(
@@ -275,13 +218,13 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: theme.foreground.withValues(alpha: 0.1),
+                color: themeMeta.foreground.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 widget.language!.toUpperCase(),
                 style: TextStyle(
-                  color: theme.foreground,
+                  color: themeMeta.foreground,
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
@@ -292,7 +235,7 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
             icon: Icon(
               _wrapText ? Icons.wrap_text : Icons.format_align_left,
               size: 16,
-              color: theme.foreground.withValues(alpha: 0.6),
+              color: themeMeta.foreground.withValues(alpha: 0.6),
             ),
             onPressed: () => setState(() => _wrapText = !_wrapText),
             padding: EdgeInsets.zero,
@@ -302,7 +245,7 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
             icon: Icon(
               Icons.palette,
               size: 16,
-              color: theme.foreground.withValues(alpha: 0.6),
+              color: themeMeta.foreground.withValues(alpha: 0.6),
             ),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
@@ -310,7 +253,7 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
             itemBuilder: (context) => [
               const PopupMenuItem(value: CodeTheme.vscodeDark, child: Text('VS Code Dark')),
               const PopupMenuItem(value: CodeTheme.githubLight, child: Text('GitHub Light')),
-              const PopupMenuItem(value: CodeTheme.monokai, child: Text('Monokai')),
+              const PopupMenuItem(value: CodeTheme.monokai, child: Text('Monokai Sublime')),
             ],
           ),
         ],
@@ -318,20 +261,20 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
     );
   }
 
-  Widget _buildLineNumbers(List<String> lines, _CodeThemeData theme) {
+  Widget _buildLineNumbers(int lineCount, _ThemeMeta themeMeta) {
     return Container(
       width: 48,
-      color: theme.lineNumberBackground,
+      color: themeMeta.lineNumberBackground,
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(lines.length, (index) {
+        children: List.generate(lineCount, (index) {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
             child: Text(
               '${index + 1}',
               style: TextStyle(
-                color: theme.lineNumber,
+                color: themeMeta.lineNumber,
                 fontSize: 12,
                 fontFamily: 'monospace',
               ),
@@ -342,85 +285,63 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
     );
   }
 
-  Widget _buildScrollableCode(List<String> lines, _CodeThemeData theme) {
+  Widget _buildScrollableCode(List<List<TextSpan>> highlightedLines, _ThemeMeta themeMeta) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.all(8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: lines.map((line) => _buildCodeLine(line, theme)).toList(),
+        children: highlightedLines.map((lineSpans) => _buildCodeLine(lineSpans)).toList(),
       ),
     );
   }
 
-  Widget _buildWrappedCode(List<String> lines, _CodeThemeData theme) {
+  Widget _buildWrappedCode(List<List<TextSpan>> highlightedLines, _ThemeMeta themeMeta) {
     return Padding(
       padding: const EdgeInsets.all(8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: lines.map((line) => _buildCodeLine(line, theme)).toList(),
+        children: highlightedLines.map((lineSpans) => _buildCodeLine(lineSpans)).toList(),
       ),
     );
   }
 
-  Widget _buildCodeLine(String line, _CodeThemeData theme) {
-    final tokens = _tokenize(line);
-    if (tokens.isEmpty) {
+  // 借鉴 flutter_highlight 的语法解析结果渲染代码行
+  // 替代原 _buildCodeLine + _tokenize 的自研方案
+  Widget _buildCodeLine(List<TextSpan> lineSpans) {
+    if (lineSpans.isEmpty) {
       return const SizedBox(height: 18);
     }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: RichText(
         text: TextSpan(
-          children: tokens.map((token) {
-            return TextSpan(
-              text: token.text,
-              style: TextStyle(
-                color: _getTokenColor(token.type, theme),
-                fontFamily: 'monospace',
-                fontSize: 13,
-              ),
-            );
-          }).toList(),
+          children: lineSpans,
         ),
       ),
     );
   }
 }
 
-enum _TokenType { keyword, string, comment, number, function, operator, punctuation, identifier, whitespace }
-
-class _SyntaxToken {
-  final _TokenType type;
+/// 扁平化的语法 token —— 借鉴 flutter_highlight 的 Node 结构简化而来
+/// 用于将 Node 树转换为按行分割的中间表示
+class _FlatToken {
   final String text;
-  const _SyntaxToken(this.type, this.text);
+  final String? className;
+  const _FlatToken(this.text, this.className);
 }
 
-class _CodeThemeData {
+/// 主题元数据 —— 保留背景色、前景色、行号色等 UI 配色
+/// 语法高亮的具体 token 颜色由 flutter_highlight 内置主题提供
+class _ThemeMeta {
   final Color background;
   final Color foreground;
-  final Color keyword;
-  final Color string;
-  final Color comment;
-  final Color number;
-  final Color function;
-  final Color operator;
-  final Color punctuation;
-  final Color identifier;
   final Color lineNumber;
   final Color lineNumberBackground;
 
-  const _CodeThemeData({
+  const _ThemeMeta({
     required this.background,
     required this.foreground,
-    required this.keyword,
-    required this.string,
-    required this.comment,
-    required this.number,
-    required this.function,
-    required this.operator,
-    required this.punctuation,
-    required this.identifier,
     required this.lineNumber,
     required this.lineNumberBackground,
   });
