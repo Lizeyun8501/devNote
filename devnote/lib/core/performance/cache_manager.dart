@@ -19,8 +19,14 @@ class CacheEntry<T> {
   final T value;
   final DateTime createdAt;
   final Duration? ttl;
+  DateTime lastAccess;
 
-  CacheEntry({required this.value, required this.createdAt, this.ttl});
+  CacheEntry({
+    required this.value,
+    required this.createdAt,
+    this.ttl,
+    DateTime? lastAccess,
+  }) : lastAccess = lastAccess ?? DateTime.now();
 
   bool get isExpired {
     if (ttl == null) return false;
@@ -33,6 +39,8 @@ class CacheManager {
 
   final Map<CacheType, LinkedHashMap<String, CacheEntry<dynamic>>> _caches = {};
   final Map<CacheType, int> _maxSizes = {};
+  final Map<CacheType, int> _maxBytes = {};
+  final Map<CacheType, int> _currentBytes = {};
   final Map<CacheType, Duration> _ttls = {};
 
   // 修改原因：原实现使用 Duration.zero 作为默认 TTL，导致 put 后立即过期，
@@ -40,9 +48,11 @@ class CacheManager {
   //  - noteContent  30 分钟（笔记内容相对稳定）
   //  - image        1 小时  （图片数据较大，避免频繁重新加载）
   //  - searchResult 5 分钟  （搜索结果需要保持相对新鲜）
-  void configure(CacheType type, {int maxSize = 100, Duration? ttl}) {
+  void configure(CacheType type, {int maxSize = 100, int maxBytes = 100 * 1024 * 1024, Duration? ttl}) {
     _caches[type] = LinkedHashMap<String, CacheEntry<dynamic>>();
     _maxSizes[type] = maxSize;
+    _maxBytes[type] = maxBytes;
+    _currentBytes[type] = 0;
     _ttls[type] = ttl ?? _defaultTtlFor(type);
   }
 
@@ -64,9 +74,11 @@ class CacheManager {
     final entry = cache[key];
     if (entry == null) return null;
     if (entry.isExpired) {
+      _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(entry.value);
       cache.remove(key);
       return null;
     }
+    entry.lastAccess = DateTime.now();
     cache.remove(key);
     cache[key] = entry;
     return entry.value as T;
@@ -79,32 +91,85 @@ class CacheManager {
       cache = _caches[type]!;
     }
     final ttl = _ttls[type];
-    cache[key] = CacheEntry(value: value, createdAt: DateTime.now(), ttl: ttl);
+    final existing = cache[key];
+    if (existing != null) {
+      _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(existing.value);
+    }
+    cache[key] = CacheEntry(
+      value: value,
+      createdAt: DateTime.now(),
+      ttl: ttl,
+      lastAccess: DateTime.now(),
+    );
+    _currentBytes[type] = (_currentBytes[type] ?? 0) + _estimateBytes(value);
     _evictIfNeeded(type);
   }
 
   void remove(CacheType type, String key) {
+    final entry = _caches[type]?[key];
+    if (entry != null) {
+      _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(entry.value);
+    }
     _caches[type]?.remove(key);
   }
 
   void clear(CacheType type) {
     _caches[type]?.clear();
+    _currentBytes[type] = 0;
   }
 
   void clearAll() {
-    for (final cache in _caches.values) {
-      cache.clear();
+    for (final type in _caches.keys) {
+      _caches[type]?.clear();
+      _currentBytes[type] = 0;
     }
   }
 
   void _evictIfNeeded(CacheType type) {
     final cache = _caches[type];
     final maxSize = _maxSizes[type] ?? 100;
+    final maxBytes = _maxBytes[type] ?? 100 * 1024 * 1024;
+    final currentBytes = _currentBytes[type] ?? 0;
     if (cache == null) return;
+
+    // Evict based on entry count
     while (cache.length > maxSize) {
-      final firstKey = cache.keys.first;
-      cache.remove(firstKey);
+      final oldestKey = _findLruKey(cache);
+      if (oldestKey == null) break;
+      final removed = cache.remove(oldestKey);
+      if (removed != null) {
+        _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(removed.value);
+      }
     }
+
+    // Evict based on memory usage (threshold at 80% of maxBytes)
+    while (currentBytes > (maxBytes * 0.8).toInt() && cache.isNotEmpty) {
+      final oldestKey = _findLruKey(cache);
+      if (oldestKey == null) break;
+      final removed = cache.remove(oldestKey);
+      if (removed != null) {
+        _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(removed.value);
+      }
+    }
+  }
+
+  /// 找到最久未访问的 key（LRU 淘汰策略）
+  String? _findLruKey(LinkedHashMap<String, CacheEntry<dynamic>> cache) {
+    if (cache.isEmpty) return null;
+    String? oldestKey;
+    DateTime? oldestTime;
+    for (final entry in cache.entries) {
+      if (oldestTime == null || entry.value.lastAccess.isBefore(oldestTime)) {
+        oldestTime = entry.value.lastAccess;
+        oldestKey = entry.key;
+      }
+    }
+    return oldestKey;
+  }
+
+  /// 粗略估算缓存条目占用的内存字节数
+  static int _estimateBytes(dynamic value) {
+    return value.toString().length;
   }
 
   int size(CacheType type) {
@@ -116,6 +181,10 @@ class CacheManager {
     if (cache == null) return;
     final keysToRemove = cache.keys.where((k) => pattern.allMatches(k).isNotEmpty).toList();
     for (final key in keysToRemove) {
+      final entry = cache[key];
+      if (entry != null) {
+        _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(entry.value);
+      }
       cache.remove(key);
     }
   }

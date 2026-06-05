@@ -70,14 +70,31 @@ pub struct IpfsBlock {
 pub struct IpfsClient {
     config: IpfsConfig,
     client: reqwest::Client,
+    api_token: Option<String>,
 }
 
 impl IpfsClient {
-    pub fn new(config: IpfsConfig) -> Result<Self, IpfsError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(config.timeout_secs))
-            .build()?;
-        Ok(Self { config, client })
+    pub fn new(config: IpfsConfig, api_token: Option<String>) -> Result<Self, IpfsError> {
+        let mut client_builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(config.timeout_secs));
+
+        if let Some(ref token) = api_token {
+            if token.is_empty() {
+                tracing::warn!("IPFS API token is empty - authentication disabled");
+            } else {
+                let mut headers = reqwest::header::HeaderMap::new();
+                let auth_value = format!("Bearer {}", token);
+                let header_value = reqwest::header::HeaderValue::from_str(&auth_value)
+                    .map_err(|e| IpfsError::Ipfs(format!("Invalid API token: {}", e)))?;
+                headers.insert(reqwest::header::AUTHORIZATION, header_value);
+                client_builder = client_builder.default_headers(headers);
+            }
+        } else {
+            tracing::warn!("IPFS API token not set - authentication disabled");
+        }
+
+        let client = client_builder.build()?;
+        Ok(Self { config, client, api_token })
     }
 
     /// Check if IPFS node is reachable

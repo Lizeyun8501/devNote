@@ -1544,7 +1544,7 @@ pub mod ipfs {
         /// Create a new IpfsBlockStorage with the given IPFS config and a shared
         /// SQLite connection (typically from the existing SqliteNoteRepository).
         pub fn new(config: IpfsConfig, conn: rusqlite::Connection) -> Result<Self, IpfsError> {
-            let client = IpfsClient::new(config)?;
+            let client = IpfsClient::new(config, None)?;
             Ok(Self {
                 client,
                 conn: Mutex::new(conn),

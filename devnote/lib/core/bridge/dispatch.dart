@@ -19,6 +19,10 @@ import 'dart:typed_data';
 
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/persistence/models/note_model.dart';
+import 'package:devnote/core/persistence/models/block_model.dart';
+import 'package:devnote/core/persistence/models/folder_model.dart';
+import 'package:devnote/core/persistence/models/tag_model.dart';
 import 'package:get_it/get_it.dart';
 
 final getIt = GetIt.instance;
@@ -40,36 +44,53 @@ class Dispatch {
   // 笔记操作 —— 替代原 NoteEvent.* 事件路由
   // ============================================================
 
-  Future<Map<String, dynamic>> createNote({
+  Future<NoteModel> createNote({
     required String title,
     required String content,
     required String folderId,
-  }) => _bridge.createNote(title: title, content: content, folderId: folderId);
+  }) async {
+    final map = await _bridge.createNote(title: title, content: content, folderId: folderId);
+    return NoteModel.fromJson(map);
+  }
 
-  Future<Map<String, dynamic>?> getNote(String id) => _bridge.getNote(id);
+  Future<NoteModel?> getNote(String id) async {
+    final map = await _bridge.getNote(id);
+    if (map == null) return null;
+    return NoteModel.fromJson(map);
+  }
 
-  Future<Map<String, dynamic>> updateNote({
+  Future<NoteModel> updateNote({
     required String id,
     required String title,
     required String content,
-  }) => _bridge.updateNote(id: id, title: title, content: content);
+  }) async {
+    final map = await _bridge.updateNote(id: id, title: title, content: content);
+    return NoteModel.fromJson(map);
+  }
 
   Future<void> deleteNote(String id) => _bridge.deleteNote(id);
 
-  Future<List<Map<String, dynamic>>> listNotes(String folderId) =>
-      _bridge.listNotes(folderId);
+  Future<List<NoteModel>> listNotes(String folderId) async {
+    final list = await _bridge.listNotes(folderId);
+    return list.map((map) => NoteModel.fromJson(map)).toList();
+  }
 
   // ============================================================
   // 文件夹操作 —— 替代原 FolderEvent.* 事件路由
   // ============================================================
 
-  Future<Map<String, dynamic>> createFolder({
+  Future<FolderModel> createFolder({
     required String name,
     String? parentId,
-  }) => _bridge.createFolder(name: name, parentId: parentId);
+  }) async {
+    final map = await _bridge.createFolder(name: name, parentId: parentId);
+    return FolderModel.fromJson(map);
+  }
 
-  Future<List<Map<String, dynamic>>> listFolders({String? parentId}) =>
-      _bridge.listFolders(parentId: parentId);
+  Future<List<FolderModel>> listFolders({String? parentId}) async {
+    final list = await _bridge.listFolders(parentId: parentId);
+    return list.map((map) => FolderModel.fromJson(map)).toList();
+  }
 
   Future<void> deleteFolder(String id) => _bridge.deleteFolder(id);
 
@@ -77,9 +98,15 @@ class Dispatch {
   // 标签操作 —— 替代原 TagEvent.* 事件路由
   // ============================================================
 
-  Future<Map<String, dynamic>> createTag(String name) => _bridge.createTag(name);
+  Future<TagModel> createTag(String name) async {
+    final map = await _bridge.createTag(name);
+    return TagModel.fromJson(map);
+  }
 
-  Future<List<Map<String, dynamic>>> listTags() => _bridge.listTags();
+  Future<List<TagModel>> listTags() async {
+    final list = await _bridge.listTags();
+    return list.map((map) => TagModel.fromJson(map)).toList();
+  }
 
   Future<void> deleteTag(String id) => _bridge.deleteTag(id);
 
@@ -87,22 +114,27 @@ class Dispatch {
   // 编辑器操作 —— 替代原 EditorEvent.* 事件路由
   // ============================================================
 
-  Future<Map<String, dynamic>> insertBlock({
+  Future<BlockModel> insertBlock({
     required String noteId,
     required String blockType,
     required String content,
     int? position,
-  }) => _bridge.insertBlock(
-    noteId: noteId, blockType: blockType, content: content, position: position,
-  );
+  }) async {
+    final map = await _bridge.insertBlock(
+      noteId: noteId, blockType: blockType, content: content, position: position,
+    );
+    return BlockModel.fromJson(map);
+  }
 
   Future<void> updateBlock({required String id, required String content}) =>
       _bridge.updateBlock(id: id, content: content);
 
   Future<void> deleteBlock(String id) => _bridge.deleteBlock(id);
 
-  Future<List<Map<String, dynamic>>> getBlocks(String noteId) =>
-      _bridge.getBlocks(noteId);
+  Future<List<BlockModel>> getBlocks(String noteId) async {
+    final list = await _bridge.getBlocks(noteId);
+    return list.map((map) => BlockModel.fromJson(map)).toList();
+  }
 
   // ============================================================
   // 搜索操作 —— 替代原 SearchEvent.* 事件路由
@@ -247,11 +279,11 @@ class Dispatch {
         content: payloadMap['content'] as String,
         folderId: payloadMap['folder_id'] as String,
       );
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.toJson()));
     }
     if (event == 'NoteEvent.GetNote') {
       final result = await getNote(payloadMap['id'] as String);
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result?.toJson()));
     }
     if (event == 'NoteEvent.UpdateNote') {
       final result = await updateNote(
@@ -259,7 +291,7 @@ class Dispatch {
         title: payloadMap['title'] as String,
         content: payloadMap['content'] as String,
       );
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.toJson()));
     }
     if (event == 'NoteEvent.DeleteNote') {
       await deleteNote(payloadMap['id'] as String);
@@ -267,7 +299,7 @@ class Dispatch {
     }
     if (event == 'NoteEvent.ListNotes') {
       final result = await listNotes(payloadMap['folder_id'] as String);
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.map((n) => n.toJson()).toList()));
     }
 
     // 文件夹事件
@@ -276,11 +308,11 @@ class Dispatch {
         name: payloadMap['name'] as String,
         parentId: payloadMap['parent_id'] as String?,
       );
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.toJson()));
     }
     if (event == 'FolderEvent.ListFolders') {
       final result = await listFolders(parentId: payloadMap['parent_id'] as String?);
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.map((f) => f.toJson()).toList()));
     }
     if (event == 'FolderEvent.DeleteFolder') {
       await deleteFolder(payloadMap['id'] as String);
@@ -290,11 +322,11 @@ class Dispatch {
     // 标签事件
     if (event == 'TagEvent.CreateTag') {
       final result = await createTag(payloadMap['name'] as String);
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.toJson()));
     }
     if (event == 'TagEvent.ListTags') {
       final result = await listTags();
-      return utf8.encode(jsonEncode(result));
+      return utf8.encode(jsonEncode(result.map((t) => t.toJson()).toList()));
     }
     if (event == 'TagEvent.DeleteTag') {
       await deleteTag(payloadMap['id'] as String);

@@ -83,3 +83,45 @@ class Failure<S, F> extends FlowyResult<S, F> {
   final F error;
   const Failure(this.error);
 }
+
+/// 标准错误类型 —— 替代原始的 FFI 数字错误码
+///
+/// 使用 Dart 3 sealed class 提供编译时穷举检查，
+/// 每个错误子类包含语义化的错误信息。
+sealed class DevNoteError implements Exception {
+  final String message;
+  const DevNoteError(this.message);
+
+  factory DevNoteError.from(dynamic error) {
+    if (error is DatabaseError) return DevNoteDatabaseError(error.message);
+    if (error is NetworkError) return DevNoteNetworkError(error.message);
+    if (error is ValidationError) return DevNoteValidationError(error.message);
+    if (error is AuthError) return DevNoteAuthError(error.message);
+    if (error is SyncError) return DevNoteSyncError(error.message);
+    return DevNoteUnknownError(error.toString());
+  }
+}
+
+class DevNoteDatabaseError extends DevNoteError {
+  const DevNoteDatabaseError(super.message);
+}
+
+class DevNoteNetworkError extends DevNoteError {
+  const DevNoteNetworkError(super.message);
+}
+
+class DevNoteValidationError extends DevNoteError {
+  const DevNoteValidationError(super.message);
+}
+
+class DevNoteAuthError extends DevNoteError {
+  const DevNoteAuthError(super.message);
+}
+
+class DevNoteSyncError extends DevNoteError {
+  const DevNoteSyncError(super.message);
+}
+
+class DevNoteUnknownError extends DevNoteError {
+  const DevNoteUnknownError(super.message);
+}

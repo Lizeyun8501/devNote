@@ -59,6 +59,18 @@ pub enum WsError {
     Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
 }
 
+// ── Origin Validation ──────────────────────────────────────────────────────
+
+/// Allowed origins for WebSocket connections
+const ALLOWED_ORIGINS: &[&str] = &[
+    "https://devnote.app",
+    "http://localhost:3000",
+];
+
+fn validate_origin(origin: &str) -> bool {
+    ALLOWED_ORIGINS.iter().any(|allowed| *allowed == origin)
+}
+
 // ── Connection State ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +134,7 @@ pub struct DevNoteWebSocketClient {
 
 struct ClientInner {
     url: RwLock<String>,
+    custom_origin: RwLock<Option<String>>,
     state: RwLock<ConnectionState>,
     ws_sink: Mutex<Option<WsSink>>,
     reconnect_enabled: RwLock<bool>,
@@ -148,6 +161,7 @@ impl DevNoteWebSocketClient {
         Self {
             inner: Arc::new(ClientInner {
                 url: RwLock::new(url),
+                custom_origin: RwLock::new(None),
                 state: RwLock::new(ConnectionState::Disconnected),
                 ws_sink: Mutex::new(None),
                 reconnect_enabled: RwLock::new(true),
@@ -178,6 +192,11 @@ impl DevNoteWebSocketClient {
         *self.inner.keepalive_interval_ms.write().await = interval_ms;
     }
 
+    /// Set a custom Origin header value for WebSocket handshake
+    pub async fn set_custom_origin(&self, origin: String) {
+        *self.inner.custom_origin.write().await = Some(origin);
+    }
+
     /// Set message callback for incoming messages
     pub async fn on_message(&self, callback: MessageCallback) {
         *self.inner.message_callback.write().await = Some(callback);
@@ -193,8 +212,30 @@ impl DevNoteWebSocketClient {
 
         *self.inner.state.write().await = ConnectionState::Connecting;
 
-        let url = self.inner.url.read().await.clone();
-        let (ws_stream, _response) = connect_async(&url).await?;
+        let url_str = self.inner.url.read().await.clone();
+        let url = url::Url::parse(&url_str)?;
+        let origin = if let Some(ref custom) = *self.inner.custom_origin.read().await {
+            custom.clone()
+        } else {
+            let host = url.host_str().unwrap_or("localhost");
+            let scheme = match url.scheme() {
+                "wss" | "https" => "https",
+                _ => "http",
+            };
+            match url.port() {
+                Some(port) => format!("{}://{}:{}", scheme, host, port),
+                None => format!("{}://{}", scheme, host),
+            }
+        };
+        if !validate_origin(&origin) {
+            return Err(WsError::Connection(format!("Origin not allowed: {}", origin)));
+        }
+        let request = http::Request::builder()
+            .uri(url_str.as_str())
+            .header("Origin", &origin)
+            .body(())
+            .map_err(|e| WsError::Connection(e.to_string()))?;
+        let (ws_stream, _response) = connect_async(request).await?;
         let (sink, stream) = ws_stream.split();
 
         *self.inner.ws_sink.lock().await = Some(sink);
@@ -356,13 +397,36 @@ impl ClientInner {
 
         *self.state.write().await = ConnectionState::Reconnecting;
 
-        let url = self.url.read().await.clone();
+        let url_str = self.url.read().await.clone();
+        let parsed_url = url::Url::parse(&url_str)?;
+        let origin = if let Some(ref custom) = *self.custom_origin.read().await {
+            custom.clone()
+        } else {
+            let host = parsed_url.host_str().unwrap_or("localhost");
+            let scheme = match parsed_url.scheme() {
+                "wss" | "https" => "https",
+                _ => "http",
+            };
+            match parsed_url.port() {
+                Some(port) => format!("{}://{}:{}", scheme, host, port),
+                None => format!("{}://{}", scheme, host),
+            }
+        };
+        if !validate_origin(&origin) {
+            return Err(WsError::Connection(format!("Origin not allowed: {}", origin)));
+        }
 
         for attempt in 0..*self.max_retries.read().await {
             let delay = Duration::from_millis(*self.retry_delay_ms.read().await * 2u64.pow(attempt));
             tokio::time::sleep(delay).await;
 
-            match connect_async(&url).await {
+            let request = http::Request::builder()
+                .uri(url_str.as_str())
+                .header("Origin", &origin)
+                .body(())
+                .map_err(|e| WsError::Connection(e.to_string()))?;
+
+            match connect_async(request).await {
                 Ok((ws_stream, _)) => {
                     let (sink, stream) = ws_stream.split();
                     *self.ws_sink.lock().await = Some(sink);
