@@ -279,8 +279,9 @@ impl SqliteGraphEngine {
     }
 
     fn invalidate_centrality_cache(&self) {
-        let mut cache = self.centrality_cache.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
-        cache.graph_dirty = true;
+        if let Ok(mut cache) = self.centrality_cache.lock() {
+            cache.graph_dirty = true;
+        }
     }
 
     /// 使用 petgraph 构建邻接图
@@ -490,7 +491,7 @@ impl SqliteGraphEngine {
         let rev_map: HashMap<NodeIndex<DefaultIx>, Uuid> = node_map.iter().map(|(k, v)| (*v, *k)).collect();
         let result: HashMap<String, f64> = pagerank.into_iter()
             .map(|(idx, pr)| {
-                let uuid = rev_map.get(&idx).unwrap_or(&Uuid::nil());
+                let uuid = rev_map.get(&idx).copied().unwrap_or_else(Uuid::nil);
                 (uuid.to_string(), pr)
             })
             .collect();

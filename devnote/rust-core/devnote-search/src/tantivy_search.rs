@@ -16,16 +16,16 @@ use std::sync::{Arc, Mutex};
 use std::path::Path;
 use anyhow::{Context, Result};
 
-use tantivy::{
-    directory::MmapDirectory,
-    schema::{Schema, FAST, STORED, STRING, TEXT, INDEXED, IndexRecordOption},
-    Index,
-    IndexWriter,
-    ReloadPolicy,
-    collector::TopDocs,
-    query::{QueryParser, BooleanQuery, TermQuery, Occur},
-    TantivyDocument,
+use tantivy::schema::{
+    IndexRecordOption, FAST, STORED, STRING, TEXT, Value, Schema, INDEXED,
 };
+use tantivy::{
+    DocAddress, Index, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument,
+    DateTime as TantivyDateTime,
+};
+use tantivy::directory::MmapDirectory;
+use tantivy::collector::TopDocs;
+use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 
 /// Tantivy 搜索结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +84,7 @@ impl TantivySearchEngine {
             .writer(config.writer_memory_bytes)
             .context("Failed to create index writer")?;
 
+        let config_path = config.index_path.clone();
         let engine = Self {
             index: Arc::new(Mutex::new(index)),
             schema,
@@ -91,7 +92,7 @@ impl TantivySearchEngine {
             config,
         };
 
-        info!("TantivySearchEngine initialized at {}", config.index_path);
+        info!("TantivySearchEngine initialized at {}", config_path);
         Ok(engine)
     }
 
@@ -146,7 +147,7 @@ impl TantivySearchEngine {
                 Ok(index)
             }
             Err(_) => {
-                let index = Index::create(dir, schema.clone())
+                let index = Index::create(dir, schema.clone(), IndexSettings::default())
                     .context("Failed to create tantivy index")?;
                 info!("Created new tantivy index at {}", index_path);
                 Ok(index)
@@ -189,7 +190,7 @@ impl TantivySearchEngine {
         for tag in tags {
             doc.add_text(tags_field, tag.as_str());
         }
-        doc.add_date(updated_at_field, updated_at.into());
+        doc.add_date(updated_at_field, TantivyDateTime::from_timestamp_secs(updated_at.timestamp()));
 
         writer.add_document(doc)?;
         writer.commit()?;

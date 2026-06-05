@@ -1,21 +1,21 @@
 use super::*;
 use devnote_core::models::Folder;
 use devnote_core::traits::NoteRepository;
-use devnote_crypto::{CryptoConfig, CryptoEngine, DefaultCryptoEngine};
-use devnote_database::{DatabaseEngine, ViewType};
+use devnote_canvas::LayoutType;
+use devnote_crypto::CryptoEngine;
+use devnote_database::ViewType;
+use devnote_database::DatabaseEngine;
 use devnote_database::formula::eval_formula;
-use devnote_editor::{BlockEditor, BlockType, DefaultBlockEditor};
+use devnote_editor::BlockType;
+use devnote_editor::BlockEditor;
 use devnote_flashcard::FlashcardEngine;
-use devnote_format::{FormatExporter, FormatImporter, HtmlExporter, MarkdownExporter, MarkdownImporter, ObsidianImporter, ImportFormat, ExportFormat};
 use devnote_graph::GraphEngine;
 use devnote_object::ObjectEngine;
-use devnote_persistence::SqliteNoteRepository;
 use devnote_search::SearchEngine;
-use devnote_sync::{ClientSyncEngine, SyncEngine};
-use devnote_canvas::{CanvasEngine, LayoutType};
+use devnote_sync::SyncEngine;
+use devnote_format::{FormatExporter, FormatImporter, HtmlExporter, MarkdownExporter, MarkdownImporter, ObsidianImporter, ImportFormat, ExportFormat};
 use devnote_crdt::{merge_documents, CRDTDocument, Operation};
 use lazy_static::lazy_static;
-use parking_lot::Mutex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,22 +24,17 @@ use uuid::Uuid;
 
 type EventHandler = Box<dyn Fn(Option<&str>) -> DispatchResponse + Send + Sync>;
 
+// 引擎全局变量统一使用 frb_api.rs 中的 LazyLock 定义，
+// 避免 handlers.rs (C ABI FFI) 与 frb_api.rs (FRB v2) 各维护一套独立实例，
+// 导致 2x 内存占用和潜在的状态不一致。
+use crate::frb_api::{
+    NOTE_REPO, BLOCK_EDITOR, SEARCH_ENGINE, CRYPTO_ENGINE, SYNC_ENGINE,
+    CANVAS_ENGINE, DATABASE_ENGINE, OBJECT_ENGINE, GRAPH_ENGINE, FLASHCARD_ENGINE, CRDT_DOCS,
+};
+
 lazy_static! {
     static ref EVENT_REGISTRY: RwLock<HashMap<String, EventHandler>> =
         RwLock::new(HashMap::new());
-
-    static ref NOTE_REPO: Mutex<Option<SqliteNoteRepository>> = Mutex::new(None);
-    static ref BLOCK_EDITOR: Mutex<Option<DefaultBlockEditor>> = Mutex::new(None);
-    static ref SEARCH_ENGINE: Mutex<Option<devnote_search::SqliteSearchEngine>> = Mutex::new(None);
-    static ref CRYPTO_ENGINE: DefaultCryptoEngine =
-        DefaultCryptoEngine::new(CryptoConfig::default());
-    static ref SYNC_ENGINE: Mutex<Option<ClientSyncEngine>> = Mutex::new(None);
-    static ref CANVAS_ENGINE: Mutex<Option<CanvasEngine>> = Mutex::new(None);
-    static ref DATABASE_ENGINE: Mutex<Option<devnote_database::SqliteDatabaseEngine>> = Mutex::new(None);
-    static ref OBJECT_ENGINE: Mutex<Option<devnote_object::SqliteObjectEngine>> = Mutex::new(None);
-    static ref GRAPH_ENGINE: Mutex<Option<devnote_graph::SqliteGraphEngine>> = Mutex::new(None);
-    static ref FLASHCARD_ENGINE: Mutex<Option<devnote_flashcard::SqliteFlashcardEngine>> = Mutex::new(None);
-    static ref CRDT_DOCS: Mutex<HashMap<String, CRDTDocument>> = Mutex::new(HashMap::new());
 }
 
 pub fn register_handler(event: &str, handler: EventHandler) {
@@ -83,30 +78,8 @@ pub fn register_all_handlers() {
 }
 
 fn init_engines() {
-    if let Ok(repo) = SqliteNoteRepository::in_memory() {
-        *NOTE_REPO.lock() = Some(repo);
-    }
-    *BLOCK_EDITOR.lock() = Some(DefaultBlockEditor::new());
-    if let Ok(engine) = devnote_search::SqliteSearchEngine::in_memory() {
-        *SEARCH_ENGINE.lock() = Some(engine);
-    }
-    *SYNC_ENGINE.lock() = Some(ClientSyncEngine::new(
-        "default-doc".to_string(),
-        "default-device".to_string(),
-    ));
-    *CANVAS_ENGINE.lock() = Some(CanvasEngine::new());
-    if let Ok(engine) = devnote_database::SqliteDatabaseEngine::in_memory() {
-        *DATABASE_ENGINE.lock() = Some(engine);
-    }
-    if let Ok(engine) = devnote_object::SqliteObjectEngine::in_memory() {
-        *OBJECT_ENGINE.lock() = Some(engine);
-    }
-    if let Ok(engine) = devnote_graph::SqliteGraphEngine::in_memory() {
-        *GRAPH_ENGINE.lock() = Some(engine);
-    }
-    if let Ok(engine) = devnote_flashcard::SqliteFlashcardEngine::in_memory() {
-        *FLASHCARD_ENGINE.lock() = Some(engine);
-    }
+    // 委托给 frb_api 模块统一初始化，确保 C ABI FFI 与 FRB v2 共享同一引擎实例
+    let _ = crate::frb_api::init_engines();
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────
@@ -541,7 +514,7 @@ fn register_editor_handlers() {
             Some(e) => e,
             None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Editor engine not initialized"),
         };
-        serialize_result(editor.list_blocks(&note_id))
+        serialize_result(editor.list_blocks(&note_id, None, None))
     }));
 
     register_handler("EditorEvent.ParseMarkdown", Box::new(|payload| {

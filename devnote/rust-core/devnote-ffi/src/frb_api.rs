@@ -15,6 +15,7 @@
 //! 版本: v2.12.0
 //! Flutter Favorite: ✅
 
+use base64::Engine;
 use devnote_core::models::Folder;
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoConfig, CryptoEngine, DefaultCryptoEngine};
@@ -38,28 +39,31 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 // ── 全局引擎实例 ──────────────────────────────────────────────────────
+// pub(crate) 使得 handlers.rs (C ABI FFI) 与 frb_api.rs 共享同一套引擎实例，
+// 避免两套独立的全局变量导致 2x 内存浪费和状态不一致。
+// 两个模块都通过 LazyLock 延迟初始化，首次访问时自动填充。
 
-static NOTE_REPO: LazyLock<Mutex<Option<SqliteNoteRepository>>> =
+pub(crate) static NOTE_REPO: LazyLock<Mutex<Option<SqliteNoteRepository>>> =
     LazyLock::new(|| Mutex::new(None));
-static BLOCK_EDITOR: LazyLock<Mutex<Option<DefaultBlockEditor>>> =
+pub(crate) static BLOCK_EDITOR: LazyLock<Mutex<Option<DefaultBlockEditor>>> =
     LazyLock::new(|| Mutex::new(None));
-static SEARCH_ENGINE: LazyLock<Mutex<Option<devnote_search::SqliteSearchEngine>>> =
+pub(crate) static SEARCH_ENGINE: LazyLock<Mutex<Option<devnote_search::SqliteSearchEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static CRYPTO_ENGINE: LazyLock<DefaultCryptoEngine> =
+pub(crate) static CRYPTO_ENGINE: LazyLock<DefaultCryptoEngine> =
     LazyLock::new(|| DefaultCryptoEngine::new(CryptoConfig::default()));
-static SYNC_ENGINE: LazyLock<Mutex<Option<ClientSyncEngine>>> =
+pub(crate) static SYNC_ENGINE: LazyLock<Mutex<Option<ClientSyncEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static CANVAS_ENGINE: LazyLock<Mutex<Option<CanvasEngine>>> =
+pub(crate) static CANVAS_ENGINE: LazyLock<Mutex<Option<CanvasEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static DATABASE_ENGINE: LazyLock<Mutex<Option<devnote_database::SqliteDatabaseEngine>>> =
+pub(crate) static DATABASE_ENGINE: LazyLock<Mutex<Option<devnote_database::SqliteDatabaseEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static OBJECT_ENGINE: LazyLock<Mutex<Option<devnote_object::SqliteObjectEngine>>> =
+pub(crate) static OBJECT_ENGINE: LazyLock<Mutex<Option<devnote_object::SqliteObjectEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static GRAPH_ENGINE: LazyLock<Mutex<Option<devnote_graph::SqliteGraphEngine>>> =
+pub(crate) static GRAPH_ENGINE: LazyLock<Mutex<Option<devnote_graph::SqliteGraphEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static FLASHCARD_ENGINE: LazyLock<Mutex<Option<devnote_flashcard::SqliteFlashcardEngine>>> =
+pub(crate) static FLASHCARD_ENGINE: LazyLock<Mutex<Option<devnote_flashcard::SqliteFlashcardEngine>>> =
     LazyLock::new(|| Mutex::new(None));
-static CRDT_DOCS: LazyLock<Mutex<HashMap<String, CRDTDocument>>> =
+pub(crate) static CRDT_DOCS: LazyLock<Mutex<HashMap<String, CRDTDocument>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // ── FRB 数据类型 ──────────────────────────────────────────────────────
@@ -106,6 +110,8 @@ pub struct NoteData {
     pub title: String,
     pub content: String,
     pub folder_id: String,
+    pub is_pinned: bool,
+    pub is_encrypted: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -246,20 +252,35 @@ pub fn health_check() -> HealthCheckResult {
 
 // ── 笔记 API ──────────────────────────────────────────────────────────
 
+/// 从 Note 的 blocks 中提取纯文本内容
+fn extract_content(note: &devnote_core::models::Note) -> String {
+    note.blocks.iter()
+        .map(|b| b.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn note_to_data(note: &devnote_core::models::Note) -> NoteData {
+    NoteData {
+        id: note.id.to_string(),
+        title: note.title.clone(),
+        content: extract_content(note),
+        folder_id: note.folder_id.to_string(),
+        is_pinned: note.is_pinned,
+        is_encrypted: note.is_encrypted,
+        created_at: note.created_at.to_rfc3339(),
+        updated_at: note.updated_at.to_rfc3339(),
+    }
+}
+
 /// 创建笔记 —— 替代原 NoteEvent.CreateNote
 pub fn create_note(title: String, content: String, folder_id: String) -> Result<NoteData, String> {
     let fid = Uuid::parse_str(&folder_id).map_err(|e| e.to_string())?;
-    let guard = NOTE_REPO.lock();
-    let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
-    let note = repo.create_note(&title, &content, &fid).map_err(|e| e.to_string())?;
-    Ok(NoteData {
-        id: note.id.to_string(),
-        title: note.title,
-        content: note.content,
-        folder_id: note.folder_id.to_string(),
-        created_at: note.created_at.to_rfc3339(),
-        updated_at: note.updated_at.to_rfc3339(),
-    })
+    let mut guard = NOTE_REPO.lock();
+    let repo = guard.as_mut().ok_or("Persistence engine not initialized")?;
+    let note = devnote_core::models::Note::new(title, fid);
+    let note = repo.create_note(note).map_err(|e| e.to_string())?;
+    Ok(note_to_data(&note))
 }
 
 /// 获取笔记 —— 替代原 NoteEvent.GetNote
@@ -268,14 +289,7 @@ pub fn get_note(id: String) -> Result<Option<NoteData>, String> {
     let guard = NOTE_REPO.lock();
     let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
     match repo.get_note(&uid) {
-        Ok(Some(note)) => Ok(Some(NoteData {
-            id: note.id.to_string(),
-            title: note.title,
-            content: note.content,
-            folder_id: note.folder_id.to_string(),
-            created_at: note.created_at.to_rfc3339(),
-            updated_at: note.updated_at.to_rfc3339(),
-        })),
+        Ok(Some(note)) => Ok(Some(note_to_data(&note))),
         Ok(None) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
@@ -284,24 +298,20 @@ pub fn get_note(id: String) -> Result<Option<NoteData>, String> {
 /// 更新笔记 —— 替代原 NoteEvent.UpdateNote
 pub fn update_note(id: String, title: String, content: String) -> Result<NoteData, String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let guard = NOTE_REPO.lock();
-    let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
-    let note = repo.update_note(&uid, &title, &content).map_err(|e| e.to_string())?;
-    Ok(NoteData {
-        id: note.id.to_string(),
-        title: note.title,
-        content: note.content,
-        folder_id: note.folder_id.to_string(),
-        created_at: note.created_at.to_rfc3339(),
-        updated_at: note.updated_at.to_rfc3339(),
-    })
+    let mut guard = NOTE_REPO.lock();
+    let repo = guard.as_mut().ok_or("Persistence engine not initialized")?;
+    let mut note = repo.get_note(&uid).map_err(|e| e.to_string())?
+        .ok_or("Note not found")?;
+    note.title = title;
+    let note = repo.update_note(note).map_err(|e| e.to_string())?;
+    Ok(note_to_data(&note))
 }
 
 /// 删除笔记 —— 替代原 NoteEvent.DeleteNote
 pub fn delete_note(id: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let guard = NOTE_REPO.lock();
-    let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
+    let mut guard = NOTE_REPO.lock();
+    let repo = guard.as_mut().ok_or("Persistence engine not initialized")?;
     repo.delete_note(&uid).map_err(|e| e.to_string())
 }
 
@@ -311,14 +321,7 @@ pub fn list_notes(folder_id: String) -> Result<Vec<NoteData>, String> {
     let guard = NOTE_REPO.lock();
     let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
     let notes = repo.list_notes(&fid).map_err(|e| e.to_string())?;
-    Ok(notes.into_iter().map(|n| NoteData {
-        id: n.id.to_string(),
-        title: n.title,
-        content: n.content,
-        folder_id: n.folder_id.to_string(),
-        created_at: n.created_at.to_rfc3339(),
-        updated_at: n.updated_at.to_rfc3339(),
-    }).collect())
+    Ok(notes.iter().map(|n| note_to_data(n)).collect())
 }
 
 // ── 文件夹 API ────────────────────────────────────────────────────────
@@ -440,7 +443,7 @@ pub fn get_blocks(note_id: String) -> Result<Vec<BlockData>, String> {
     let nid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
     let mut guard = BLOCK_EDITOR.lock();
     let editor = guard.as_mut().ok_or("Editor engine not initialized")?;
-    let blocks = editor.list_blocks(&nid).map_err(|e| e.to_string())?;
+    let blocks = editor.list_blocks(&nid, None, None).map_err(|e| e.to_string())?;
     Ok(blocks.into_iter().map(|b| BlockData {
         id: b.id.to_string(),
         note_id: b.note_id.to_string(),
@@ -502,17 +505,27 @@ pub fn derive_key(password: String, salt_base64: String) -> Result<String, Strin
 // ── 同步 API ──────────────────────────────────────────────────────────
 
 /// 推送变更 —— 替代原 SyncEvent.PushChanges
-pub fn push_changes() -> Result<(), String> {
+pub fn push_changes() -> Result<SyncStatusData, String> {
     let mut guard = SYNC_ENGINE.lock();
     let engine = guard.as_mut().ok_or("Sync engine not initialized")?;
-    engine.push_changes().map_err(|e| e.to_string())
+    let info = engine.push_changes().map_err(|e| e.to_string())?;
+    Ok(SyncStatusData {
+        status: format!("{:?}", info.status),
+        last_synced: info.last_synced_at.map(|t| t.to_rfc3339()),
+        pending_changes: info.pending_changes,
+    })
 }
 
 /// 拉取变更 —— 替代原 SyncEvent.PullChanges
-pub fn pull_changes() -> Result<(), String> {
+pub fn pull_changes() -> Result<SyncStatusData, String> {
     let mut guard = SYNC_ENGINE.lock();
     let engine = guard.as_mut().ok_or("Sync engine not initialized")?;
-    engine.pull_changes().map_err(|e| e.to_string())
+    let info = engine.pull_changes().map_err(|e| e.to_string())?;
+    Ok(SyncStatusData {
+        status: format!("{:?}", info.status),
+        last_synced: info.last_synced_at.map(|t| t.to_rfc3339()),
+        pending_changes: info.pending_changes,
+    })
 }
 
 /// 获取同步状态 —— 替代原 SyncEvent.GetStatus
@@ -521,9 +534,9 @@ pub fn get_sync_status() -> Result<SyncStatusData, String> {
     let engine = guard.as_ref().ok_or("Sync engine not initialized")?;
     let status = engine.get_status();
     Ok(SyncStatusData {
-        status: format!("{:?}", status.status),
-        last_synced: status.last_synced.map(|t| t.to_rfc3339()),
-        pending_changes: status.pending_changes,
+        status: format!("{:?}", status),
+        last_synced: None,
+        pending_changes: 0,
     })
 }
 

@@ -632,7 +632,7 @@ pub fn batch_import_markdown(dir_path: &str) -> Result<Vec<ImportedNote>, Format
         )));
     }
     if !path.is_dir() {
-        return Err(FormatError::InvalidFormat(format!(
+        return Err(FormatError::ParseError(format!(
             "路径不是目录: {}",
             dir_path
         )));

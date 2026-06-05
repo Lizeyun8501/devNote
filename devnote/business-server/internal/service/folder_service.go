@@ -112,7 +112,9 @@ func (s *FolderService) Delete(id string, cascade bool) error {
 
 	// Get parent before deleting
 	var parentID string
-	tx.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, id).Scan(&parentID)
+	if err := tx.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, id).Scan(&parentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("get parent id: %w", err)
+	}
 
 	if _, err := tx.Exec(`DELETE FROM folder_meta WHERE id=?`, id); err != nil {
 		return fmt.Errorf("delete folder: %w", err)
@@ -209,7 +211,9 @@ func (s *FolderService) MoveFolder(folderID, newParentID string) error {
 
 	// Get old parent
 	var oldParentID string
-	s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, folderID).Scan(&oldParentID)
+	if err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, folderID).Scan(&oldParentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("get old parent: %w", err)
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -297,7 +301,9 @@ func (s *FolderService) buildPath(name, parentID string) string {
 
 func (s *FolderService) buildPathFor(folderID, newParentID string) string {
 	var name string
-	s.db.QueryRow(`SELECT name FROM folder_meta WHERE id=?`, folderID).Scan(&name)
+	if err := s.db.QueryRow(`SELECT name FROM folder_meta WHERE id=?`, folderID).Scan(&name); err != nil {
+		return "/"
+	}
 	if newParentID == "" {
 		return "/" + name
 	}

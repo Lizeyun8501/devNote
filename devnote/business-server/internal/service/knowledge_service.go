@@ -43,19 +43,26 @@ func NewKnowledgeService(db *sql.DB, cfg KnowledgeConfig) *KnowledgeService {
 // ----------------------------------------------------------------
 
 // CreateRelation creates or updates a knowledge relation between two notes.
+// 整个操作包装在事务中，确保前向链接和反向链接的原子性。
 func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationType string, weight float64) (*model.KnowledgeRelation, error) {
 	if sourceNoteID == targetNoteID {
 		return nil, errors.New("self-referencing knowledge relation is not allowed")
 	}
 
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Check if relation already exists
 	var existing model.KnowledgeRelation
-	row := s.db.QueryRow(`
+	row := tx.QueryRow(`
 		SELECT id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
 		FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND relation_type=?
 	`, sourceNoteID, targetNoteID, relationType)
 
-	err := row.Scan(&existing.ID, &existing.SourceNoteID, &existing.TargetNoteID,
+	err = row.Scan(&existing.ID, &existing.SourceNoteID, &existing.TargetNoteID,
 		&existing.Weight, &existing.ReferenceCount, &existing.RelationType,
 		&existing.CreatedAt, &existing.UpdatedAt)
 
@@ -64,15 +71,18 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 		existing.ReferenceCount++
 		existing.Weight = weight
 		existing.UpdatedAt = time.Now().UTC()
-		_, execErr := s.db.Exec(`UPDATE knowledge_relation SET reference_count=?, weight=?, updated_at=? WHERE id=?`,
+		_, execErr := tx.Exec(`UPDATE knowledge_relation SET reference_count=?, weight=?, updated_at=? WHERE id=?`,
 			existing.ReferenceCount, existing.Weight, existing.UpdatedAt, existing.ID)
 		if execErr != nil {
 			return nil, fmt.Errorf("update relation: %w", execErr)
 		}
 
 		// Also create reverse link if it doesn't exist
-		if err := s.ensureBidirectional(sourceNoteID, targetNoteID, relationType, weight); err != nil {
+		if err := s.ensureBidirectionalTx(tx, sourceNoteID, targetNoteID, relationType, weight); err != nil {
 			return nil, fmt.Errorf("ensure bidirectional: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit tx: %w", err)
 		}
 		return &existing, nil
 	}
@@ -93,7 +103,7 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 		UpdatedAt:      time.Now().UTC(),
 	}
 
-	_, execErr := s.db.Exec(`
+	_, execErr := tx.Exec(`
 		INSERT INTO knowledge_relation (id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, rel.ID, rel.SourceNoteID, rel.TargetNoteID, rel.Weight, rel.ReferenceCount, rel.RelationType, rel.CreatedAt, rel.UpdatedAt)
@@ -102,10 +112,32 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 	}
 
 	// Ensure bidirectional
-	if err := s.ensureBidirectional(sourceNoteID, targetNoteID, relationType, weight); err != nil {
+	if err := s.ensureBidirectionalTx(tx, sourceNoteID, targetNoteID, relationType, weight); err != nil {
 		return nil, fmt.Errorf("ensure bidirectional: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
+	}
 	return rel, nil
+}
+
+func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+	var cnt int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=?`, targetNoteID, sourceNoteID).Scan(&cnt)
+	if err != nil {
+		return fmt.Errorf("check existing bidirectional relation: %w", err)
+	}
+	if cnt == 0 {
+		now := time.Now().UTC()
+		_, err := tx.Exec(`
+			INSERT INTO knowledge_relation (id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, uuid.New().String(), targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
+		if err != nil {
+			return fmt.Errorf("insert bidirectional relation: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *KnowledgeService) ensureBidirectional(sourceNoteID, targetNoteID, relationType string, weight float64) error {

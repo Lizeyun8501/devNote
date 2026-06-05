@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -91,35 +92,14 @@ func parseEnvList(key string, fallback []string) []string {
 		return fallback
 	}
 	var result []string
-	for _, s := range splitByComma(v) {
-		if s != "" {
-			result = append(result, s)
+	for _, s := range strings.Split(v, ",") {
+		trimmed := strings.TrimSpace(s)
+		if trimmed != "" {
+			result = append(result, trimmed)
 		}
 	}
 	if len(result) == 0 {
 		return fallback
 	}
 	return result
-}
-
-func splitByComma(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ',' {
-			part := s[start:i]
-			// trim spaces
-			j := 0
-			for j < len(part) && part[j] == ' ' {
-				j++
-			}
-			k := len(part)
-			for k > j && part[k-1] == ' ' {
-				k--
-			}
-			parts = append(parts, part[j:k])
-			start = i + 1
-		}
-	}
-	return parts
 }

@@ -8,6 +8,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/**
+ * FFI 协议版本 —— 与 Dart 端 lib/core/bridge/ffi_bridge.dart 的 kFFIApiVersion 严格一致
+ * 协议变更时必须同步 +1 并在 migration_notes.md 中记录
+ */
+#define FFI_API_VERSION 1
+
 typedef struct FFIResponse {
   int32_t code;
   char *message;

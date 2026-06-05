@@ -332,14 +332,47 @@ func (s *TagService) MergeTags(sourceTagID, targetTagID string) error {
 
 // SplitTag creates a new tag and moves some notes to it.
 func (s *TagService) SplitTag(sourceTagID, newTagName string, noteIDs []string) (*model.TagMeta, error) {
-	newTag, err := s.Create(&model.TagMeta{Name: newTagName})
+	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	newTag := &model.TagMeta{
+		ID:        uuid.New().String(),
+		Name:      newTagName,
+		CreatedAt: time.Now().UTC(),
+	}
+	_, err = tx.Exec(`INSERT INTO tag_meta (id, name, parent_id, color, description, created_at, use_count) VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		newTag.ID, newTag.Name, newTag.ParentID, newTag.Color, newTag.Description, newTag.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("insert new tag: %w", err)
 	}
 
 	for _, noteID := range noteIDs {
-		s.UnlinkTagFromNote(sourceTagID, noteID)
-		s.LinkTagToNote(newTag.ID, noteID)
+		// Move association from source to new tag
+		if _, err := tx.Exec(`DELETE FROM tag_relation WHERE tag_id=? AND note_id=?`, sourceTagID, noteID); err != nil {
+			return nil, fmt.Errorf("unlink note %s: %w", noteID, err)
+		}
+		relID := uuid.New().String()
+		now := time.Now().UTC()
+		if _, err := tx.Exec(`INSERT INTO tag_relation (id, tag_id, note_id, linked_at) VALUES (?, ?, ?, ?)`,
+			relID, newTag.ID, noteID, now); err != nil {
+			return nil, fmt.Errorf("link note %s to new tag: %w", noteID, err)
+		}
+	}
+
+	// Update use counts
+	var srcCount int
+	tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, sourceTagID).Scan(&srcCount)
+	tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, srcCount, sourceTagID)
+
+	var newCount int
+	tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, newTag.ID).Scan(&newCount)
+	tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, newCount, newTag.ID)
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
 	}
 	return newTag, nil
 }
