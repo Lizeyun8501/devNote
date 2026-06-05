@@ -27,6 +27,7 @@ final class NotesLoaded extends NotesState {
   // ============================================================
   final bool hasMore;
   final int currentPage;
+  final String? loadMoreError;
 
   const NotesLoaded({
     required this.notes,
@@ -38,6 +39,7 @@ final class NotesLoaded extends NotesState {
     this.viewMode = NoteViewMode.list,
     this.hasMore = true,
     this.currentPage = 0,
+    this.loadMoreError,
   });
 
   NotesLoaded copyWith({
@@ -50,6 +52,7 @@ final class NotesLoaded extends NotesState {
     NoteViewMode? viewMode,
     bool? hasMore,
     int? currentPage,
+    String? loadMoreError,
   }) {
     return NotesLoaded(
       notes: notes ?? this.notes,
@@ -61,6 +64,7 @@ final class NotesLoaded extends NotesState {
       viewMode: viewMode ?? this.viewMode,
       hasMore: hasMore ?? this.hasMore,
       currentPage: currentPage ?? this.currentPage,
+      loadMoreError: loadMoreError ?? this.loadMoreError,
     );
   }
 }

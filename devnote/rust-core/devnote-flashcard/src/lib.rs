@@ -115,6 +115,8 @@ pub enum FlashcardError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 pub trait FlashcardEngine: Send + Sync {
@@ -196,13 +198,13 @@ impl SqliteFlashcardEngine {
     }
 
     fn init_schema(&self) -> Result<(), FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         conn.execute_batch(FLASHCARD_SCHEMA)?;
         Ok(())
     }
 
     fn get_latest_review(&self, flashcard_id: &Uuid) -> Result<Option<ReviewRecord>, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let fid_str = flashcard_id.to_string();
         let mut stmt = conn.prepare(
             "SELECT id, flashcard_id, quality, reviewed_at, next_review, ease_factor, interval, repetitions FROM review_records WHERE flashcard_id = ?1 ORDER BY reviewed_at DESC LIMIT 1"
@@ -218,8 +220,8 @@ impl SqliteFlashcardEngine {
             let repetitions: i32 = row.get(7)?;
 
             Ok(ReviewRecord {
-                id: Uuid::parse_str(&id_str).unwrap(),
-                flashcard_id: Uuid::parse_str(&fid_str).unwrap(),
+                id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                flashcard_id: Uuid::parse_str(&fid_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 quality,
                 reviewed_at: reviewed_at_str.parse().unwrap_or_else(|_| Utc::now()),
                 next_review: next_review_str.parse().unwrap_or_else(|_| Utc::now()),
@@ -239,7 +241,7 @@ impl SqliteFlashcardEngine {
 
 impl FlashcardEngine for SqliteFlashcardEngine {
     fn create_deck(&self, name: &str, description: &str) -> Result<FlashcardDeck, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
         let now = Utc::now();
         conn.execute(
@@ -255,7 +257,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn delete_deck(&self, id: &Uuid) -> Result<(), FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let affected = conn.execute("DELETE FROM flashcard_decks WHERE id = ?1", params![id.to_string()])?;
         if affected == 0 {
             return Err(FlashcardError::DeckNotFound(*id));
@@ -264,7 +266,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn list_decks(&self) -> Result<Vec<FlashcardDeck>, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let mut stmt = conn.prepare("SELECT id, name, description, created_at FROM flashcard_decks ORDER BY created_at")?;
         let decks = stmt.query_map([], |row| {
             let id_str: String = row.get(0)?;
@@ -272,7 +274,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
             let description: String = row.get(2)?;
             let created_at_str: String = row.get(3)?;
             Ok(FlashcardDeck {
-                id: Uuid::parse_str(&id_str).unwrap(),
+                id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 description,
                 created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
@@ -282,7 +284,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn create_flashcard(&self, deck_id: &Uuid, card_type: CardType, front: &str, back: &str, note_id: Option<Uuid>) -> Result<Flashcard, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let deck_id_str = deck_id.to_string();
         let exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM flashcard_decks WHERE id = ?1",
@@ -319,7 +321,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn update_flashcard(&self, id: &Uuid, front: &str, back: &str) -> Result<Flashcard, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let id_str = id.to_string();
 
         let existing: (String, Option<String>, Uuid, String, DateTime<Utc>) = conn.query_row(
@@ -334,7 +336,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
                 Ok((
                     ct,
                     note_id_str,
-                    Uuid::parse_str(&deck_id_str).unwrap(),
+                    Uuid::parse_str(&deck_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     front_str,
                     created_at_str.parse().unwrap_or_else(|_| Utc::now()),
                 ))
@@ -364,7 +366,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn delete_flashcard(&self, id: &Uuid) -> Result<(), FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let affected = conn.execute("DELETE FROM flashcards WHERE id = ?1", params![id.to_string()])?;
         if affected == 0 {
             return Err(FlashcardError::FlashcardNotFound(*id));
@@ -373,7 +375,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn review_flashcard(&self, flashcard_id: &Uuid, quality: u8) -> Result<ReviewRecord, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let fid_str = flashcard_id.to_string();
         let exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM flashcards WHERE id = ?1",
@@ -393,7 +395,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
 
         let result = calculate_next_review(quality, ease_factor, interval, repetitions);
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let record_id = Uuid::new_v4();
         let now = Utc::now();
         conn.execute(
@@ -423,7 +425,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn get_due_cards(&self, deck_id: &Uuid, limit: usize) -> Result<Vec<Flashcard>, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let deck_id_str = deck_id.to_string();
         let now_str = Utc::now().to_rfc3339();
 
@@ -453,12 +455,12 @@ impl FlashcardEngine for SqliteFlashcardEngine {
             };
 
             Ok(Flashcard {
-                id: Uuid::parse_str(&id_str).unwrap(),
+                id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 note_id: note_id_str.and_then(|s| Uuid::parse_str(&s).ok()),
                 card_type,
                 front,
                 back,
-                deck_id: Uuid::parse_str(&did_str).unwrap(),
+                deck_id: Uuid::parse_str(&did_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
             })
         })?.collect::<Result<Vec<_>, _>>()?;
@@ -467,7 +469,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     }
 
     fn get_review_stats(&self, deck_id: &Uuid) -> Result<ReviewStats, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let deck_id_str = deck_id.to_string();
 
         let total_cards: i64 = conn.query_row(
@@ -486,7 +488,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
             |row| row.get(0),
         )?;
 
-        let today_start = Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+        let today_start = Utc::now().date_naive().and_hms_opt(0, 0, 0).expect("invalid time");
         let today_start_str = DateTime::<Utc>::from_naive_utc_and_offset(today_start, Utc).to_rfc3339();
         let reviewed_today: i64 = conn.query_row(
             "SELECT COUNT(DISTINCT flashcard_id) FROM review_records WHERE flashcard_id IN (SELECT id FROM flashcards WHERE deck_id = ?1) AND reviewed_at >= ?2",
@@ -512,7 +514,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
     /// 借鉴 Anki 的复习记录清理机制：保留最近 retention_days 天的详细记录，
     /// 超期记录删除（仅保留每张卡片最新一条以维持 SM-2 调度状态）
     fn cleanup_old_review_records(&self, retention_days: i64) -> Result<u64, FlashcardError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| FlashcardError::Internal(e.to_string()))?;
         let cutoff = Utc::now() - Duration::days(retention_days);
         let cutoff_str = cutoff.to_rfc3339();
 

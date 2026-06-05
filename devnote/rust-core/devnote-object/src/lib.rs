@@ -78,6 +78,8 @@ pub enum ObjectError {
     Sqlite(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 pub trait ObjectEngine: Send + Sync {
@@ -173,7 +175,7 @@ impl SqliteObjectEngine {
     }
 
     fn init_schema(&self) -> Result<(), ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         conn.execute_batch(OBJ_SCHEMA)?;
         Ok(())
     }
@@ -221,7 +223,8 @@ impl SqliteObjectEngine {
             };
 
             Ok(ObjectProperty {
-                id: Uuid::parse_str(&id_str).unwrap(),
+                id: Uuid::parse_str(&id_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 property_type,
                 format: serde_json::from_str(&format_str).unwrap_or(serde_json::Value::Null),
@@ -250,11 +253,14 @@ impl SqliteObjectEngine {
             };
 
             Ok(ObjectRelation {
-                id: Uuid::parse_str(&id_str).unwrap(),
+                id: Uuid::parse_str(&id_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 relation_type,
-                source_type: Uuid::parse_str(&source_str).unwrap(),
-                target_type: Uuid::parse_str(&target_str).unwrap(),
+                source_type: Uuid::parse_str(&source_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                target_type: Uuid::parse_str(&target_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -274,12 +280,14 @@ impl SqliteObjectEngine {
         )?;
         let rels: Vec<Uuid> = rel_stmt.query_map(params![object_id_str], |row| {
             let target_str: String = row.get(0)?;
-            Ok(Uuid::parse_str(&target_str).unwrap())
+            Uuid::parse_str(&target_str)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })?.collect::<Result<Vec<_>, _>>()?;
 
         Ok(Object {
             id: *object_id,
-            object_type_id: Uuid::parse_str(&type_id_str).unwrap(),
+            object_type_id: Uuid::parse_str(&type_id_str)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             properties: serde_json::from_str(&props_str).unwrap_or(serde_json::Value::Object(Default::default())),
             relations: rels,
             created_at: created_str.parse().unwrap_or_else(|_| Utc::now()),
@@ -291,7 +299,7 @@ impl SqliteObjectEngine {
 impl ObjectEngine for SqliteObjectEngine {
     #[instrument(skip(self, properties))]
     fn create_object_type(&self, name: &str, icon: &str, properties: Vec<ObjectProperty>) -> Result<ObjectType, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
         conn.execute(
             "INSERT INTO object_types (id, name, icon) VALUES (?1, ?2, ?3)",
@@ -325,7 +333,7 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn update_object_type(&self, type_id: &Uuid, name: &str, icon: &str) -> Result<ObjectType, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let affected = conn.execute(
             "UPDATE object_types SET name = ?1, icon = ?2 WHERE id = ?3",
             params![name, icon, type_id.to_string()],
@@ -334,12 +342,12 @@ impl ObjectEngine for SqliteObjectEngine {
             return Err(ObjectError::TypeNotFound(*type_id));
         }
         drop(conn);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         self.load_object_type(&conn, type_id)
     }
 
     fn delete_object_type(&self, type_id: &Uuid) -> Result<(), ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let affected = conn.execute(
             "DELETE FROM object_types WHERE id = ?1",
             params![type_id.to_string()],
@@ -351,11 +359,12 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn list_object_types(&self) -> Result<Vec<ObjectType>, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let mut stmt = conn.prepare("SELECT id FROM object_types")?;
         let ids: Vec<Uuid> = stmt.query_map([], |row| {
             let id_str: String = row.get(0)?;
-            Ok(Uuid::parse_str(&id_str).unwrap())
+            Uuid::parse_str(&id_str)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
         })?.collect::<Result<Vec<_>, _>>()?;
 
         let mut types = Vec::new();
@@ -367,7 +376,7 @@ impl ObjectEngine for SqliteObjectEngine {
 
     #[instrument(skip(self, properties))]
     fn create_object(&self, type_id: &Uuid, properties: serde_json::Value) -> Result<Object, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM object_types WHERE id = ?1",
             params![type_id.to_string()],
@@ -395,7 +404,7 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn update_object(&self, object_id: &Uuid, properties: serde_json::Value) -> Result<Object, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let now = Utc::now();
         let affected = conn.execute(
             "UPDATE objects SET properties = ?1, updated_at = ?2 WHERE id = ?3",
@@ -405,12 +414,12 @@ impl ObjectEngine for SqliteObjectEngine {
             return Err(ObjectError::ObjectNotFound(*object_id));
         }
         drop(conn);
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         self.load_object(&conn, object_id)
     }
 
     fn delete_object(&self, object_id: &Uuid) -> Result<(), ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let affected = conn.execute(
             "DELETE FROM objects WHERE id = ?1",
             params![object_id.to_string()],
@@ -422,18 +431,19 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn get_object(&self, object_id: &Uuid) -> Result<Object, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         self.load_object(&conn, object_id)
     }
 
     fn list_objects(&self, type_id: Option<&Uuid>) -> Result<Vec<Object>, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let ids: Vec<Uuid> = match type_id {
             Some(tid) => {
                 let mut stmt = conn.prepare("SELECT id FROM objects WHERE object_type_id = ?1")?;
                 let ids: Vec<Uuid> = stmt.query_map(params![tid.to_string()], |row| {
                     let id_str: String = row.get(0)?;
-                    Ok(Uuid::parse_str(&id_str).unwrap())
+                    Uuid::parse_str(&id_str)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
                 })?.collect::<Result<Vec<_>, _>>()?;
                 ids
             }
@@ -441,7 +451,8 @@ impl ObjectEngine for SqliteObjectEngine {
                 let mut stmt = conn.prepare("SELECT id FROM objects")?;
                 let ids: Vec<Uuid> = stmt.query_map([], |row| {
                     let id_str: String = row.get(0)?;
-                    Ok(Uuid::parse_str(&id_str).unwrap())
+                    Uuid::parse_str(&id_str)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
                 })?.collect::<Result<Vec<_>, _>>()?;
                 ids
             }
@@ -455,7 +466,7 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn add_relation(&self, source_id: &Uuid, target_id: &Uuid, relation_id: &Uuid) -> Result<(), ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
         conn.execute(
             "INSERT INTO object_relations (id, source_id, target_id, relation_id) VALUES (?1, ?2, ?3, ?4)",
@@ -465,7 +476,7 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn remove_relation(&self, source_id: &Uuid, target_id: &Uuid, relation_id: &Uuid) -> Result<(), ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM object_relations WHERE source_id = ?1 AND target_id = ?2 AND relation_id = ?3",
             params![source_id.to_string(), target_id.to_string(), relation_id.to_string()],
@@ -474,7 +485,7 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn get_related_objects(&self, object_id: &Uuid, relation_id: Option<&Uuid>) -> Result<Vec<Object>, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let target_ids: Vec<Uuid> = match relation_id {
             Some(rid) => {
                 let mut stmt = conn.prepare(
@@ -482,7 +493,8 @@ impl ObjectEngine for SqliteObjectEngine {
                 )?;
                 let ids: Vec<Uuid> = stmt.query_map(params![object_id.to_string(), rid.to_string()], |row| {
                     let s: String = row.get(0)?;
-                    Ok(Uuid::parse_str(&s).unwrap())
+                    Uuid::parse_str(&s)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
                 })?.collect::<Result<Vec<_>, _>>()?;
                 ids
             }
@@ -492,7 +504,8 @@ impl ObjectEngine for SqliteObjectEngine {
                 )?;
                 let ids: Vec<Uuid> = stmt.query_map(params![object_id.to_string()], |row| {
                     let s: String = row.get(0)?;
-                    Ok(Uuid::parse_str(&s).unwrap())
+                    Uuid::parse_str(&s)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
                 })?.collect::<Result<Vec<_>, _>>()?;
                 ids
             }
@@ -506,7 +519,7 @@ impl ObjectEngine for SqliteObjectEngine {
     }
 
     fn promote_block_to_object(&self, _note_id: &Uuid, _block_id: &Uuid, object_type_id: &Uuid) -> Result<Object, ObjectError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let exists: bool = conn.query_row(
             "SELECT COUNT(*) FROM object_types WHERE id = ?1",
             params![object_type_id.to_string()],

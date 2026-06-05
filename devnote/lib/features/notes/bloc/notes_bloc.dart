@@ -178,6 +178,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       } catch (e) {
         // 加载更多失败时保持当前状态，不切换到错误状态
         developer.log('Failed to load more notes: $e', level: 900);
+        emit(currentState.copyWith(loadMoreError: 'Failed to load more notes'));
       }
     }
   }

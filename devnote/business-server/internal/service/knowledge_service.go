@@ -136,6 +136,9 @@ func (s *KnowledgeService) GetRelations(noteID string) ([]model.KnowledgeRelatio
 		}
 		rels = append(rels, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate relations: %w", err)
+	}
 	return rels, nil
 }
 
@@ -170,6 +173,9 @@ func (s *KnowledgeService) ComputeGraphEdges() ([]GraphEdge, error) {
 			return nil, fmt.Errorf("scan edge: %w", err)
 		}
 		edges = append(edges, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate edges: %w", err)
 	}
 	return edges, nil
 }
@@ -438,6 +444,9 @@ func (s *KnowledgeService) FindOrphanNotes() []string {
 		}
 		orphans = append(orphans, id)
 	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
 	return orphans
 }
 
@@ -471,6 +480,9 @@ func (s *KnowledgeService) SuggestRelatedNotes(noteID string, limit int) ([]Sugg
 		}
 		candidateScores[candidateID] += 3.0 // tag match weight
 	}
+	if err := tagRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tag rows: %w", err)
+	}
 
 	// Collect via knowledge relations
 	relRows, err := s.db.Query(`
@@ -490,6 +502,9 @@ func (s *KnowledgeService) SuggestRelatedNotes(noteID string, limit int) ([]Sugg
 			continue
 		}
 		candidateScores[candidateID] += weight * 2.0
+	}
+	if err := relRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rel rows: %w", err)
 	}
 
 	// Sort by score
@@ -553,13 +568,17 @@ type CoverageMetrics struct {
 // ComputeCoverage computes knowledge coverage metrics.
 func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
 	var totalNotes int
-	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta`).Scan(&totalNotes)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta`).Scan(&totalNotes); err != nil {
+		return nil, fmt.Errorf("count notes: %w", err)
+	}
 
 	orphans := s.FindOrphanNotes()
 	orphanCount := len(orphans)
 
 	var totalLinks int
-	s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation`).Scan(&totalLinks)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation`).Scan(&totalLinks); err != nil {
+		return nil, fmt.Errorf("count relations: %w", err)
+	}
 
 	linkedNotes := totalNotes - orphanCount
 
@@ -587,6 +606,9 @@ func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
 		defer rows.Close()
 		if rows.Next() {
 			rows.Scan(&maxNote, &maxLinks)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate coverage rows: %w", err)
 		}
 	}
 
@@ -694,6 +716,9 @@ func (s *KnowledgeService) findSimilarNotesByContent(noteID string, limit int) (
 		}
 		sim := jaccardSimilarity(strings.ToLower(myTitle), strings.ToLower(title))
 		candidates = append(candidates, candidate{id, title, sim})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {

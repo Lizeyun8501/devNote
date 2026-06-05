@@ -112,6 +112,8 @@ pub enum GraphError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 pub trait GraphEngine: Send + Sync {
@@ -210,7 +212,7 @@ impl SqliteGraphEngine {
     }
 
     fn init_schema(&self) -> Result<(), GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         conn.execute_batch(GRAPH_SCHEMA)?;
         Ok(())
     }
@@ -266,21 +268,21 @@ impl SqliteGraphEngine {
     }
 
     fn load_all_nodes(&self) -> Result<Vec<KnowledgeNode>, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let mut stmt = conn.prepare("SELECT id, title, node_type, tags, created_at, updated_at FROM graph_nodes")?;
         let nodes = stmt.query_map([], Self::row_to_node)?.collect::<Result<Vec<_>, _>>()?;
         Ok(nodes)
     }
 
     fn load_all_edges(&self) -> Result<Vec<KnowledgeEdge>, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let mut stmt = conn.prepare("SELECT id, source_id, target_id, edge_type, weight, created_at FROM graph_edges")?;
         let edges = stmt.query_map([], Self::row_to_edge)?.collect::<Result<Vec<_>, _>>()?;
         Ok(edges)
     }
 
     fn invalidate_centrality_cache(&self) {
-        let mut cache = self.centrality_cache.lock().unwrap();
+        let mut cache = self.centrality_cache.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         cache.graph_dirty = true;
     }
 
@@ -313,7 +315,7 @@ impl SqliteGraphEngine {
     }
 
     pub fn add_node(&self, node: KnowledgeNode) -> Result<KnowledgeNode, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let id_str = node.id.to_string();
         let node_type_str = match node.node_type {
             NodeType::Note => "Note",
@@ -334,7 +336,7 @@ impl SqliteGraphEngine {
     }
 
     pub fn remove_node(&self, id: &Uuid) -> Result<(), GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let id_str = id.to_string();
         conn.execute("DELETE FROM graph_nodes WHERE id = ?1", params![id_str])?;
         drop(conn);
@@ -343,7 +345,7 @@ impl SqliteGraphEngine {
     }
 
     pub fn add_edge(&self, edge: KnowledgeEdge) -> Result<KnowledgeEdge, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let id_str = edge.id.to_string();
         let source_id_str = edge.source_id.to_string();
         let target_id_str = edge.target_id.to_string();
@@ -364,7 +366,7 @@ impl SqliteGraphEngine {
     }
 
     pub fn remove_edge(&self, id: &Uuid) -> Result<(), GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let id_str = id.to_string();
         conn.execute("DELETE FROM graph_edges WHERE id = ?1", params![id_str])?;
         drop(conn);
@@ -424,8 +426,8 @@ impl SqliteGraphEngine {
                         queue.push_back(w);
                     }
                     if dist[&w] == dist[&v] + 1 {
-                        *sigma.get_mut(&w).unwrap() += sigma[&v];
-                        pred.get_mut(&w).unwrap().push(v);
+                        *sigma.get_mut(&w).expect("node must exist in sigma") += sigma[&v];
+                        pred.get_mut(&w).expect("node must exist in pred").push(v);
                     }
                 }
             }
@@ -437,11 +439,11 @@ impl SqliteGraphEngine {
 
             while let Some(w) = stack.pop() {
                 for &v in &pred[&w] {
-                    *delta.get_mut(&v).unwrap() += (sigma[&v] / sigma[&w]) * (1.0 + delta[&w]);
+                    *delta.get_mut(&v).expect("node must exist in delta") += (sigma[&v] / sigma[&w]) * (1.0 + delta[&w]);
                 }
                 if w != source_idx {
                     if let Some(&uuid) = rev_map.get(&w) {
-                        *betweenness.get_mut(&uuid).unwrap() += delta[&w];
+                        *betweenness.get_mut(&uuid).expect("uuid must exist in betweenness") += delta[&w];
                     }
                 }
             }
@@ -515,7 +517,7 @@ impl SqliteGraphEngine {
     }
 
     pub fn calculate_centrality_cached(&self, algorithm: &str) -> Result<HashMap<String, f64>, GraphError> {
-        let mut cache = self.centrality_cache.lock().unwrap();
+        let mut cache = self.centrality_cache.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
 
         if !cache.graph_dirty {
             let cached = match algorithm {
@@ -534,14 +536,14 @@ impl SqliteGraphEngine {
 
         let result = self.compute_centrality(algorithm)?;
 
-        let mut cache = self.centrality_cache.lock().unwrap();
+        let mut cache = self.centrality_cache.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         match algorithm {
             "degree" => cache.degree = Some(result.clone()),
             "betweenness" => cache.betweenness = Some(result.clone()),
             "pagerank" => cache.pagerank = Some(result.clone()),
             _ => {}
         }
-        cache.last_computed_at = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64);
+        cache.last_computed_at = Some(SystemTime::now().duration_since(UNIX_EPOCH).expect("system time before unix epoch").as_secs() as i64);
         Ok(result)
     }
 }
@@ -555,7 +557,7 @@ impl GraphEngine for SqliteGraphEngine {
         tag_relations: &[(Uuid, String)],
         reference_relations: &[(Uuid, Uuid)],
     ) -> Result<GraphData, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         conn.execute("DELETE FROM graph_edges", [])?;
         conn.execute("DELETE FROM graph_nodes", [])?;
 
@@ -632,7 +634,7 @@ impl GraphEngine for SqliteGraphEngine {
     }
 
     fn get_node(&self, id: &Uuid) -> Result<Option<KnowledgeNode>, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let id_str = id.to_string();
         let mut stmt = conn.prepare("SELECT id, title, node_type, tags, created_at, updated_at FROM graph_nodes WHERE id = ?1")?;
         let result = stmt.query_map(params![id_str], Self::row_to_node)?.next();
@@ -677,7 +679,7 @@ impl GraphEngine for SqliteGraphEngine {
     }
 
     fn get_backlinks(&self, note_id: &Uuid) -> Result<Vec<KnowledgeEdge>, GraphError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
         let note_id_str = note_id.to_string();
         let mut stmt = conn.prepare("SELECT id, source_id, target_id, edge_type, weight, created_at FROM graph_edges WHERE target_id = ?1 AND edge_type = 'Reference'")?;
         let edges = stmt.query_map(params![note_id_str], Self::row_to_edge)?.collect::<Result<Vec<_>, _>>()?;

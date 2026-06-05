@@ -452,7 +452,7 @@ impl CanvasEngine {
 
         match alignment {
             Alignment::Left => {
-                let min_x = nodes.iter().map(|n| n.x).min().unwrap();
+                let min_x = nodes.iter().map(|n| n.x).min().unwrap_or(0);
                 for node in &mut canvas.nodes {
                     if node_ids.contains(&node.id) {
                         node.x = min_x;
@@ -460,7 +460,7 @@ impl CanvasEngine {
                 }
             }
             Alignment::Right => {
-                let max_x = nodes.iter().map(|n| n.x + n.width).max().unwrap();
+                let max_x = nodes.iter().map(|n| n.x + n.width).max().unwrap_or(0);
                 for node in &mut canvas.nodes {
                     if node_ids.contains(&node.id) {
                         node.x = max_x - node.width;
@@ -477,7 +477,7 @@ impl CanvasEngine {
                 }
             }
             Alignment::Top => {
-                let min_y = nodes.iter().map(|n| n.y).min().unwrap();
+                let min_y = nodes.iter().map(|n| n.y).min().unwrap_or(0);
                 for node in &mut canvas.nodes {
                     if node_ids.contains(&node.id) {
                         node.y = min_y;
@@ -485,7 +485,7 @@ impl CanvasEngine {
                 }
             }
             Alignment::Bottom => {
-                let max_y = nodes.iter().map(|n| n.y + n.height).max().unwrap();
+                let max_y = nodes.iter().map(|n| n.y + n.height).max().unwrap_or(0);
                 for node in &mut canvas.nodes {
                     if node_ids.contains(&node.id) {
                         node.y = max_y - node.height;
@@ -530,11 +530,11 @@ impl CanvasEngine {
         match direction {
             DistributeDirection::Horizontal => {
                 positions.sort_by_key(|p| p.1);
-                let min_x = positions.first().unwrap().1;
+                let min_x = positions.first().map(|p| p.1).unwrap_or(0);
                 let max_x = positions
                     .last()
                     .map(|p| p.1 + p.3)
-                    .unwrap();
+                    .unwrap_or(0);
                 let total_width: i64 = positions.iter().map(|p| p.3).sum();
                 let gap = if positions.len() > 1 {
                     (max_x - min_x - total_width) / (positions.len() as i64 - 1)
@@ -551,11 +551,11 @@ impl CanvasEngine {
             }
             DistributeDirection::Vertical => {
                 positions.sort_by_key(|p| p.2);
-                let min_y = positions.first().unwrap().2;
+                let min_y = positions.first().map(|p| p.2).unwrap_or(0);
                 let max_y = positions
                     .last()
                     .map(|p| p.2 + p.4)
-                    .unwrap();
+                    .unwrap_or(0);
                 let total_height: i64 = positions.iter().map(|p| p.4).sum();
                 let gap = if positions.len() > 1 {
                     (max_y - min_y - total_height) / (positions.len() as i64 - 1)

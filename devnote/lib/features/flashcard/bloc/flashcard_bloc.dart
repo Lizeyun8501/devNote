@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_event.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_state.dart';
@@ -81,7 +82,13 @@ class FlashcardBloc extends Bloc<FlashcardEvent, FlashcardState> {
 
   Future<void> _onReviewFlashcard(ReviewFlashcardEvent event, Emitter<FlashcardState> emit) async {
     final currentState = state;
-    if (currentState is! DueCardsLoaded) return;
+    if (currentState is! DueCardsLoaded) {
+      developer.log(
+        'ReviewFlashcard called in unexpected state: ${currentState.runtimeType}',
+        name: 'FlashcardBloc',
+      );
+      return;
+    }
     try {
       await _flashcardService.reviewFlashcard(event.flashcardId, event.quality);
       final nextIndex = currentState.currentIndex + 1;

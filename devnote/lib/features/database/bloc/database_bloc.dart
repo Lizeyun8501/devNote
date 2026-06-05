@@ -220,7 +220,22 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
                 value: f['value'],
               ))
           .toList();
-      emit(state.copyWith(activeFilters: filters));
+      final filteredRows = _applyFiltersAndSorts(
+        state.database.rows,
+        filters,
+        state.activeSorts,
+      );
+      final updatedDatabase = DatabaseModel(
+        id: state.database.id,
+        name: state.database.name,
+        fields: state.database.fields,
+        rows: filteredRows,
+        views: state.database.views,
+      );
+      emit(state.copyWith(
+        database: updatedDatabase,
+        activeFilters: filters,
+      ));
     }
   }
 
@@ -233,7 +248,97 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
                 direction: s['direction'] as String,
               ))
           .toList();
-      emit(state.copyWith(activeSorts: sorts));
+      final filteredRows = _applyFiltersAndSorts(
+        state.database.rows,
+        state.activeFilters,
+        sorts,
+      );
+      final updatedDatabase = DatabaseModel(
+        id: state.database.id,
+        name: state.database.name,
+        fields: state.database.fields,
+        rows: filteredRows,
+        views: state.database.views,
+      );
+      emit(state.copyWith(
+        database: updatedDatabase,
+        activeSorts: sorts,
+      ));
     }
+  }
+
+  List<DatabaseRowModel> _applyFiltersAndSorts(
+    List<DatabaseRowModel> rows,
+    List<FilterModel> filters,
+    List<SortModel> sorts,
+  ) {
+    var result = rows.toList();
+
+    for (final filter in filters) {
+      result = result.where((row) {
+        final cell = row.cells.firstWhere(
+          (c) => c.fieldId == filter.fieldId,
+          orElse: () => DatabaseCellModel(fieldId: filter.fieldId),
+        );
+        final cellValue = cell.value;
+        switch (filter.operator) {
+          case 'equals':
+            return cellValue == filter.value;
+          case 'not_equals':
+            return cellValue != filter.value;
+          case 'contains':
+            return cellValue
+                    ?.toString()
+                    .contains(filter.value?.toString() ?? '') ??
+                false;
+          case 'not_contains':
+            return !(cellValue
+                    ?.toString()
+                    .contains(filter.value?.toString() ?? '') ??
+                false);
+          case 'is_empty':
+            return cellValue == null || cellValue.toString().isEmpty;
+          case 'is_not_empty':
+            return cellValue != null && cellValue.toString().isNotEmpty;
+          default:
+            return true;
+        }
+      }).toList();
+    }
+
+    if (sorts.isNotEmpty) {
+      result.sort((a, b) {
+        for (final sort in sorts) {
+          final aCell = a.cells.firstWhere(
+            (c) => c.fieldId == sort.fieldId,
+            orElse: () => DatabaseCellModel(fieldId: sort.fieldId),
+          );
+          final bCell = b.cells.firstWhere(
+            (c) => c.fieldId == sort.fieldId,
+            orElse: () => DatabaseCellModel(fieldId: sort.fieldId),
+          );
+          final aVal = aCell.value;
+          final bVal = bCell.value;
+          int cmp;
+          if (aVal == null && bVal == null) {
+            cmp = 0;
+          } else if (aVal == null) {
+            cmp = -1;
+          } else if (bVal == null) {
+            cmp = 1;
+          } else if (aVal is Comparable && bVal is Comparable) {
+            cmp = aVal.compareTo(bVal);
+          } else {
+            cmp = aVal.toString().compareTo(bVal.toString());
+          }
+          if (cmp != 0) {
+            return sort.direction == 'asc' ? cmp : -cmp;
+          }
+        }
+        return 0;
+      });
+    }
+
+    return result;
   }
 }

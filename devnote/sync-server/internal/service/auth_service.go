@@ -28,6 +28,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"time"
@@ -336,7 +337,9 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, e
 	}
 
 	// Revoke old refresh token (rotation)
-	s.db.Model(&rt).Update("revoked", true)
+	if err := s.db.Model(&rt).Update("revoked", true).Error; err != nil {
+		return "", "", fmt.Errorf("revoke old refresh token: %w", err)
+	}
 
 	// Find user
 	var user model.User
@@ -372,5 +375,8 @@ func (s *AuthService) RevokeRefreshToken(token string) error {
 // 借鉴 1Password 的"修改主密码即登出全部设备"做法：密码变更或账号被盗时，
 // 通过一次性吊销所有 token 强制重新登录。
 func (s *AuthService) RevokeAllUserTokens(userID string) error {
-	return s.db.Model(&model.RefreshToken{}).Where("user_id = ? AND revoked = ?", userID, false).Update("revoked", true).Error
+	if err := s.db.Model(&model.RefreshToken{}).Where("user_id = ?", userID).Update("revoked", true).Error; err != nil {
+		return fmt.Errorf("revoke all tokens: %w", err)
+	}
+	return nil
 }

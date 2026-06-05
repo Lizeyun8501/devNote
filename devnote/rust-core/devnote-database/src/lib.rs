@@ -117,6 +117,8 @@ pub enum DatabaseError {
     Sqlite(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 pub trait DatabaseEngine: Send + Sync {
@@ -217,13 +219,13 @@ impl SqliteDatabaseEngine {
     }
 
     fn init_schema(&self) -> Result<(), DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         conn.execute_batch(DB_SCHEMA)?;
         Ok(())
     }
 
     fn load_database(&self, id: &Uuid) -> Result<Database, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let id_str = id.to_string();
 
         let name: String = conn.query_row(
@@ -271,7 +273,7 @@ impl SqliteDatabaseEngine {
             };
 
             Ok(DatabaseField {
-                id: Uuid::parse_str(&id_str).unwrap(),
+                id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 field_type,
                 options: serde_json::from_str(&options_str).unwrap_or(serde_json::Value::Null),
@@ -289,8 +291,9 @@ impl SqliteDatabaseEngine {
         )?;
 
         let row_ids: Vec<(Uuid, String, String)> = stmt.query_map(params![db_id_str], |row| {
+            let id_str: String = row.get(0)?;
             Ok((
-                Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
+                Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
             ))
@@ -319,7 +322,7 @@ impl SqliteDatabaseEngine {
             let field_id_str: String = row.get(0)?;
             let value_str: String = row.get(1)?;
             Ok(DatabaseCell {
-                field_id: Uuid::parse_str(&field_id_str).unwrap(),
+                field_id: Uuid::parse_str(&field_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 value: serde_json::from_str(&value_str).unwrap_or(serde_json::Value::Null),
             })
         })?.collect::<Result<Vec<_>, _>>()?;
@@ -348,7 +351,7 @@ impl SqliteDatabaseEngine {
             };
 
             Ok(DatabaseView {
-                id: Uuid::parse_str(&id_str).unwrap(),
+                id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 view_type,
                 filters: serde_json::from_str(&filters_str).unwrap_or_default(),
@@ -365,7 +368,7 @@ impl SqliteDatabaseEngine {
 impl DatabaseEngine for SqliteDatabaseEngine {
     #[instrument]
     fn create_database(&self, name: &str) -> Result<Database, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
         let id_str = id.to_string();
 
@@ -398,7 +401,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn delete_database(&self, id: &Uuid) -> Result<(), DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let id_str = id.to_string();
         let affected = conn.execute("DELETE FROM databases WHERE id = ?1", params![id_str])?;
         if affected == 0 {
@@ -412,7 +415,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn add_field(&self, db_id: &Uuid, name: &str, field_type: FieldType, options: serde_json::Value, formula: Option<String>) -> Result<DatabaseField, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let db_id_str = db_id.to_string();
 
         let exists: bool = conn.query_row(
@@ -458,7 +461,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn update_field(&self, db_id: &Uuid, field_id: &Uuid, name: &str, options: serde_json::Value) -> Result<DatabaseField, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let field_id_str = field_id.to_string();
 
         let ft_str: String = conn.query_row(
@@ -500,7 +503,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn delete_field(&self, db_id: &Uuid, field_id: &Uuid) -> Result<(), DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let field_id_str = field_id.to_string();
         let affected = conn.execute(
             "DELETE FROM database_fields WHERE id = ?1 AND database_id = ?2",
@@ -513,7 +516,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn add_row(&self, db_id: &Uuid, cells: Vec<DatabaseCell>) -> Result<DatabaseRow, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let db_id_str = db_id.to_string();
 
         let exists: bool = conn.query_row(
@@ -550,7 +553,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn update_row(&self, db_id: &Uuid, row_id: &Uuid, cells: Vec<DatabaseCell>) -> Result<DatabaseRow, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let row_id_str = row_id.to_string();
         let now = Utc::now();
 
@@ -584,7 +587,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn delete_row(&self, db_id: &Uuid, row_id: &Uuid) -> Result<(), DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let affected = conn.execute(
             "DELETE FROM database_rows WHERE id = ?1 AND database_id = ?2",
             params![row_id.to_string(), db_id.to_string()],
@@ -596,12 +599,12 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn get_rows(&self, db_id: &Uuid) -> Result<Vec<DatabaseRow>, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         self.load_rows(&conn, db_id)
     }
 
     fn update_cell(&self, _db_id: &Uuid, row_id: &Uuid, field_id: &Uuid, value: serde_json::Value) -> Result<DatabaseCell, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let now = Utc::now();
 
         conn.execute(
@@ -622,7 +625,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
 
     #[instrument]
     fn add_view(&self, db_id: &Uuid, name: &str, view_type: ViewType) -> Result<DatabaseView, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
         let vt_str = match view_type {
             ViewType::Table => "Table",
@@ -647,7 +650,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn update_view(&self, db_id: &Uuid, view_id: &Uuid, name: &str, filters: Vec<Filter>, sorts: Vec<Sort>, group_by: Option<Uuid>) -> Result<DatabaseView, DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let view_id_str = view_id.to_string();
 
         let vt_str: String = conn.query_row(
@@ -685,7 +688,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn delete_view(&self, db_id: &Uuid, view_id: &Uuid) -> Result<(), DatabaseError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let affected = conn.execute(
             "DELETE FROM database_views WHERE id = ?1 AND database_id = ?2",
             params![view_id.to_string(), db_id.to_string()],

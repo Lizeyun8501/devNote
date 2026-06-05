@@ -232,7 +232,7 @@ impl SqliteNoteRepository {
     }
 
     fn run_migrations(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let current_version: i32 = conn
             .query_row(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
@@ -371,7 +371,7 @@ impl SqliteNoteRepository {
     }
 
     fn fetch_note_by_id(&self, id: &Uuid) -> Result<Option<Note>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         let mut stmt = conn.prepare(
             "SELECT id, title, content, folder_id, created_at, updated_at FROM notes WHERE id = ?1",
@@ -404,7 +404,7 @@ impl SqliteNoteRepository {
     }
 
     fn fetch_notes_by_folder(&self, folder_id: Option<&Uuid>) -> Result<Vec<Note>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let notes = match folder_id {
             Some(fid) => {
                 let fid_str = fid.to_string();
@@ -428,7 +428,7 @@ impl SqliteNoteRepository {
     }
 
     fn fetch_folders_by_parent(&self, parent_id: Option<&Uuid>) -> Result<Vec<Folder>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let folders = match parent_id {
             Some(pid) => {
                 let pid_str = pid.to_string();
@@ -452,14 +452,14 @@ impl SqliteNoteRepository {
     }
 
     fn remove_note_by_id(&self, id: &Uuid) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         conn.execute("DELETE FROM notes WHERE id = ?1", params![id_str])?;
         Ok(())
     }
 
     fn link_tag_to_note(&self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let note_id_str = note_id.to_string();
         let tag_id_str = tag_id.to_string();
         conn.execute(
@@ -470,7 +470,7 @@ impl SqliteNoteRepository {
     }
 
     fn unlink_tag_from_note(&self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let note_id_str = note_id.to_string();
         let tag_id_str = tag_id.to_string();
         conn.execute(
@@ -482,7 +482,7 @@ impl SqliteNoteRepository {
 
     #[instrument]
     pub fn create_note(&self, title: &str, content: &str, folder_id: &Uuid) -> Result<Note> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id = Uuid::new_v4();
         let now = Utc::now();
         let id_str = id.to_string();
@@ -513,7 +513,7 @@ impl SqliteNoteRepository {
 
     #[instrument]
     pub fn update_note(&self, id: &Uuid, title: &str, content: &str) -> Result<Note> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
@@ -539,7 +539,7 @@ impl SqliteNoteRepository {
 
     #[instrument]
     pub fn create_folder(&self, name: &str, parent_id: Option<&Uuid>) -> Result<Folder> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id = Uuid::new_v4();
         let now = Utc::now();
         let id_str = id.to_string();
@@ -567,7 +567,7 @@ impl SqliteNoteRepository {
 
     #[instrument]
     pub fn create_tag(&self, name: &str) -> Result<Tag> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id = Uuid::new_v4();
         let now = Utc::now();
         let id_str = id.to_string();
@@ -593,7 +593,7 @@ impl SqliteNoteRepository {
     // ---- Audit Log CRUD ----
 
     pub fn log_audit(&self, entry: AuditEntry) -> Result<(), PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         conn.execute(
             "INSERT INTO audit_log (id, user_id, action, resource_type, resource_id, timestamp, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![entry.id, entry.user_id, entry.action, entry.resource_type, entry.resource_id, entry.timestamp, entry.metadata],
@@ -602,7 +602,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn get_audit_log(&self, user_id: &str, limit: usize, offset: usize) -> Result<Vec<AuditEntry>, PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, user_id, action, resource_type, resource_id, timestamp, metadata FROM audit_log WHERE user_id = ?1 ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
         ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
@@ -623,7 +623,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn get_resource_audit(&self, resource_type: &str, resource_id: &str) -> Result<Vec<AuditEntry>, PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, user_id, action, resource_type, resource_id, timestamp, metadata FROM audit_log WHERE resource_type = ?1 AND resource_id = ?2 ORDER BY timestamp DESC",
         ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
@@ -644,7 +644,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn purge_audit_log(&self, before_timestamp: i64) -> Result<usize, PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let count = conn.execute(
             "DELETE FROM audit_log WHERE timestamp < ?1",
             params![before_timestamp],
@@ -655,7 +655,7 @@ impl SqliteNoteRepository {
     // ---- Feature Flag CRUD ----
 
     pub fn set_feature_flag(&self, flag: FeatureFlag) -> Result<(), PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let enabled_int = if flag.enabled { 1 } else { 0 };
         conn.execute(
             "INSERT OR REPLACE INTO feature_flags (key, enabled, description, updated_at) VALUES (?1, ?2, ?3, ?4)",
@@ -665,7 +665,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn get_feature_flag(&self, key: &str) -> Result<Option<FeatureFlag>, PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT key, enabled, description, updated_at FROM feature_flags WHERE key = ?1",
         ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
@@ -686,7 +686,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn list_feature_flags(&self) -> Result<Vec<FeatureFlag>, PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT key, enabled, description, updated_at FROM feature_flags ORDER BY key",
         ).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
@@ -713,7 +713,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn delete_feature_flag(&self, key: &str) -> Result<(), PersistenceError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         conn.execute(
             "DELETE FROM feature_flags WHERE key = ?1",
             params![key],
@@ -724,7 +724,7 @@ impl SqliteNoteRepository {
 
 impl NoteRepository for SqliteNoteRepository {
     fn create_note(&mut self, note: Note) -> Result<Note> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let folder_id_str = note.folder_id.to_string();
         let content = serde_json::to_string(&note.blocks)?;
@@ -752,7 +752,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn update_note(&mut self, note: Note) -> Result<Note> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let content = serde_json::to_string(&note.blocks)?;
         let updated_at_str = note.updated_at.to_rfc3339();
@@ -774,7 +774,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn create_folder(&mut self, folder: Folder) -> Result<Folder> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = folder.id.to_string();
         let parent_id_str = folder.parent_id.map(|p| p.to_string());
         let created_at_str = folder.created_at.to_rfc3339();
@@ -789,7 +789,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn get_folder(&self, id: &Uuid) -> Result<Option<Folder>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         let mut stmt = conn.prepare(
             "SELECT id, name, parent_id, created_at, updated_at FROM folders WHERE id = ?1",
@@ -805,7 +805,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn update_folder(&mut self, folder: Folder) -> Result<Folder> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = folder.id.to_string();
         let parent_id_str = folder.parent_id.map(|p| p.to_string());
         let updated_at_str = folder.updated_at.to_rfc3339();
@@ -819,7 +819,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn delete_folder(&mut self, id: &Uuid) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         conn.execute("DELETE FROM folders WHERE id = ?1", params![id_str])?;
         Ok(())
@@ -830,7 +830,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn create_tag(&mut self, tag: Tag) -> Result<Tag> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = tag.id.to_string();
         let created_at_str = tag.created_at.to_rfc3339();
 
@@ -843,14 +843,14 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn delete_tag(&mut self, id: &Uuid) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         conn.execute("DELETE FROM tags WHERE id = ?1", params![id_str])?;
         Ok(())
     }
 
     fn list_tags(&self) -> Result<Vec<Tag>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, name, created_at FROM tags ORDER BY name",
         )?;
@@ -869,7 +869,7 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn create_attachment(&mut self, attachment: Attachment) -> Result<Attachment> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = attachment.id.to_string();
         let note_id_str = attachment.note_id.to_string();
         let created_at_str = attachment.created_at.to_rfc3339();
@@ -891,14 +891,14 @@ impl NoteRepository for SqliteNoteRepository {
     }
 
     fn delete_attachment(&mut self, id: &Uuid) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         conn.execute("DELETE FROM attachments WHERE id = ?1", params![id_str])?;
         Ok(())
     }
 
     fn list_attachments(&self, note_id: &Uuid) -> Result<Vec<Attachment>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let note_id_str = note_id.to_string();
         let mut stmt = conn.prepare(
             "SELECT id, note_id, file_name, file_path, file_size, mime_type, created_at FROM attachments WHERE note_id = ?1 ORDER BY created_at",
@@ -930,16 +930,16 @@ impl EncryptedNoteRepository {
     pub fn set_password(&self, password: &str) -> Result<()> {
         let salt = self.crypto.generate_salt();
         let key = self.crypto.derive_key(password, &salt)?;
-        *self.key.lock().unwrap() = Some(key);
-        *self.salt.lock().unwrap() = Some(salt);
+        *self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))? = Some(key);
+        *self.salt.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))? = Some(salt);
         Ok(())
     }
 
     pub fn change_password(&self, old_password: &str, new_password: &str) -> Result<bool> {
-        let salt_guard = self.salt.lock().unwrap();
+        let salt_guard = self.salt.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         if let Some(ref salt) = *salt_guard {
             let old_key = self.crypto.derive_key(old_password, salt)?;
-            let key_guard = self.key.lock().unwrap();
+            let key_guard = self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
             if let Some(ref current_key) = *key_guard {
                 if old_key != *current_key {
                     return Ok(false);
@@ -951,29 +951,29 @@ impl EncryptedNoteRepository {
 
         let new_salt = self.crypto.generate_salt();
         let new_key = self.crypto.derive_key(new_password, &new_salt)?;
-        *self.key.lock().unwrap() = Some(new_key);
-        *self.salt.lock().unwrap() = Some(new_salt);
+        *self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))? = Some(new_key);
+        *self.salt.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))? = Some(new_salt);
         Ok(true)
     }
 
     pub fn clear_key(&self) {
-        *self.key.lock().unwrap() = None;
-        *self.salt.lock().unwrap() = None;
+        *self.key.lock().expect("mutex lock") = None;
+        *self.salt.lock().expect("mutex lock") = None;
     }
 
     pub fn is_unlocked(&self) -> bool {
-        self.key.lock().unwrap().is_some()
+        self.key.lock().map_or(false, |k| k.is_some())
     }
 
     fn encrypt_content(&self, plaintext: &str) -> Result<String> {
-        let key_guard = self.key.lock().unwrap();
+        let key_guard = self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
         let encrypted = self.crypto.encrypt(plaintext.as_bytes(), key)?;
         Ok(BASE64.encode(&encrypted))
     }
 
     fn decrypt_content(&self, ciphertext: &str) -> Result<String> {
-        let key_guard = self.key.lock().unwrap();
+        let key_guard = self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
         let data = BASE64.decode(ciphertext).map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let decrypted = self.crypto.decrypt(&data, key)?;
@@ -988,8 +988,8 @@ impl NoteRepository for EncryptedNoteRepository {
         note.is_encrypted = true;
         note.blocks = Vec::new();
 
-        let inner = self.inner.lock().unwrap();
-        let conn = inner.conn.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let conn = inner.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let folder_id_str = note.folder_id.to_string();
         let created_at_str = note.created_at.to_rfc3339();
@@ -1012,7 +1012,7 @@ impl NoteRepository for EncryptedNoteRepository {
     }
 
     fn get_note(&self, id: &Uuid) -> Result<Option<Note>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let result = NoteRepository::get_note(&*inner, id)?;
         drop(inner);
 
@@ -1034,8 +1034,8 @@ impl NoteRepository for EncryptedNoteRepository {
         let encrypted = self.encrypt_content(&content)?;
         note.is_encrypted = true;
 
-        let inner = self.inner.lock().unwrap();
-        let conn = inner.conn.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let conn = inner.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let updated_at_str = note.updated_at.to_rfc3339();
 
@@ -1048,12 +1048,12 @@ impl NoteRepository for EncryptedNoteRepository {
     }
 
     fn delete_note(&mut self, id: &Uuid) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::delete_note(&mut *inner, id)
     }
 
     fn list_notes(&self, folder_id: Option<&Uuid>) -> Result<Vec<Note>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let notes = NoteRepository::list_notes(&*inner, folder_id)?;
         drop(inner);
 
@@ -1070,67 +1070,67 @@ impl NoteRepository for EncryptedNoteRepository {
     }
 
     fn create_folder(&mut self, folder: Folder) -> Result<Folder> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::create_folder(&mut *inner, folder)
     }
 
     fn get_folder(&self, id: &Uuid) -> Result<Option<Folder>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::get_folder(&*inner, id)
     }
 
     fn update_folder(&mut self, folder: Folder) -> Result<Folder> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::update_folder(&mut *inner, folder)
     }
 
     fn delete_folder(&mut self, id: &Uuid) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::delete_folder(&mut *inner, id)
     }
 
     fn list_folders(&self, parent_id: Option<&Uuid>) -> Result<Vec<Folder>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::list_folders(&*inner, parent_id)
     }
 
     fn create_tag(&mut self, tag: Tag) -> Result<Tag> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::create_tag(&mut *inner, tag)
     }
 
     fn delete_tag(&mut self, id: &Uuid) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::delete_tag(&mut *inner, id)
     }
 
     fn list_tags(&self) -> Result<Vec<Tag>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::list_tags(&*inner)
     }
 
     fn add_tag_to_note(&mut self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::add_tag_to_note(&mut *inner, note_id, tag_id)
     }
 
     fn remove_tag_from_note(&mut self, note_id: &Uuid, tag_id: &Uuid) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::remove_tag_from_note(&mut *inner, note_id, tag_id)
     }
 
     fn create_attachment(&mut self, attachment: Attachment) -> Result<Attachment> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::create_attachment(&mut *inner, attachment)
     }
 
     fn delete_attachment(&mut self, id: &Uuid) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::delete_attachment(&mut *inner, id)
     }
 
     fn list_attachments(&self, note_id: &Uuid) -> Result<Vec<Attachment>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         NoteRepository::list_attachments(&*inner, note_id)
     }
 }
@@ -1151,15 +1151,15 @@ impl EncryptedFileStorage {
     }
 
     pub fn set_key(&self, key: Vec<u8>) {
-        *self.key.lock().unwrap() = Some(key);
+        *self.key.lock().expect("mutex lock") = Some(key);
     }
 
     pub fn clear_key(&self) {
-        *self.key.lock().unwrap() = None;
+        *self.key.lock().expect("mutex lock") = None;
     }
 
     pub fn write_file(&self, relative_path: &str, data: &[u8]) -> Result<()> {
-        let key_guard = self.key.lock().unwrap();
+        let key_guard = self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
 
         let encrypted = self.crypto.encrypt(data, key)?;
@@ -1178,7 +1178,7 @@ impl EncryptedFileStorage {
     }
 
     pub fn read_file(&self, relative_path: &str) -> Result<Vec<u8>> {
-        let key_guard = self.key.lock().unwrap();
+        let key_guard = self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
 
         let file_path = self.base_dir.join(relative_path);
@@ -1214,7 +1214,7 @@ impl EncryptedFileStorage {
     }
 
     pub fn verify_integrity(&self, relative_path: &str) -> Result<bool> {
-        let key_guard = self.key.lock().unwrap();
+        let key_guard = self.key.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let key = key_guard.as_ref().ok_or_else(|| PersistenceError::DatabaseError("encryption key not set".to_string()))?;
 
         let file_path = self.base_dir.join(relative_path);
@@ -1267,7 +1267,7 @@ impl SqliteNoteRepository {
     // ---- ResourceACL CRUD ----
 
     pub fn create_resource_acl(&self, acl: ResourceACL) -> Result<ResourceACL> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let permission_str = permission_to_str(&acl.permission);
         let granted_at_str = acl.granted_at.to_rfc3339();
         conn.execute(
@@ -1279,7 +1279,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn get_resource_acl(&self, id: &str) -> Result<Option<ResourceACL>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, resource_id, resource_type, user_id, permission, granted_by, granted_at FROM resource_acls WHERE id = ?1",
         )?;
@@ -1304,7 +1304,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn list_resource_acls_for_resource(&self, resource_id: &str) -> Result<Vec<ResourceACL>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, resource_id, resource_type, user_id, permission, granted_by, granted_at FROM resource_acls WHERE resource_id = ?1",
         )?;
@@ -1325,7 +1325,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn list_resource_acls_for_user(&self, user_id: &str) -> Result<Vec<ResourceACL>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, resource_id, resource_type, user_id, permission, granted_by, granted_at FROM resource_acls WHERE user_id = ?1",
         )?;
@@ -1346,7 +1346,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn update_resource_acl(&self, acl: ResourceACL) -> Result<ResourceACL> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let permission_str = permission_to_str(&acl.permission);
         conn.execute(
             "UPDATE resource_acls SET permission = ?1 WHERE id = ?2",
@@ -1356,7 +1356,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn delete_resource_acl(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         conn.execute("DELETE FROM resource_acls WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -1364,7 +1364,7 @@ impl SqliteNoteRepository {
     // ---- Workspace CRUD ----
 
     pub fn create_workspace(&self, workspace: Workspace) -> Result<Workspace> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let created_at_str = workspace.created_at.to_rfc3339();
         let updated_at_str = workspace.updated_at.to_rfc3339();
         conn.execute(
@@ -1375,7 +1375,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn get_workspace(&self, id: &str) -> Result<Option<Workspace>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, name, owner_id, created_at, updated_at FROM workspaces WHERE id = ?1",
         )?;
@@ -1400,7 +1400,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn list_workspaces_for_owner(&self, owner_id: &str) -> Result<Vec<Workspace>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, name, owner_id, created_at, updated_at FROM workspaces WHERE owner_id = ?1 ORDER BY name",
         )?;
@@ -1421,7 +1421,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn update_workspace(&self, workspace: Workspace) -> Result<Workspace> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let updated_at_str = workspace.updated_at.to_rfc3339();
         conn.execute(
             "UPDATE workspaces SET name = ?1, updated_at = ?2 WHERE id = ?3",
@@ -1431,7 +1431,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn delete_workspace(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -1439,7 +1439,7 @@ impl SqliteNoteRepository {
     // ---- WorkspaceMember CRUD ----
 
     pub fn create_workspace_member(&self, member: WorkspaceMember) -> Result<WorkspaceMember> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let role_str = permission_to_str(&member.role);
         let joined_at_str = member.joined_at.to_rfc3339();
         conn.execute(
@@ -1450,7 +1450,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn get_workspace_member(&self, id: &str) -> Result<Option<WorkspaceMember>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, user_id, role, joined_at FROM workspace_members WHERE id = ?1",
         )?;
@@ -1473,7 +1473,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn list_workspace_members(&self, workspace_id: &str) -> Result<Vec<WorkspaceMember>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, user_id, role, joined_at FROM workspace_members WHERE workspace_id = ?1 ORDER BY joined_at",
         )?;
@@ -1492,7 +1492,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn update_workspace_member(&self, member: WorkspaceMember) -> Result<WorkspaceMember> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let role_str = permission_to_str(&member.role);
         conn.execute(
             "UPDATE workspace_members SET role = ?1 WHERE id = ?2",
@@ -1502,7 +1502,7 @@ impl SqliteNoteRepository {
     }
 
     pub fn delete_workspace_member(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         conn.execute("DELETE FROM workspace_members WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -1573,7 +1573,7 @@ pub mod ipfs {
             let cid = self.client.add(data).await
                 .map_err(|e| anyhow::anyhow!("IPFS store failed: {}", e))?;
 
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
             let id = Uuid::new_v4();
             let id_str = id.to_string();
             let note_id_str = note_id.to_string();
@@ -1602,7 +1602,7 @@ pub mod ipfs {
             self.client.remove(cid).await
                 .map_err(|e| anyhow::anyhow!("IPFS delete failed: {}", e))?;
 
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
             conn.execute(
                 "DELETE FROM ipfs_metadata WHERE cid = ?1",
                 params![cid],
@@ -1613,7 +1613,7 @@ pub mod ipfs {
 
         /// List all IPFS metadata entries for a given note.
         pub fn list_ipfs_metadata(&self, note_id: &Uuid) -> Result<Vec<IpfsMetadata>> {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
             let note_id_str = note_id.to_string();
             let mut stmt = conn.prepare(
                 "SELECT id, note_id, attachment_id, cid, content_type, size_bytes, pinned, created_at
@@ -1657,7 +1657,7 @@ pub mod ipfs {
             self.client.pin(cid).await
                 .map_err(|e| anyhow::anyhow!("IPFS pin failed: {}", e))?;
 
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
             conn.execute(
                 "UPDATE ipfs_metadata SET pinned = 1 WHERE cid = ?1",
                 params![cid],
@@ -1671,7 +1671,7 @@ pub mod ipfs {
             self.client.unpin(cid).await
                 .map_err(|e| anyhow::anyhow!("IPFS unpin failed: {}", e))?;
 
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
             conn.execute(
                 "UPDATE ipfs_metadata SET pinned = 0 WHERE cid = ?1",
                 params![cid],

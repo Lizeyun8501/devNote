@@ -18,6 +18,10 @@ func NewSyncHandler(syncService *service.SyncService) *SyncHandler {
 
 func (h *SyncHandler) Push(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
 
 	var req service.PushRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -36,6 +40,10 @@ func (h *SyncHandler) Push(c *gin.Context) {
 
 func (h *SyncHandler) Pull(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
 
 	var req service.PullRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -59,6 +67,10 @@ func (h *SyncHandler) Pull(c *gin.Context) {
 
 func (h *SyncHandler) Status(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
 	deviceID := c.Query("device_id")
 	if deviceID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "device_id required"})
@@ -76,6 +88,10 @@ func (h *SyncHandler) Status(c *gin.Context) {
 
 func (h *SyncHandler) ResolveConflict(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
 
 	var resolution service.ConflictResolution
 	if err := c.ShouldBindJSON(&resolution); err != nil {
