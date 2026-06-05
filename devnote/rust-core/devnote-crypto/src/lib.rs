@@ -1,13 +1,14 @@
-//! 加密引擎 —— 借鉴 Notesnook 的 XChaCha20-Poly1305 算法和 Argon2id 密钥派生
-//! 密钥恢复采用 BIP-39 助记词方案（借鉴 Bitcoin 生态标准）
-//!
-//! 借鉴 Notesnook 的加密方案
-//! 来源: https://github.com/streetwriters/notesnook
-//! 借鉴内容: XChaCha20-Poly1305 AEAD 加密 + Argon2id 密钥派生算法组合
-//!
-//! 借鉴 Bitcoin 生态的 BIP-39 标准
-//! 来源: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
-//! 借鉴内容: 24 词助记词生成与恢复，用于用户密钥的备份与恢复
+//! 加密引擎模块
+//! 
+//! 借鉴: Notesnook 加密引擎 (https://github.com/streetwriters/notesnook)
+//! - XChaCha20-Poly1305 对称加密算法
+//! - Argon2id 密钥派生函数
+//! - 零知识架构设计
+//! 
+//! 复用: rustcrypto 加密算法库 (https://github.com/RustCrypto)
+//! - chacha20poly1305 crate
+//! - argon2 crate
+//! - rand crate (安全随机数)
 
 use devnote_observe::{info, instrument, warn};
 use thiserror::Error;

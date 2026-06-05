@@ -62,21 +62,16 @@ class FfiVersionInfo {
   }
 }
 
-/// ============================================================
-/// FFIBridge —— 基于 FRB 的新桥接层
-///
-/// 核心变更：
-/// 1. 不再使用 DynamicLibrary + NativeFunction 手动绑定
-/// 2. 不再使用 JSON 字符串序列化通信
-/// 3. 不再使用 malloc/free 手动内存管理
-/// 4. 不再使用 Event-Dispatch 字符串路由
-///
-/// 替代为：
-/// 1. FRB 自动生成的类型安全函数调用
-/// 2. SSE 编解码器（比 JSON 快数倍）
-/// 3. FRB 自动管理内存生命周期
-/// 4. 直接函数调用（createNote, getNote, listNotes 等）
-/// ============================================================
+/// FFI 桥接层 - Flutter 与 Rust 核心通信
+/// 
+/// 借鉴: AppFlowy FFI 桥接模式 (https://github.com/AppFlowy-IO/AppFlowy)
+/// - 类型安全的 FFI 调用
+/// - 异步运行时支持
+/// 
+/// 复用: flutter_rust_bridge v2 (https://github.com/fzyzcjy/flutter_rust_bridge)
+/// - 自动生成 Dart-Rust 绑定
+/// - SSE 序列化 (零拷贝)
+/// - Stream 支持
 class FFIBridge {
   FFIBridge();
 

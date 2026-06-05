@@ -24,7 +24,7 @@ type visitor struct {
 
 // RateLimitMiddleware 创建基于令牌桶算法的速率限制中间件
 // 默认每秒 100 请求，突发容量 200
-// 针对不同端点使用差异化限制：认证端点 5/min，同步端点 30/min，健康检查 120/min
+// 针对不同端点使用差异化限制：认证端点 5/min，业务端点 30/min，健康检查 120/min
 func RateLimitMiddleware(requestsPerSecond int) gin.HandlerFunc {
 	if requestsPerSecond <= 0 {
 		requestsPerSecond = 100 // 默认: 100 req/s
@@ -60,8 +60,8 @@ func RateLimitMiddleware(requestsPerSecond int) gin.HandlerFunc {
 			path := c.FullPath()
 			if strings.Contains(path, "/auth/login") || strings.Contains(path, "/auth/register") {
 				limit = rate.Limit(5) / 60 // 认证端点: 5 req/min
-			} else if strings.Contains(path, "/sync/push") || strings.Contains(path, "/sync/pull") {
-				limit = rate.Limit(30) / 60 // 同步端点: 30 req/min
+			} else if strings.Contains(path, "/api") {
+				limit = rate.Limit(30) / 60 // 业务 API: 30 req/min
 			} else if strings.Contains(path, "/health") {
 				limit = rate.Limit(120) / 60 // 健康检查: 120 req/min
 			}

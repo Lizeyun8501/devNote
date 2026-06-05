@@ -1,75 +1,14 @@
-//! WASM 插件系统（基于 extism）
-//!
-//! ## 替换说明
-//! 原实现：自研 wasmtime 沙箱（544 行），手动管理 Engine/Store/Fuel/权限
-//! 替换为：extism v1.21.0 通用 WASM 插件框架
-//!
-//! ## extism 优势
-//! - **多语言插件开发**：插件可用 Rust/Go/Python/JS/C#/Java 等 16+ 语言编写
-//! - **内置 Host Function**：插件可以直接调用宿主的 HTTP/日志/存储 API
-//! - **WASM 缓存**：自动缓存编译后的 WASM 模块，提升加载速度
-//! - **Component Model 支持**：跟进最新 WASM 生态
-//! - **跨平台 SDK**：Dart/Rust/Go/Python/Node.js 等宿主 SDK
-//!
-//! 来源: https://extism.org/
-//! 借鉴 Obsidian 的社区插件模型
-//! 来源: https://github.com/obsidianmd/obsidian-sample-plugin
-//! 借鉴内容: 插件清单(manifest)元数据、插件生命周期管理、权限系统设计
-//!
-//! ## 插件系统架构
-//!
-//! 本模块实现了 DevNote 的 WASM 插件系统，采用分层架构：
-//!
-//! ```text
-//! ┌─────────────────────────────────────────┐
-//! │           Dart 前端 (Flutter)            │
-//! │  通过 FFI Bridge 调用 Rust 插件管理 API   │
-//! └──────────────────┬──────────────────────┘
-//!                    │ FFI (flutter_rust_bridge)
-//! ┌──────────────────▼──────────────────────┐
-//! │         PluginManager (高层 API)         │
-//! │  注册/发现/管理插件，权限授予/撤销         │
-//! ├──────────────────────────────────────────┤
-//! │         PluginSandbox (低层 API)          │
-//! │  基于 extism Runtime 的 WASM 沙箱执行     │
-//! ├──────────────────────────────────────────┤
-//! │         extism Runtime (WASM 引擎)       │
-//! │  wasmtime 引擎 + Fuel 限制 + 内存隔离    │
-//! └──────────────────────────────────────────┘
-//! ```
-//!
-//! ## Plugin FFI Contract
-//!
-//! ### Dart↔Rust 接口约定
-//!
-//! Dart 前端通过 `flutter_rust_bridge` (FRB) 调用 Rust 插件 API，
-//! 所有跨 FFI 边界的数据结构必须实现 `Serialize`/`Deserialize`，
-//! FRB 使用 SSE 编解码器自动处理序列化。
-//!
-//! ### FFI 函数清单
-//!
-//! | Dart 调用 | Rust 实现 | 说明 |
-//! |-----------|-----------|------|
-//! | `loadPlugin(wasmBytes, manifest)` | `PluginManager::load_plugin()` | 加载 WASM 插件到沙箱 |
-//! | `unloadPlugin(id)` | `PluginManager::unload_plugin()` | 卸载插件并释放资源 |
-//! | `enablePlugin(id)` | `PluginManager::enable_plugin()` | 启用已加载的插件 |
-//! | `disablePlugin(id)` | `PluginManager::disable_plugin()` | 禁用插件（保留在内存中） |
-//! | `executePlugin(id, method, params)` | `PluginManager::execute_plugin()` | 执行插件导出的函数 |
-//! | `grantPermission(id, permission)` | `PluginManager::grant_permission()` | 授予插件权限 |
-//! | `revokePermission(id, permission)` | `PluginManager::revoke_permission()` | 撤销插件权限 |
-//! | `listPlugins()` | `PluginManager::list_plugins()` | 列出所有已注册插件 |
-//! | `checkPluginHealth(id)` | `PluginManager::check_plugin_health()` | 检查插件健康状态 |
-//!
-//! ### 数据类型映射
-//!
-//! | Rust 类型 | Dart 类型 | 说明 |
-//! |-----------|-----------|------|
-//! | `PluginManifest` | `Map<String, dynamic>` | 插件清单元数据 |
-//! | `PluginPermission` | `String` (enum name) | 插件权限枚举 |
-//! | `PluginLifecycleState` | `String` (enum name) | 插件生命周期状态 |
-//! | `PluginMethodResult` | `Map<String, dynamic>` | 插件函数执行结果 |
-//! | `PluginHealth` | `Map<String, dynamic>` | 插件健康检查结果 |
-//! | `PluginError` | `String` (error message) | 插件错误（通过 FRB Result 传递） |
+//! WASM 插件系统
+//! 
+//! 借鉴: 思源笔记插件系统 (https://github.com/siyuan-note/siyuan)
+//! - 插件加载与生命周期
+//! - 权限控制模型
+//! - 插件 API 设计
+//! 
+//! 复用: extism 通用插件框架 (https://github.com/extism/extism)
+//! - WASM 运行时 (wasmtime)
+//! - 多语言插件支持 (16+ 语言)
+//! - 沙箱隔离
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

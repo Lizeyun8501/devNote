@@ -8,6 +8,16 @@ import 'package:devnote/features/canvas/widgets/canvas_node_widget.dart';
 import 'package:devnote/features/canvas/widgets/canvas_edge_widget.dart';
 import 'package:devnote/features/canvas/widgets/canvas_toolbar.dart';
 
+/// Canvas 无限画布组件
+/// 
+/// 借鉴: Obsidian Canvas (https://github.com/obsidianmd/obsidian-canvas)
+/// - 画布数据模型 (nodes + edges JSON)
+/// - 自由拖拽与缩放
+/// - 节点连接与布局
+/// 
+/// 借鉴: Excalidraw 视口裁剪 (https://github.com/excalidraw/excalidraw)
+/// - 仅渲染视口可见节点
+/// - 视口 padding 预加载
 class CanvasPage extends StatelessWidget {
   const CanvasPage({super.key});
 

@@ -1,26 +1,8 @@
-// Package service 提供同步服务器的核心业务服务实现。
-//
-// 本文件 auth_service.go 实现用户注册、登录、SRP（Secure Remote Password）
-// 强身份认证、JWT 签发与刷新令牌管理等核心鉴权能力。
-//
-// ## 借鉴的开源项目
-//   - **SRP（Secure Remote Password）协议** ([RFC 5054](https://datatracker.ietf.org/doc/html/rfc5054)
-//     / [Stanford 论文](https://srp.stanford.edu/)):
-//     借鉴其零知识密码证明（Zero-Knowledge Password Proof, ZKPP）思想：
-//     服务端只保存密码的 verifier（而非哈希），且验证过程中密码本身不会在线缆上传输，
-//     也不会在服务端被恢复，从而同时抵御离线字典攻击与中间人攻击。
-//   - **1Password 认证设计** ([AgileBits 博客](https://blog.1password.com/)):
-//     借鉴其分层令牌体系：短生命周期 access token（JWT, 72h）+ 长生命周期 refresh token（30d），
-//     并支持 refresh token 轮转（rotation）与全局吊销（revoke all user tokens），
-//     在易用性与安全性之间取得平衡。
-//
-// ## 实现说明
-//   - Register / RegisterWithSRP：分别支持传统 bcrypt 注册与 SRP 注册。
-//   - Login：根据用户是否启用 SRP 走不同校验路径，但对外暴露统一的 token 返回。
-//   - InitiateSRP / VerifySRP：实现 SRP-6a 协议的两步握手（获取 salt+B / 校验 M1 并返回 M2）。
-//   - generateToken / ValidateToken：JWT HS256 签发与解析。
-//   - RefreshAccessToken / RevokeRefreshToken / RevokeAllUserTokens：实现 1Password 风格
-//     的 refresh token 轮转与主动吊销。
+// 认证服务 - 用户认证与授权
+// 借鉴: Joplin 认证流程 (https://github.com/laurent22/joplin)
+// - JWT + RefreshToken 双令牌轮转
+// - SRP 安全远程密码协议
+// - Bcrypt 密码哈希
 package service
 
 import (

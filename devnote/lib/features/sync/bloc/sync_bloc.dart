@@ -11,6 +11,10 @@ import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/sync/retry_policy.dart';
 import 'package:devnote/features/sync/offline_queue.dart';
 
+/// 同步业务逻辑组件 (SyncBloc)
+/// 负责管理本地与远端同步的全生命周期：初始化、推送、拉取、冲突解决、自动同步。
+/// 同步流程：Initialize → Pull → (Conflict? → Resolve) → Push → Complete
+/// 离线支持：网络不可用时将操作暂存到 OfflineQueue，恢复后自动回放。
 class SyncBloc extends Bloc<SyncEvent, SyncState> {
   final SyncService _syncService;
   final OfflineQueue _offlineQueue = OfflineQueue();
@@ -35,6 +39,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     _listenToServiceState();
   }
 
+  /// 从 SharedPreferences 初始化同步配置
+  /// 读取自动同步开关、同步间隔、服务器地址等持久化配置
   Future<void> _initFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     final autoSync = prefs.getBool(_keyAutoSync) ?? false;
@@ -54,14 +60,15 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     }
   }
 
+  /// 监听 SyncService 状态流
+  /// 服务端状态变化（冲突、同步完成）通过此流实时通知到 SyncBloc
+  /// 注意：access conflictResolver 前需要 null 检查，防止服务未初始化
   void _listenToServiceState() {
-    // P0-2 修复: 实际订阅 SyncService 的状态流，而非仅仅引用 state 属性
-    // 修复原因: 原代码 `_syncService.state` 仅获取当前状态快照，没有建立流式监听，
-    // 导致服务端状态变化（如冲突、同步完成）无法实时通知到 SyncBloc
     _serviceStateSubscription = _syncService.stateStream.listen((serviceState) {
       if (serviceState.status == SyncServiceStatus.conflict) {
-        // 使用服务的冲突解析器获取实际冲突信息
-        final conflicts = _syncService.conflictResolver.conflicts;
+        // 使用服务的冲突解析器获取实际冲突信息，null 安全
+        final resolver = _syncService.conflictResolver;
+        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
         emit(SyncConflict(
           conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -79,6 +86,12 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     });
   }
 
+  /// 启动同步
+  /// 同步流程: Initialize → Pull → (Conflict? → Resolve) → Complete
+  /// - 初始化同步服务，建立连接
+  /// - 先拉取远端变更（pull-before-push 策略，避免覆盖冲突）
+  /// - 拉取成功后回放离线队列中的待处理操作
+  /// - 失败时加入离线队列，等待网络恢复后重试
   Future<void> _onStartSync(StartSync event, Emitter<SyncState> emit) async {
     emit(SyncInProgress(
       pushCount: 0,
@@ -89,16 +102,40 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
 
     try {
+      // Step 1: 初始化同步服务，建立与远端服务器的连接
       await _withRetry(() => _syncService.initialize());
+      // 初始化后检查服务状态，状态异常则中止同步
+      final initState = _syncService.state;
+      if (initState.status == SyncServiceStatus.error) {
+        emit(SyncError(
+          message: initState.lastError ?? '初始化同步服务失败',
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+        return;
+      }
+
+      // Step 2: 拉取远端变更（pull-before-push 策略）
       final pullResult = await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
-      // P0-1 修复: 使用 SyncService 的 conflictResolver 获取实际冲突信息，而非创建空的新实例
-      // 修复原因: 新创建的 ConflictResolver() 内部 _conflicts 列表为空，不包含同步服务
-      // 检测到的真实冲突数据，导致用户看不到需要解决的冲突
+      // 拉取结果验证：如果 pullChanges 返回 null 且状态为 error，说明拉取失败
+      if (serviceState.status == SyncServiceStatus.error) {
+        emit(SyncError(
+          message: serviceState.lastError ?? '拉取远端数据失败',
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+        return;
+      }
+
       if (serviceState.status == SyncServiceStatus.conflict) {
+        final resolver = _syncService.conflictResolver;
+        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
         emit(SyncConflict(
-          conflicts: _syncService.conflictResolver.conflicts,
+          conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
@@ -118,7 +155,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
           serverAddress: state.serverAddress,
         ));
 
-        // 重连成功，回放离线队列中的待处理操作
+        // Step 3: 重连成功，回放离线队列中的待处理操作
         if (_offlineQueue.isNotEmpty) {
           await _offlineQueue.drainQueue((event) async {
             add(event);
@@ -126,7 +163,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         }
       }
     } catch (e) {
-      // 同步失败，将当前操作加入离线队列
+      // 同步失败，将当前操作加入离线队列，等待网络恢复后自动重试
       _offlineQueue.addOperation(event);
       emit(SyncError(
         message: e.toString(),
@@ -137,6 +174,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     }
   }
 
+  /// 停止同步
+  /// 取消自动同步定时器，切换回空闲状态
   Future<void> _onStopSync(StopSync event, Emitter<SyncState> emit) async {
     _autoSyncTimer?.cancel();
     _autoSyncTimer = null;
@@ -147,6 +186,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
   }
 
+  /// 推送变更到远端
+  /// 将本地修改数据推送到同步服务器，失败时加入离线队列
   Future<void> _onPushChanges(PushChanges event, Emitter<SyncState> emit) async {
     emit(SyncInProgress(
       pushCount: 1,
@@ -185,6 +226,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     }
   }
 
+/// 拉取远端变更到本地
+  /// 从同步服务器获取最新数据，验证结果后应用到本地数据库
   Future<void> _onPullChanges(PullChanges event, Emitter<SyncState> emit) async {
     emit(SyncInProgress(
       pushCount: 0,
@@ -195,22 +238,28 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
 
     try {
+      // 执行拉取操作
       final result = await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
-      // P0-1 修复: 使用 SyncService 的 conflictResolver 获取实际冲突信息，而非创建空的新实例
-      // 修复原因: 新创建的 ConflictResolver() 内部 _conflicts 列表为空，不包含同步服务
-      // 检测到的真实冲突数据，导致用户看不到需要解决的冲突
-      if (serviceState.status == SyncServiceStatus.conflict) {
-        emit(SyncConflict(
-          conflicts: _syncService.conflictResolver.conflicts,
+      // 结果验证：拉取失败时终止流程
+      if (serviceState.status == SyncServiceStatus.error) {
+        _offlineQueue.addOperation(event);
+        emit(SyncError(
+          message: serviceState.lastError ?? '拉取失败',
           autoSyncEnabled: state.autoSyncEnabled,
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
         ));
-      } else if (serviceState.status == SyncServiceStatus.error) {
-        emit(SyncError(
-          message: serviceState.lastError ?? '拉取失败',
+        return;
+      }
+
+      // 冲突处理：存在冲突时等待用户解决
+      if (serviceState.status == SyncServiceStatus.conflict) {
+        final resolver = _syncService.conflictResolver;
+        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
+        emit(SyncConflict(
+          conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
@@ -224,16 +273,15 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         ));
       }
 
-      // P1-3 修复: 处理拉取结果，将服务端数据应用到本地
-      // 修复原因: 原代码 `result;` 仅引用变量，未实际处理拉取到的数据，
-      // 导致即使拉取成功也没有任何日志或后续处理
-      // 此处使用 serviceState（而非 result，因为 result 是 Map<String, dynamic>?）
-      if (serviceState.status == SyncServiceStatus.synced) {
-        // 拉取成功，数据已由 SyncService 写入本地数据库，无需额外处理
-        developer.log('拉取同步完成: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
+      // 拉取成功验证：result 为 null 表示无需应用数据（无变更）
+      // result 非 null 表示数据已由 SyncService 写入本地数据库
+      if (result != null && serviceState.status == SyncServiceStatus.synced) {
+        developer.log('拉取同步完成，数据已应用到本地: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
+      } else if (result == null && serviceState.status == SyncServiceStatus.synced) {
+        developer.log('拉取完成，远端无新数据', name: 'SyncBloc');
       }
     } catch (e) {
-      // 拉取失败，将操作加入离线队列
+      // 拉取失败，将操作加入离线队列，等待网络恢复后重试
       _offlineQueue.addOperation(event);
       emit(SyncError(
         message: e.toString(),
@@ -244,6 +292,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     }
   }
 
+  /// 处理同步状态变更通知
   void _onStatusChanged(SyncStatusChanged event, Emitter<SyncState> emit) {
     emit(SyncIdle(
       autoSyncEnabled: state.autoSyncEnabled,
@@ -252,6 +301,9 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     ));
   }
 
+  /// 解决冲突
+  /// 根据用户选择（保留本地/使用远端）解决指定 block 的冲突
+  /// 所有冲突解决后自动完成同步
   Future<void> _onResolveConflict(
     ResolveConflict event,
     Emitter<SyncState> emit,
@@ -283,6 +335,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     }
   }
 
+  /// 切换自动同步开关
+  /// 开启时启动定时器，关闭时取消定时器，配置持久化到 SharedPreferences
   Future<void> _onAutoSyncToggled(
     AutoSyncToggled event,
     Emitter<SyncState> emit,
@@ -300,6 +354,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     emit(_copyWithBase(state, autoSyncEnabled: event.enabled));
   }
 
+  /// 修改同步间隔
+  /// 将新间隔持久化到 SharedPreferences，若自动同步已开启则重启定时器
   Future<void> _onSyncIntervalChanged(
     SyncIntervalChanged event,
     Emitter<SyncState> emit,
@@ -314,6 +370,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     emit(_copyWithBase(state, syncInterval: event.interval));
   }
 
+  /// 启动自动同步定时器
+  /// 按指定间隔周期性触发 StartSync 事件
   void _startAutoSyncTimer(Duration interval) {
     _autoSyncTimer?.cancel();
     _autoSyncTimer = Timer.periodic(interval, (_) {
@@ -321,6 +379,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     });
   }
 
+  /// 状态拷贝辅助方法
+  /// 基于当前状态类型创建新状态，保留原有字段，仅更新指定字段
   SyncState _copyWithBase(
     SyncState base, {
     bool? autoSyncEnabled,
@@ -381,15 +441,26 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     );
   }
 
+  /// 带重试策略的异步操作包装器
+  /// - 最大重试次数: 5 次（默认 RetryPolicy 为 3 次，此处增加容错性）
+  /// - 退避策略: 指数退避（baseDelay * 2^attempt），最大延迟 30 秒
+  /// - 错误分类: 网络错误可重试，认证错误（401/403）不可重试，数据错误视情况
+  /// - 参考: go-retryablehttp 的设计模式
   Future<T> _withRetry<T>(Future<T> Function() operation, {RetryPolicy? policy}) async {
-    policy ??= const RetryPolicy();
+    policy ??= const RetryPolicy(maxRetries: 5, baseDelay: Duration(seconds: 1), maxDelay: Duration(seconds: 30));
     int attempt = 0;
     while (true) {
       try {
         return await operation();
       } catch (e) {
         attempt++;
+        // 错误类型分类：判断是否可重试
+        final errorType = _classifyError(e);
+        if (errorType == _ErrorType.nonRetryable) {
+          rethrow;
+        }
         if (attempt >= policy.maxRetries) rethrow;
+        // 指数退避: delay = baseDelay * 2^attempt
         final delay = policy.delayForAttempt(attempt - 1);
         emit(SyncRetrying(
           retryAttempt: attempt,
@@ -397,9 +468,34 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
         ));
+        developer.log('同步重试 $attempt/${policy.maxRetries}, 延迟 ${delay.inMilliseconds}ms, 错误类型: $errorType', name: 'SyncBloc');
         await Future.delayed(delay);
       }
     }
+  }
+
+  /// 错误类型分类
+  /// 参考: HTTP 标准状态码和 Dart 异常体系
+  _ErrorType _classifyError(dynamic error) {
+    final msg = error.toString().toLowerCase();
+    // 认证/授权错误不可重试
+    if (msg.contains('401') || msg.contains('403') || msg.contains('unauthorized')) {
+      return _ErrorType.nonRetryable;
+    }
+    // 客户端错误（4xx，除 401/403 外）通常不可重试
+    if (msg.contains('400') || msg.contains('404') || msg.contains('405') || msg.contains('422')) {
+      return _ErrorType.nonRetryable;
+    }
+    // 服务器错误（5xx）和网络错误可重试
+    if (msg.contains('500') || msg.contains('502') || msg.contains('503') || msg.contains('504')) {
+      return _ErrorType.serverError;
+    }
+    // 超时、连接错误可重试
+    if (msg.contains('timeout') || msg.contains('connection') || msg.contains('socket')) {
+      return _ErrorType.networkError;
+    }
+    // 未知错误默认尝试重试
+    return _ErrorType.unknown;
   }
 
   @override
@@ -408,4 +504,17 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     _serviceStateSubscription?.cancel();
     return super.close();
   }
+}
+
+/// 同步错误类型分类
+/// 借鉴: go-retryablehttp 的可重试判断逻辑
+/// - nonRetryable: 认证/授权/客户端参数错误，不应重试
+/// - serverError: 服务端临时故障（5xx），可重试
+/// - networkError: 网络层面的超时、连接失败，可重试
+/// - unknown: 未知错误，保守策略尝试重试
+enum _ErrorType {
+  nonRetryable,
+  serverError,
+  networkError,
+  unknown,
 }

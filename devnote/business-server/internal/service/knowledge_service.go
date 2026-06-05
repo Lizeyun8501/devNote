@@ -1,3 +1,10 @@
+// 知识服务 - 知识关系计算与分析
+// 借鉴: 思源笔记知识图谱 (https://github.com/siyuan-note/siyuan)
+// - 关系发现与计算
+// - 知识覆盖度分析
+// - 孤立节点检测
+// 借鉴: Obsidian Graph View (https://github.com/obsidianmd)
+// - 图谱可视化数据结构
 package service
 
 import (

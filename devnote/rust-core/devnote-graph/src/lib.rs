@@ -1,17 +1,14 @@
-//! 知识图谱引擎（基于 petgraph）
-//!
-//! ## 替换说明
-//! 原实现：自研图数据结构（HashMap<Uuid, Vec<Uuid>>）+ 手写 BFS/中心性/聚类算法
-//! 替换为：petgraph v0.7 —— Rust 最成熟的图数据结构库
-//!
-//! ## petgraph 优势
-//! - **20+ 内置算法**：Dijkstra/BFS/DFS/拓扑排序/强连通分量/PageRank 等
-//! - **多种图类型**：有向/无向/加权图，NodeIndex 高效索引
-//! - **算法正确性**：经过学术界和工业界广泛验证
-//! - **内存效率**：邻接表 + 冻结优化
-//!
-//! 来源: https://crates.io/crates/petgraph
-//! 借鉴 Obsidian 的 Graph View 数据模型和思源笔记的知识图谱算法
+//! 知识图谱引擎
+//! 
+//! 借鉴: 思源笔记双向链接和关系索引 (https://github.com/siyuan-note/siyuan)
+//! - 双向链接查询
+//! - 知识图谱可视化数据
+//! - 关系索引计算
+//! 
+//! 复用: petgraph 图算法库 (https://github.com/petgraph/petgraph)
+//! - Dijkstra 最短路径
+//! - 中心性缓存
+//! - 聚类检测
 
 use devnote_observe::instrument;
 use petgraph::algo;

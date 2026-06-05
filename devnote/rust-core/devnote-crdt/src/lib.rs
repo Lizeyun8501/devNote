@@ -1,22 +1,13 @@
-//! CRDT 冲突解决引擎
-//!
-//! ## 当前实现
-//! 自研 CRDT 实现，借鉴 AppFlowy 和 Yjs 的混合逻辑时钟（HLC）及向量时钟机制。
-//!
-//! ## 推荐的开源替代方案
-//! - **automerge** ([crates.io](https://crates.io/crates/automerge)):
-//!   成熟的 Rust CRDT 库，支持文本、列表、Map 等多种数据类型，
-//!   内置持久化和网络同步能力，性能经过大规模验证。
-//!   推荐在未来迁移时使用，可替换当前的自研 CRDT 实现。
-//! - **crates** 中还有 **lz4** 可用于 CRDT 数据压缩。
-//!
-//! 借鉴 AppFlowy 的 CRDT 实现
-//! 来源: https://github.com/AppFlowy-IO/AppFlowy
-//! 借鉴内容: HLC 混合逻辑时钟（物理时钟+逻辑计数器+节点ID）实现、向量时钟合并策略
-//!
-//! 借鉴 Yjs 的无冲突数据结构理论
-//! 来源: https://github.com/yjs/yjs
-//! 借鉴内容: RGA (Replicated Growable Array) 字符级 CRDT 文本编辑、OT/CRDT 操作变换(transform)算法
+//! CRDT 冲突合并引擎
+//! 
+//! 借鉴: AppFlowy CRDT 算法 (https://github.com/AppFlowy-IO/AppFlowy)
+//! - YATA 操作变换算法
+//! - HLC 混合逻辑时钟
+//! - VectorClock 向量时钟
+//! 
+//! 借鉴: Yjs CRDT 实现 (https://github.com/yjs/yjs)
+//! - 操作合并策略
+//! - 删除墓碑处理
 
 use devnote_observe::{instrument, warn};
 use serde::{Deserialize, Serialize};

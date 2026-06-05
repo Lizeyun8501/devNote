@@ -25,6 +25,7 @@ enum ExportRange {
 enum ExportFormat {
   markdown,
   html,
+  pdf,
 }
 
 class ExportProgress {
