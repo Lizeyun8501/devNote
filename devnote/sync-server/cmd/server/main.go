@@ -89,7 +89,9 @@ func main() {
 		Metrics: metrics,
 	}))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
-	r.Use(middleware.RateLimitMiddleware(cfg.RateLimit))
+	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
+	r.Use(rateLimitHandler)
+	defer rateLimitStop()
 
 	// Health check
 	r.GET("/health", healthHandler.Check)

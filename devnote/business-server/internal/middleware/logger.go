@@ -8,13 +8,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
-// LoggerMiddleware 创建基于 zerolog 的结构化请求日志中间件
+// LoggerMiddleware 创建基于 zap 的结构化请求日志中间件
 // 记录每个请求的方法、路径、状态码、延迟、客户端 IP 和响应体大小
-// 分级日志：4xx 客户端错误 → Warn，5xx 服务端错误 → Error，成功 → Info
-func LoggerMiddleware(logger zerolog.Logger) gin.HandlerFunc {
+func LoggerMiddleware(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
@@ -28,39 +27,24 @@ func LoggerMiddleware(logger zerolog.Logger) gin.HandlerFunc {
 		statusCode := c.Writer.Status()
 		bodySize := c.Writer.Size()
 
-		// 根据状态码选择日志级别
+		fields := []zap.Field{
+			zap.String("method", c.Request.Method),
+			zap.String("path", path),
+			zap.Int("status", statusCode),
+			zap.Duration("latency", latency),
+			zap.String("client_ip", c.ClientIP()),
+			zap.Int("body_size", bodySize),
+		}
+		if rawQuery != "" {
+			fields = append(fields, zap.String("query", rawQuery))
+		}
+
 		if statusCode >= 400 && statusCode < 500 {
-			logger.Warn().
-				Str("method", c.Request.Method).
-				Str("path", path).
-				Int("status", statusCode).
-				Dur("latency", latency).
-				Str("client_ip", c.ClientIP()).
-				Int("body_size", bodySize).
-				Msg("client error")
+			logger.Warn("client error", fields...)
 		} else if statusCode >= 500 {
-			logger.Error().
-				Str("method", c.Request.Method).
-				Str("path", path).
-				Int("status", statusCode).
-				Dur("latency", latency).
-				Str("client_ip", c.ClientIP()).
-				Int("body_size", bodySize).
-				Msg("server error")
+			logger.Error("server error", fields...)
 		} else {
-			info := logger.Info().
-				Str("method", c.Request.Method).
-				Str("path", path).
-				Int("status", statusCode).
-				Dur("latency", latency).
-				Str("client_ip", c.ClientIP()).
-				Int("body_size", bodySize)
-
-			if rawQuery != "" {
-				info = info.Str("query", rawQuery)
-			}
-
-			info.Msg("request")
+			logger.Info("request", fields...)
 		}
 	}
 }

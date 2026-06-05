@@ -236,6 +236,13 @@ class P2PService {
     _notifyListeners();
   }
 
+  /// 释放资源、取消定时器、清理监听器
+  void dispose() {
+    _discoveryTimer?.cancel();
+    _discoveryTimer = null;
+    _listeners.clear();
+  }
+
   /// 发现对等节点
   /// 优先通过 FFI 调用 Rust P2P 模块，失败时回退到 Dart 侧模拟实现
   Future<List<P2PPeerInfo>> discoverPeers() async {

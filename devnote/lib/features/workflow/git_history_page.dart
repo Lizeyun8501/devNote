@@ -28,10 +28,11 @@ class _GitHistoryPageState extends State<GitHistoryPage> {
         _commits = commits;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       setState(() {
         _loading = false;
       });
+      debugPrint('Git history load failed: $e');
     }
   }
 
@@ -42,7 +43,9 @@ class _GitHistoryPageState extends State<GitHistoryPage> {
         _diffEntries = diffs;
         _selectedCommit = commitHash;
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Git diff load failed: $e');
+    }
   }
 
   Future<void> _checkout(String hash) async {

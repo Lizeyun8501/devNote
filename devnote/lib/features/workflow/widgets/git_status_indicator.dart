@@ -26,7 +26,10 @@ class _GitStatusIndicatorState extends State<GitStatusIndicator> {
           _status = status;
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      // Git status 加载失败，静默保持空状态
+      debugPrint('Git status indicator load failed: $e');
+    }
   }
 
   @override

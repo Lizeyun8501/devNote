@@ -90,7 +90,7 @@ metrics-exporter-prometheus = "0.15"
 # devnote-plugin 从自研 wasmtime 沙箱 → extism 通用插件框架
 # devnote-graph  从自研图算法 → petgraph 专业图结构库
 # ============================================================
-extism = { version = "1", features = ["wasmtime"] }
+extism = { version = "1" }
 petgraph = "0.7"
 
 [dev-dependencies]

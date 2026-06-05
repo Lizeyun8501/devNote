@@ -78,8 +78,11 @@ func main() {
 	// Middleware
 	r.Use(middleware.SentryGin())
 	r.Use(middleware.Recovery(logger))
-	r.Use(middleware.Logger(logger))
+	r.Use(middleware.LoggerMiddleware(logger))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
+	r.Use(rateLimitHandler)
+	defer rateLimitStop()
 
 	// Health check
 	r.GET("/api/v1/health", healthHandler.Check)

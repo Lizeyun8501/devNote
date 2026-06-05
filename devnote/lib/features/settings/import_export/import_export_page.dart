@@ -99,6 +99,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
   double _exportProgress = 0.0;
   String _exportCurrentFile = '';
   bool _isExporting = false;
+  int _exportNoteCount = 0; // 从进度流中获取的实际导出笔记数
 
   @override
   void initState() {
@@ -133,6 +134,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
           _exportProgress = progress.progress;
           _exportCurrentFile = progress.currentFile;
           _isExporting = !progress.isComplete;
+          if (progress.total > 0) {
+            _exportNoteCount = progress.total;
+          }
         });
       }
     });
@@ -610,7 +614,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
             timestamp: startTime,
             format: _exportFormat.name,
             range: _exportRange.name,
-            noteCount: 0, // 实际应通过 exportService 获取准确数量
+            noteCount: _exportNoteCount,
             targetPath: '',
           ),
         );

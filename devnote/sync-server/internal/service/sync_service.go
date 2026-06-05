@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"log"
 	"time"
 
 	"github.com/devnote/sync-server/internal/model"
@@ -197,10 +198,18 @@ func (s *SyncService) updateDeviceSync(userID, deviceID string) {
 			DeviceName: deviceID,
 			LastSyncAt: time.Now(),
 		}
-		s.db.Create(&device)
-	} else if err == nil {
-		s.db.Model(&device).Updates(map[string]interface{}{
+		if createErr := s.db.Create(&device).Error; createErr != nil {
+			log.Printf("create device record failed: %v", createErr)
+			return
+		}
+	} else if err != nil {
+		log.Printf("query device failed: %v", err)
+		return
+	} else {
+		if updateErr := s.db.Model(&device).Updates(map[string]interface{}{
 			"last_sync_at": time.Now(),
-		})
+		}).Error; updateErr != nil {
+			log.Printf("update device sync time failed: %v", updateErr)
+		}
 	}
 }

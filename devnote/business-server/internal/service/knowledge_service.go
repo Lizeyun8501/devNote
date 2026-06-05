@@ -71,7 +71,9 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 		}
 
 		// Also create reverse link if it doesn't exist
-		s.ensureBidirectional(sourceNoteID, targetNoteID, relationType, weight)
+		if err := s.ensureBidirectional(sourceNoteID, targetNoteID, relationType, weight); err != nil {
+			return nil, fmt.Errorf("ensure bidirectional: %w", err)
+		}
 		return &existing, nil
 	}
 
@@ -100,20 +102,29 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 	}
 
 	// Ensure bidirectional
-	s.ensureBidirectional(sourceNoteID, targetNoteID, relationType, weight)
+	if err := s.ensureBidirectional(sourceNoteID, targetNoteID, relationType, weight); err != nil {
+		return nil, fmt.Errorf("ensure bidirectional: %w", err)
+	}
 	return rel, nil
 }
 
-func (s *KnowledgeService) ensureBidirectional(sourceNoteID, targetNoteID, relationType string, weight float64) {
+func (s *KnowledgeService) ensureBidirectional(sourceNoteID, targetNoteID, relationType string, weight float64) error {
 	var cnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=?`, targetNoteID, sourceNoteID).Scan(&cnt)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=?`, targetNoteID, sourceNoteID).Scan(&cnt)
+	if err != nil {
+		return fmt.Errorf("check existing bidirectional relation: %w", err)
+	}
 	if cnt == 0 {
 		now := time.Now().UTC()
-		s.db.Exec(`
+		_, err := s.db.Exec(`
 			INSERT INTO knowledge_relation (id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`, uuid.New().String(), targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
+		if err != nil {
+			return fmt.Errorf("insert bidirectional relation: %w", err)
+		}
 	}
+	return nil
 }
 
 // DeleteRelation removes a knowledge relation.
@@ -612,7 +623,9 @@ func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
 	if err == nil {
 		defer rows.Close()
 		if rows.Next() {
-			rows.Scan(&maxNote, &maxLinks)
+			if err := rows.Scan(&maxNote, &maxLinks); err != nil {
+				return nil, fmt.Errorf("scan max links: %w", err)
+			}
 		}
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("iterate coverage rows: %w", err)

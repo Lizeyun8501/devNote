@@ -30,7 +30,10 @@ class DatabaseService {
     if (row['options'] != null) {
       try {
         options = Map<String, dynamic>.from(jsonDecode(row['options'] as String));
-      } catch (_) {}
+      } catch (e) {
+        // JSON 解析失败时使用空 options
+        debugPrint('Failed to decode field options: $e');
+      }
     }
     return DatabaseFieldModel(
       id: row['id'] as String,
@@ -53,7 +56,10 @@ class DatabaseService {
                   value: f['value'],
                 ))
             .toList();
-      } catch (_) {}
+      } catch (e) {
+        // JSON 解析失败时使用空 filters
+        debugPrint('Failed to decode view filters: $e');
+      }
     }
     List<SortModel> sorts = [];
     if (row['sorts'] != null) {
@@ -65,7 +71,10 @@ class DatabaseService {
                   direction: s['direction'] as String,
                 ))
             .toList();
-      } catch (_) {}
+      } catch (e) {
+        // JSON 解析失败时使用空 sorts
+        debugPrint('Failed to decode view sorts: $e');
+      }
     }
     return DatabaseViewModel(
       id: row['id'] as String,
@@ -574,7 +583,10 @@ class DatabaseService {
                 _rowBlockBindings[rowId!] = blockId;
                 break;
               }
-            } catch (_) {}
+            } catch (e) {
+              // JSON 解析失败时跳过该条目，不中断整个查找过程
+              debugPrint('Failed to parse row-block binding: $e');
+            }
           }
         }
       }
@@ -592,7 +604,10 @@ class DatabaseService {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      // 数据库查询失败，回退为 null
+      debugPrint('Failed to get row by block id: $e');
+    }
 
     return null;
   }

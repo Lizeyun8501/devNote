@@ -19,6 +19,7 @@ type Config struct {
 	MaxNoteSize     int
 	PageRankDamping float64
 	PageRankIters   int
+	RateLimit       int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -46,6 +47,7 @@ func Load() *Config {
 		MaxNoteSize:     getEnvInt("MAX_NOTE_SIZE", 10485760),
 		PageRankDamping: getEnvFloat("PAGERANK_DAMPING", 0.85),
 		PageRankIters:   getEnvInt("PAGERANK_ITERS", 100),
+		RateLimit:       getEnvInt("RATE_LIMIT", 100),
 	}
 }
 

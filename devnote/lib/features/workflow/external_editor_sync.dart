@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
@@ -46,6 +47,7 @@ class ExternalEditorSyncService {
       (event) => _handleFileChange(event, notesDir),
       onError: (error) {
         // 文件监听错误处理，记录但不中断
+        debugPrint('File watcher error: $error');
       },
     );
   }

@@ -94,7 +94,10 @@ class _CanvasViewState extends State<_CanvasView> {
       if (mounted) {
         context.read<CanvasBloc>().add(LoadCanvas(canvasId));
       }
-    } catch (_) {}
+    } catch (e) {
+      // 创建画布失败，记录错误但不展示给用户（页面会显示 Bloc 错误状态）
+      debugPrint('Canvas initialization failed: $e');
+    }
   }
 
   @override

@@ -34,7 +34,10 @@ class _CommitDialogState extends State<CommitDialog> {
           _status = status;
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      // 加载 git status 失败，静默失败不阻塞 UI
+      debugPrint('Git status load failed: $e');
+    }
   }
 
   Future<void> _commit() async {

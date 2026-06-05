@@ -25,7 +25,9 @@ type visitor struct {
 // RateLimitMiddleware 创建基于令牌桶算法的速率限制中间件
 // 默认每秒 100 请求，突发容量 200
 // 针对不同端点使用差异化限制：认证端点 5/min，业务端点 30/min，健康检查 120/min
-func RateLimitMiddleware(requestsPerSecond int) gin.HandlerFunc {
+//
+// 返回 (gin.HandlerFunc, func())，第二个返回值是停止函数，用于优雅关闭时停止后台清理协程。
+func RateLimitMiddleware(requestsPerSecond int) (gin.HandlerFunc, func()) {
 	if requestsPerSecond <= 0 {
 		requestsPerSecond = 100 // 默认: 100 req/s
 	}
@@ -33,22 +35,29 @@ func RateLimitMiddleware(requestsPerSecond int) gin.HandlerFunc {
 
 	var mu sync.Mutex
 	visitors := make(map[string]*visitor)
+	done := make(chan struct{})
 
 	// 后台清理协程：每 3 分钟清理超过 3 分钟未活跃的访问者
 	go func() {
+		ticker := time.NewTicker(3 * time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(3 * time.Minute)
-			mu.Lock()
-			for ip, v := range visitors {
-				if time.Since(v.lastSeen) > 3*time.Minute {
-					delete(visitors, ip)
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				for ip, v := range visitors {
+					if time.Since(v.lastSeen) > 3*time.Minute {
+						delete(visitors, ip)
+					}
 				}
+				mu.Unlock()
 			}
-			mu.Unlock()
 		}
 	}()
 
-	return func(c *gin.Context) {
+	handler := func(c *gin.Context) {
 		// 使用 method + path + IP 作为限流键，实现按端点粒度限流
 		key := fmt.Sprintf("%s:%s:%s", c.Request.Method, c.FullPath(), c.ClientIP())
 
@@ -85,4 +94,10 @@ func RateLimitMiddleware(requestsPerSecond int) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+
+	stop := func() {
+		close(done)
+	}
+
+	return handler, stop
 }
