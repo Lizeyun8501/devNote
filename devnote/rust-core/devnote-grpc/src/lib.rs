@@ -457,7 +457,7 @@ struct DevNoteServiceHandler {
 type StreamEventsStream =
     std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<ServerEvent, Status>> + Send>>;
 
-#[tonic::async_trait]
+#[async_trait::async_trait]
 impl DevNoteService for DevNoteServiceHandler {
     type StreamEventsStream = StreamEventsStream;
 
@@ -512,7 +512,7 @@ struct SyncServiceHandlerImpl {
 type WatchChangesStream =
     std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<ChangeEvent, Status>> + Send>>;
 
-#[tonic::async_trait]
+#[async_trait::async_trait]
 impl SyncService for SyncServiceHandlerImpl {
     type WatchChangesStream = WatchChangesStream;
 

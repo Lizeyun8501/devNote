@@ -57,7 +57,7 @@ dependencies:
   # 高级数据表格 —— 替代 Flutter 内置 DataTable
   # 借鉴 pluto_grid，支持列拖拽、排序、过滤、分页、内联编辑
   # 来源: https://pub.dev/packages/pluto_grid
-  pluto_grid: ^3.1.0
+  pluto_grid: ^8.1.0
   # ============================================================
   # flutter_rust_bridge v2 —— 替代自研 FFI 桥接层
   # 自动生成类型安全的 Dart-Rust 绑定，消除手写 malloc/free 和 JSON 序列化

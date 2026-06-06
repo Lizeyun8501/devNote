@@ -36,7 +36,7 @@ chrono = { workspace = true }
 base64 = "0.22"
 parking_lot = "0.12"
 lazy_static = "1"
-sentry = "0.34"
+sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "tracing"] }
 sentry-anyhow = "0.34"
 # ============================================================
 # flutter_rust_bridge v2 —— 替代自研 C ABI FFI 桥接层
