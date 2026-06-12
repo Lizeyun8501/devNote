@@ -82,9 +82,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         options: event.options,
         formula: event.formula,
       );
-      // 添加字段后刷新数据库详情
-      final database = await _databaseService.getDatabase(event.databaseId);
-      emit(DatabaseDetailLoaded(database: database));
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -100,13 +98,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         options: event.options,
       );
       // 更新字段后刷新数据库详情，保留原有状态
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -120,13 +112,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         fieldId: event.fieldId,
       );
       // 删除字段后刷新数据库详情
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -147,13 +133,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         cells: event.cells,
       );
       // 添加成功后刷新数据库详情
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -183,13 +163,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         fieldId: event.fieldId,
         value: event.value,
       );
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -213,13 +187,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         databaseId: event.databaseId,
         rowId: event.rowId,
       );
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -244,13 +212,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         name: event.name,
         viewType: event.viewType,
       );
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -274,13 +236,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         databaseId: event.databaseId,
         viewId: event.viewId,
       );
-      final database = await _databaseService.getDatabase(event.databaseId);
-      final state = this.state;
-      if (state is DatabaseDetailLoaded) {
-        emit(state.copyWith(database: database));
-      } else {
-        emit(DatabaseDetailLoaded(database: database));
-      }
+      await _refreshDatabaseDetail(event.databaseId, emit);
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -433,5 +389,19 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
     }
 
     return result;
+  }
+
+  /// 刷新数据库详情：获取最新数据后 emit，保留 DetailLoaded 状态中的 filters/sorts
+  Future<void> _refreshDatabaseDetail(
+    String databaseId,
+    Emitter<DatabaseState> emit,
+  ) async {
+    final database = await _databaseService.getDatabase(databaseId);
+    final state = this.state;
+    if (state is DatabaseDetailLoaded) {
+      emit(state.copyWith(database: database));
+    } else {
+      emit(DatabaseDetailLoaded(database: database));
+    }
   }
 }

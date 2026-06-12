@@ -290,4 +290,9 @@ class SyncService {
   void _notifyListeners() {
     _stateController.add(_state);
   }
+
+  /// 释放资源：关闭状态流控制器
+  void dispose() {
+    _stateController.close();
+  }
 }

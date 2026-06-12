@@ -121,7 +121,8 @@ class P2PService {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_keyEnabled) ?? false;
     final signalingServer = prefs.getString(_keySignalingServer);
-    prefs.getStringList(_keyBootstrapPeers) ?? [];
+    // TODO: 将 bootstrapPeers 存储到 P2PState 并在 discoverPeers 中使用
+    final _ = prefs.getStringList(_keyBootstrapPeers) ?? [];
 
     _state = _state.copyWith(
       isEnabled: enabled,
