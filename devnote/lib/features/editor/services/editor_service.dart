@@ -116,47 +116,57 @@ class EditorService {
   Future<void> deleteBlock(String blockId) async {
     // 思源笔记风格：先从 SQLite DELETE，再更新缓存
     final db = await _db.database;
-    await db.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
 
+    // 修复：将删除和位置重排包装在事务中，确保原子性
+    // 原代码先 delete 再循环 update，如果中途某个 update 失败，
+    // 位置数据会不一致（部分块位置正确，部分不正确）
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
-        blocks.removeAt(index);
-        // 删除后重新排位，并同步写回数据库
-        for (var i = 0; i < blocks.length; i++) {
-          blocks[i] = blocks[i].copyWith(position: i);
-          await db.update(
-            'blocks',
-            {'position': i, 'updated_at': DateTime.now().toIso8601String()},
-            where: 'id = ?',
-            whereArgs: [blocks[i].id],
-          );
-        }
+        await db.transaction((txn) async {
+          await txn.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
+          blocks.removeAt(index);
+          // 删除后重新排位，在事务中批量写回数据库
+          for (var i = 0; i < blocks.length; i++) {
+            blocks[i] = blocks[i].copyWith(position: i);
+            await txn.update(
+              'blocks',
+              {'position': i, 'updated_at': DateTime.now().toIso8601String()},
+              where: 'id = ?',
+              whereArgs: [blocks[i].id],
+            );
+          }
+        });
         return;
       }
     }
+    // 如果缓存中没找到，仍然尝试从数据库删除
+    await db.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
   }
 
   Future<void> moveBlock({required String blockId, required int newPosition}) async {
     final db = await _db.database;
-    final now = DateTime.now().toIso8601String();
 
+    // 修复：将移动和位置重排包装在事务中，确保原子性
+    // 原代码循环中逐个 db.update 不在事务中，中途失败导致位置不一致
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
         final block = blocks.removeAt(index);
         final insertAt = newPosition.clamp(0, blocks.length);
         blocks.insert(insertAt, block);
-        // 移动后重新排位，并同步写回数据库
-        for (var i = 0; i < blocks.length; i++) {
-          blocks[i] = blocks[i].copyWith(position: i);
-          await db.update(
-            'blocks',
-            {'position': i, 'updated_at': now},
-            where: 'id = ?',
-            whereArgs: [blocks[i].id],
-          );
-        }
+        await db.transaction((txn) async {
+          // 移动后重新排位，在事务中批量写回数据库
+          for (var i = 0; i < blocks.length; i++) {
+            blocks[i] = blocks[i].copyWith(position: i);
+            await txn.update(
+              'blocks',
+              {'position': i, 'updated_at': DateTime.now().toIso8601String()},
+              where: 'id = ?',
+              whereArgs: [blocks[i].id],
+            );
+          }
+        });
         return;
       }
     }

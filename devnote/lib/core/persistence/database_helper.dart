@@ -6,7 +6,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 4;
+  static const _databaseVersion = 5;
 
   static Database? _database;
 
@@ -44,7 +44,8 @@ class DatabaseHelper {
         content TEXT NOT NULL DEFAULT '',
         folder_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
       )
     ''');
     await db.execute('''
@@ -53,7 +54,8 @@ class DatabaseHelper {
         name TEXT NOT NULL,
         parent_id TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
       )
     ''');
     await db.execute('''
@@ -355,6 +357,40 @@ class DatabaseHelper {
                 FOREIGN KEY (relation_id) REFERENCES object_relations_definitions(id) ON DELETE CASCADE
               )
             ''');
+            break;
+          case 5:
+            // v5: 为 notes.folder_id 和 folders.parent_id 添加 FK 约束
+            // SQLite 不支持 ALTER TABLE ADD CONSTRAINT，需要重建表
+            // 步骤：创建新表 → 复制数据 → 删除旧表 → 重命名新表
+            // folders 表先迁移（notes 依赖 folders）
+            batch.execute('''
+              CREATE TABLE folders_v5 (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                parent_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (parent_id) REFERENCES folders_v5(id) ON DELETE CASCADE
+              )
+            ''');
+            batch.execute('INSERT INTO folders_v5 SELECT * FROM folders');
+            batch.execute('DROP TABLE folders');
+            batch.execute('ALTER TABLE folders_v5 RENAME TO folders');
+            // notes 表迁移
+            batch.execute('''
+              CREATE TABLE notes_v5 (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                folder_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
+              )
+            ''');
+            batch.execute('INSERT INTO notes_v5 SELECT * FROM notes');
+            batch.execute('DROP TABLE notes');
+            batch.execute('ALTER TABLE notes_v5 RENAME TO notes');
             break;
           default:
             break;
