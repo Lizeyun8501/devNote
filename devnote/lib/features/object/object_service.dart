@@ -195,7 +195,7 @@ class ObjectService {
     );
   }
 
-  Future<ObjectModel> updateObject(String objectId, Map<String, dynamic> properties) async {
+  Future<ObjectModel?> updateObject(String objectId, Map<String, dynamic> properties) async {
     final db = await _dbHelper.database;
     final rows = await db.query('objects', where: 'id = ?', whereArgs: [objectId], limit: 1);
     if (rows.isEmpty) throw Exception('Object not found');

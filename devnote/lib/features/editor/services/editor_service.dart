@@ -223,6 +223,7 @@ class EditorService {
     final blocks = <BlockModel>[];
     var position = 0;
     var i = 0;
+    final now = DateTime.now();
 
     while (i < lines.length) {
       final line = lines[i];
@@ -242,6 +243,8 @@ class EditorService {
           content: codeLines.join('\n'),
           position: position,
           language: language,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -252,6 +255,8 @@ class EditorService {
           blockType: BlockType.heading6,
           content: line.substring(7),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -262,6 +267,8 @@ class EditorService {
           blockType: BlockType.heading5,
           content: line.substring(6),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -272,6 +279,8 @@ class EditorService {
           blockType: BlockType.heading4,
           content: line.substring(5),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -282,6 +291,8 @@ class EditorService {
           blockType: BlockType.heading3,
           content: line.substring(4),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -292,6 +303,8 @@ class EditorService {
           blockType: BlockType.heading2,
           content: line.substring(3),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -302,6 +315,8 @@ class EditorService {
           blockType: BlockType.heading1,
           content: line.substring(2),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -318,6 +333,8 @@ class EditorService {
           blockType: BlockType.quote,
           content: quoteLines.join('\n'),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
       } else if (line.startsWith('- ') || line.startsWith('* ')) {
@@ -333,6 +350,8 @@ class EditorService {
           blockType: BlockType.list,
           content: listLines.join('\n'),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
       } else if (line.trim().isEmpty) {
@@ -356,6 +375,8 @@ class EditorService {
           blockType: BlockType.paragraph,
           content: paragraphLines.join('\n'),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
       }
@@ -390,6 +411,7 @@ class EditorService {
 
   /// 从 sqflite 行数据还原 BlockModel
   BlockModel _rowToBlock(Map<String, dynamic> row) {
+    final now = DateTime.now();
     return BlockModel(
       id: row['id'] as String,
       noteId: row['note_id'] as String,
@@ -400,6 +422,16 @@ class EditorService {
       content: (row['content'] as String?) ?? '',
       position: (row['position'] as int?) ?? 0,
       language: row['language'] as String?,
+      createdAt: _parseDate(row['created_at']) ?? now,
+      updatedAt: _parseDate(row['updated_at']) ?? now,
     );
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value;
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    if (value is String) return DateTime.tryParse(value);
+    return null;
   }
 }

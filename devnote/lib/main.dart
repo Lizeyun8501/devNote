@@ -15,7 +15,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/theme/app_theme.dart';
 import 'package:devnote/core/router/app_router.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
@@ -24,7 +24,6 @@ import 'package:devnote/core/observability/sentry_config.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
-import 'package:devnote/core/i18n/app_localizations.dart' show LocaleProvider;
 import 'package:devnote/core/platform/platform_channel.dart';
 
 void main() async {

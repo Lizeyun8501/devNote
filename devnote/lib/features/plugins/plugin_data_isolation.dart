@@ -112,7 +112,7 @@ class PluginDataIsolator {
     final logKey = _buildLogKey(pluginId);
 
     final raw = prefs.getString(logKey);
-    final List<Map<String, dynamic>> logs;
+    List<Map<String, dynamic>> logs;
 
     if (raw == null) {
       logs = [];

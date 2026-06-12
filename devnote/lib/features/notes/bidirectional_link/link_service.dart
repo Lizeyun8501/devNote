@@ -93,7 +93,7 @@ class BidirectionalLinkService {
 
   /// 获取所有文件夹 ID —— 通过 FolderRepository 获取真实数据
   Future<List<String>> _getAllNoteFolders() async {
-    final folders = await _folderRepository.listFolders();
+    final folders = await _folderRepository.listFolders(null);
     return folders.map((f) => f.id).toList();
   }
 }

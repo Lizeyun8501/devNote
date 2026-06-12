@@ -25,7 +25,8 @@ class NotesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dbHelper = DatabaseHelper();
+    // 修复: 使用 getIt 中的单例 DatabaseHelper,避免每次 rebuild 创建新实例
+    final dbHelper = getIt<DatabaseHelper>();
     return MultiBlocProvider(
       providers: [
         BlocProvider(

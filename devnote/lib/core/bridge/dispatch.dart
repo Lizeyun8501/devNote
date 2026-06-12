@@ -17,15 +17,18 @@ import 'dart:convert';
 import 'dart:developer';
 import 'dart:typed_data';
 
-import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/error.dart';
+import 'package:devnote/core/bridge/ffi_bridge.dart';
+// 修复: 不要在本文件定义 getIt,直接使用 injection.dart 中的实例
+// 旧代码在 dispatch.dart 顶层声明 getIt,与 injection.dart 的 getIt 冲突,导致
+// 多个 service 文件 ambiguous import
+// ignore: unused_import
+import 'package:devnote/core/di/injection.dart' as di;
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/block_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 import 'package:devnote/core/persistence/models/tag_model.dart';
 import 'package:get_it/get_it.dart';
-
-final getIt = GetIt.instance;
 
 /// FRB Dispatch —— 替代原 Event-Dispatch 模式
 ///
@@ -38,7 +41,8 @@ final getIt = GetIt.instance;
 /// - 无需手动管理 payload 编码
 /// - IDE 自动补全和重构支持
 class Dispatch {
-  FFIBridge get _bridge => getIt<FFIBridge>();
+  // 修复: 显式使用 injection.dart 中的 getIt
+  FFIBridge get _bridge => di.getIt<FFIBridge>();
 
   // ============================================================
   // 笔记操作 —— 替代原 NoteEvent.* 事件路由
@@ -255,12 +259,14 @@ class Dispatch {
   /// 迁移方法：将 asyncRequest('XxxEvent.Yyy', payload: ...) 替换为
   /// 对应的类型安全方法如 dispatch.createNote(title: ..., content: ..., folderId: ...)
   @Deprecated('Use type-safe methods instead of Event-Dispatch strings')
-  Future<FlowyResult> asyncRequest(String event, {Uint8List? payload}) async {
+  Future<LegacyFlowyResult> asyncRequest(String event, {Uint8List? payload}) async {
     try {
       final result = await _dispatchLegacy(event, payload);
-      return FlowyResult.success(result);
+      return Success<Uint8List, FlowyInternalError>(result);
     } catch (e) {
-      return FlowyResult.failure(FlowyInternalError(message: e.toString()));
+      return Failure<Uint8List, FlowyInternalError>(
+        FlowyInternalError(message: e.toString(), code: 0),
+      );
     }
   }
 
@@ -365,33 +371,12 @@ class Dispatch {
   }
 }
 
-/// 兼容类型 —— 保持原有 FlowyResult 接口
-///
-/// 新代码请使用 `error.dart` 中的 `FlowyResult<S, F>` 密封类，
-/// 提供编译时穷举检查和泛型类型安全。
-/// 此版本仅用于 asyncRequest 旧 API 的向后兼容。
-class FlowyResult {
-  final Uint8List? data;
-  final FlowyInternalError? error;
-
-  FlowyResult.success(this.data) : error = null;
-  FlowyResult.failure(this.error) : data = null;
-
-  T when<T>({
-    required T Function(Uint8List data) success,
-    required T Function(FlowyInternalError error) failure,
-  }) {
-    if (error != null) return failure(error!);
-    return success(data ?? Uint8List(0));
-  }
-}
-
-/// 兼容类型 —— 保持原有 FlowyInternalError 接口
-///
-/// 新代码请使用 `error.dart` 中的 `FlowyInternalError` 类，
-/// 支持 `FFIStatusCode` 枚举和 `fromCode()` 工厂方法。
-/// 此版本仅用于 asyncRequest 旧 API 的向后兼容。
-class FlowyInternalError {
-  final String message;
-  FlowyInternalError({required this.message});
-}
+// 修复: 移除 dispatch.dart 内部重复定义的 FlowyResult / FlowyInternalError
+// 旧代码在 dispatch.dart 顶层声明非泛型 FlowyResult,与 error.dart 中
+// 密封类 FlowyResult<S, F> 冲突,导致所有 import dispatch.dart 的文件
+// 都出现 ambiguous_import 错误。
+// 兼容方案: 在本文件中以别名方式提供旧版非泛型 FlowyResult,
+// 避免改动所有使用方 (canvas_service.dart 等)。
+// 新代码请直接使用 error.dart 中的 FlowyResult<S, F>。
+typedef LegacyFlowyResult = FlowyResult<Uint8List, FlowyInternalError>;
+typedef LegacyFlowyInternalError = FlowyInternalError;

@@ -1,5 +1,21 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:typed_data';
+
+/// FFI C 结构体 —— 用于 native 库返回的响应
+///
+/// 修复: 旧 grpc_bridge.dart / websocket_bridge.dart 引用了 FFIResponseC,
+/// 但实际从未定义,导致编译失败。添加最小的 C struct 兼容层,
+/// 仅用于满足 typedef 引用,不参与实际数据传输。
+base class FFIResponseC extends Struct {
+  external Pointer<Uint8> data;
+  @Size()
+  external int data_len;
+  @Int32()
+  external int code;
+  // 兼容层: 旧代码通过 .ref.message (Pointer<Uint8>) 访问响应内容
+  external Pointer<Uint8> message;
+}
 
 class FFIResponse {
   final int code;

@@ -113,12 +113,19 @@ class GrpcBridge {
 
   FFIResponse _readResponse(Pointer<FFIResponseC> ptr) {
     final code = ptr.ref.code;
-    final message = ptr.ref.message.toDartString();
+    // 修复: 原代码对 Pointer<Uint8> 调用 toDartString() 不存在,改为 cast 到 Pointer<Utf8>
+    final message = ptr.ref.message.cast<Utf8>().toDartString();
     final dataPtr = ptr.ref.data;
 
     Uint8List? data;
     if (dataPtr != nullptr) {
-      data = Uint8List.fromList(dataPtr.toDartString().codeUnits);
+      // 修复: 原代码将字节流误用 toDartString 后取 codeUnits,
+      // 正确做法是按 data_len 长度复制字节
+      final length = ptr.ref.data_len;
+      data = Uint8List(length);
+      for (var i = 0; i < length; i++) {
+        data[i] = dataPtr.elementAt(i).value;
+      }
     }
 
     return FFIResponse(code: code, message: message, data: data);

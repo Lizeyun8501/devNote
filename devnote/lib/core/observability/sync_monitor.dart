@@ -57,6 +57,7 @@
 /// ```
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 // 借鉴 OpenTelemetry Dart SDK —— 来源: https://pub.dev/packages/opentelemetry
@@ -431,7 +432,8 @@ class OTelMeterProvider {
         try {
           final request = await client.postUrl(uri);
           request.headers.set('Content-Type', 'application/json');
-          request.write(metrics.toString());
+          // 修复: 使用 jsonEncode 生成合法 JSON,原 Map.toString() 不是 JSON
+          request.write(jsonEncode(metrics));
           await request.close().timeout(exporterConfig!.exportTimeout);
         } finally {
           client.close();

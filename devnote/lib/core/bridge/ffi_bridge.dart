@@ -19,6 +19,7 @@
 
 import 'dart:convert';
 import 'dart:developer';
+import 'dart:ffi';
 import 'dart:typed_data';
 
 // ============================================================
@@ -95,29 +96,42 @@ class FFIBridge {
   ///   final api = DevNoteApi();
   ///   await api.initEngines();
   ///   _frbApi = api;
+  /// 初始化 FRB 桥接
+  ///
+  /// 注意：当前项目尚未运行 `flutter_rust_bridge_codegen generate` 生成
+  /// `DevNoteApi`/`RustApi`，所以 init() 只能做"符号存在性"检查。
+  /// 修复：避免使用不存在的 `RustApi()` 构造，改为通过 `DynamicLibrary.open`
+  /// 检查 native 库是否存在；不可用时抛错由 main() 捕获并 graceful degradation。
   Future<void> init() async {
     try {
-      // FRB v2 初始化 —— 替代原 DynamicLibrary.open + lookupFunction
-      // FRB v2 正确模式: 直接构造 FRB codegen 生成的 API 类
-      // TODO(codegen): 运行 flutter_rust_bridge_codegen generate 后，
-      //   取消下方注释并删除 placeholder:
-      //   final api = DevNoteApi();
-      //   _frbApi = api;
-      //   await _frbApi.initEngines();
-      //
-      // 当前 placeholder: 使用 RustApi 基类初始化（FRB v2 标准模式）
-      // RustApi 是 FRB v2 所有生成 API 的基类，构造时自动加载 native 库
-      final api = RustApi();
-      _frbApi = api;
-
-      // 调用 Rust 端 initEngines() —— 替代原 devnote_init + register_all_handlers
-      await _frbApi.initEngines();
-
+      // 尝试加载 native 库 —— 不存在时（如未运行 codegen）init 失败
+      try {
+        // ignore: avoid_dynamic_calls
+        final dylib = _openNativeLibrary();
+        if (dylib == null) {
+          throw StateError('Native library not found');
+        }
+      } catch (e) {
+        _isAvailable = false;
+        _frbApi = null;
+        rethrow;
+      }
       _isAvailable = true;
     } catch (e) {
       _isAvailable = false;
       _frbApi = null;
       rethrow;
+    }
+  }
+
+  /// 子类可重写此方法提供自定义的 DynamicLibrary 加载策略
+  // ignore: avoid_dynamic_calls
+  DynamicLibrary? _openNativeLibrary() {
+    try {
+      // 默认实现：尝试加载 libdevnote_ffi.so
+      return DynamicLibrary.open('libdevnote_ffi.so');
+    } catch (_) {
+      return null;
     }
   }
 
@@ -434,6 +448,9 @@ class FFIBridge {
     if (obj is Map) return Map<String, dynamic>.from(obj);
     // FRB 生成的类有 toJson() 方法
     try {
+      if (obj is Function || obj is String || obj is num || obj is bool) {
+        return {'value': obj};
+      }
       final json = (obj as dynamic).toJson();
       return Map<String, dynamic>.from(json as Map);
     } catch (e) {
