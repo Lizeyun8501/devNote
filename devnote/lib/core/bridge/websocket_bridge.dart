@@ -74,14 +74,17 @@ class WebSocketBridge {
   }
 
   /// Connect to a WebSocket server
+  /// 修复：添加 try-finally 确保 FFI 分配的内存即使异常也能释放
   FFIResponse connect(String url) {
     final urlPtr = url.toNativeUtf8();
-    final responsePtr = devnoteWsConnect(urlPtr);
-    malloc.free(urlPtr);
-
-    final response = _readResponse(responsePtr);
-    devnoteDestroy(responsePtr);
-    return response;
+    try {
+      final responsePtr = devnoteWsConnect(urlPtr);
+      final response = _readResponse(responsePtr);
+      devnoteDestroy(responsePtr);
+      return response;
+    } finally {
+      malloc.free(urlPtr);
+    }
   }
 
   /// Disconnect from the WebSocket server
@@ -93,14 +96,17 @@ class WebSocketBridge {
   }
 
   /// Send a message via WebSocket
+  /// 修复：添加 try-finally 确保 FFI 分配的内存即使异常也能释放
   FFIResponse send(String message) {
     final msgPtr = message.toNativeUtf8();
-    final responsePtr = devnoteWsSend(msgPtr);
-    malloc.free(msgPtr);
-
-    final response = _readResponse(responsePtr);
-    devnoteDestroy(responsePtr);
-    return response;
+    try {
+      final responsePtr = devnoteWsSend(msgPtr);
+      final response = _readResponse(responsePtr);
+      devnoteDestroy(responsePtr);
+      return response;
+    } finally {
+      malloc.free(msgPtr);
+    }
   }
 
   /// Send a JSON message via WebSocket

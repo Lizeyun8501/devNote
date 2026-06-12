@@ -91,9 +91,21 @@ class BidirectionalLinkService {
     return null;
   }
 
-  /// 获取所有文件夹 ID —— 通过 FolderRepository 获取真实数据
+  /// 获取所有文件夹 ID —— 递归获取包括子文件夹在内的所有文件夹
+  /// 修复：原代码只调用 listFolders(null) 获取根文件夹，遗漏了所有子文件夹，
+  /// 导致反向链接查找不完整，子文件夹中的笔记永远不会被搜索到
   Future<List<String>> _getAllNoteFolders() async {
-    final folders = await _folderRepository.listFolders(null);
-    return folders.map((f) => f.id).toList();
+    final allIds = <String>[];
+    await _collectFolderIdsRecursive(null, allIds);
+    return allIds;
+  }
+
+  /// 递归收集所有文件夹 ID
+  Future<void> _collectFolderIdsRecursive(String? parentId, List<String> ids) async {
+    final folders = await _folderRepository.listFolders(parentId);
+    for (final folder in folders) {
+      ids.add(folder.id);
+      await _collectFolderIdsRecursive(folder.id, ids);
+    }
   }
 }

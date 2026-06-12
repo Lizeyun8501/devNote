@@ -75,14 +75,17 @@ class GrpcBridge {
   }
 
   /// Connect to a gRPC server
+  /// 修复：添加 try-finally 确保 FFI 分配的内存即使异常也能释放
   FFIResponse connect(String serverAddr) {
     final addrPtr = serverAddr.toNativeUtf8();
-    final responsePtr = devnoteGrpcConnect(addrPtr);
-    malloc.free(addrPtr);
-
-    final response = _readResponse(responsePtr);
-    devnoteDestroy(responsePtr);
-    return response;
+    try {
+      final responsePtr = devnoteGrpcConnect(addrPtr);
+      final response = _readResponse(responsePtr);
+      devnoteDestroy(responsePtr);
+      return response;
+    } finally {
+      malloc.free(addrPtr);
+    }
   }
 
   /// Disconnect from the gRPC server
@@ -94,20 +97,21 @@ class GrpcBridge {
   }
 
   /// Dispatch a request via gRPC
+  /// 修复：添加 try-finally 确保 FFI 分配的内存即使异常也能释放
   FFIResponse dispatch(String method, {String? payload}) {
     final methodPtr = method.toNativeUtf8();
     final payloadPtr = payload?.toNativeUtf8() ?? nullptr;
-
-    final responsePtr = devnoteGrpcDispatch(methodPtr, payloadPtr);
-
-    malloc.free(methodPtr);
-    if (payloadPtr != nullptr) {
-      malloc.free(payloadPtr);
+    try {
+      final responsePtr = devnoteGrpcDispatch(methodPtr, payloadPtr);
+      final response = _readResponse(responsePtr);
+      devnoteDestroy(responsePtr);
+      return response;
+    } finally {
+      malloc.free(methodPtr);
+      if (payloadPtr != nullptr) {
+        malloc.free(payloadPtr);
+      }
     }
-
-    final response = _readResponse(responsePtr);
-    devnoteDestroy(responsePtr);
-    return response;
   }
 
   FFIResponse _readResponse(Pointer<FFIResponseC> ptr) {
