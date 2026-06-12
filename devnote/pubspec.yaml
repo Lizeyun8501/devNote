@@ -23,7 +23,7 @@ dependencies:
   path_provider: ^2.1.5
   path: ^1.9.0
   sqflite: ^2.4.1
-  intl: ^0.20.2
+  intl: ^0.19.0
   ffi: ^2.1.4
   web_socket_channel: ^3.0.1
   flutter_math_fork: ^0.7.2
@@ -57,7 +57,7 @@ dependencies:
   # 高级数据表格 —— 替代 Flutter 内置 DataTable
   # 借鉴 pluto_grid，支持列拖拽、排序、过滤、分页、内联编辑
   # 来源: https://pub.dev/packages/pluto_grid
-  pluto_grid: ^8.1.0
+  pluto_grid: ^8.0.0
   # ============================================================
   # flutter_rust_bridge v2 —— 替代自研 FFI 桥接层
   # 自动生成类型安全的 Dart-Rust 绑定，消除手写 malloc/free 和 JSON 序列化
