@@ -42,32 +42,39 @@ final class NotesLoaded extends NotesState {
     this.loadMoreError,
   });
 
+  /// 修复：copyWith 使用 _Sentinel 模式支持清除 nullable 字段
+  /// 原代码 `searchQuery ?? this.searchQuery` 无法传 null 清除字段，
+  /// 例如清除搜索时调用 copyWith(searchQuery: null) 实际不会清除，
+  /// 因为 null ?? this.searchQuery 仍返回旧值
   NotesLoaded copyWith({
     List<NoteModel>? notes,
-    String? selectedNoteId,
-    String? searchQuery,
-    String? filterTagId,
-    String? filterFolderId,
+    Object? selectedNoteId = _sentinel,
+    Object? searchQuery = _sentinel,
+    Object? filterTagId = _sentinel,
+    Object? filterFolderId = _sentinel,
     NoteSortBy? sortBy,
     NoteViewMode? viewMode,
     bool? hasMore,
     int? currentPage,
-    String? loadMoreError,
+    Object? loadMoreError = _sentinel,
   }) {
     return NotesLoaded(
       notes: notes ?? this.notes,
-      selectedNoteId: selectedNoteId ?? this.selectedNoteId,
-      searchQuery: searchQuery ?? this.searchQuery,
-      filterTagId: filterTagId ?? this.filterTagId,
-      filterFolderId: filterFolderId ?? this.filterFolderId,
+      selectedNoteId: selectedNoteId == _sentinel ? this.selectedNoteId : selectedNoteId as String?,
+      searchQuery: searchQuery == _sentinel ? this.searchQuery : searchQuery as String?,
+      filterTagId: filterTagId == _sentinel ? this.filterTagId : filterTagId as String?,
+      filterFolderId: filterFolderId == _sentinel ? this.filterFolderId : filterFolderId as String?,
       sortBy: sortBy ?? this.sortBy,
       viewMode: viewMode ?? this.viewMode,
       hasMore: hasMore ?? this.hasMore,
       currentPage: currentPage ?? this.currentPage,
-      loadMoreError: loadMoreError ?? this.loadMoreError,
+      loadMoreError: loadMoreError == _sentinel ? this.loadMoreError : loadMoreError as String?,
     );
   }
 }
+
+/// Sentinel 值用于区分"未传参"和"显式传 null"
+const _sentinel = Object();
 
 final class NotesError extends NotesState {
   final String message;

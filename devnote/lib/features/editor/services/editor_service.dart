@@ -198,11 +198,14 @@ class EditorService {
   
 
   /// 将块列表持久化到 SQLite（思源笔记风格：先清空再批量插入）
+  /// 修复：将 DELETE + INSERT 包装在事务中，确保原子性
+  /// 原代码先 DELETE 再 INSERT 不在事务中，如果 INSERT 中途失败，
+  /// 所有旧数据已被删除，导致笔记内容完全丢失
   Future<void> _persistBlocks(String noteId, List<BlockModel> blocks) async {
     final db = await _db.database;
     final now = DateTime.now().toIso8601String();
-    await db.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
     await db.transaction((txn) async {
+      await txn.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
       for (final block in blocks) {
         await txn.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
       }

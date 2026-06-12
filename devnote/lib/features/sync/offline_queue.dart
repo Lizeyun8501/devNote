@@ -14,6 +14,10 @@ class OfflineOperation {
 
 class OfflineQueue {
   final List<OfflineOperation> _pendingOperations = [];
+  /// 修复：添加最大重试次数限制
+  /// 原代码 drainQueue 中失败的操作永远重新入队，没有退出机制，
+  /// 导致持久性网络故障时队列无限增长，反复重试浪费资源
+  static const int _maxRetries = 5;
 
   List<OfflineOperation> get pendingOperations =>
       List.unmodifiable(_pendingOperations);
@@ -41,8 +45,14 @@ class OfflineQueue {
       try {
         await replayFn(op.event);
       } catch (_) {
-        // 重放失败时重新入队，保留待重试
-        _pendingOperations.add(op);
+        // 重放失败时重新入队，但增加重试计数
+        final retryCount = _pendingOperations
+            .where((o) => o.event == op.event)
+            .length;
+        if (retryCount < _maxRetries) {
+          _pendingOperations.add(op);
+        }
+        // 超过最大重试次数的操作被丢弃，避免无限重试
       }
     }
   }
