@@ -581,7 +581,7 @@ class DatabaseService {
               final data = jsonDecode(raw) as Map<String, dynamic>;
               if (data['blockId'] == blockId) {
                 rowId = data['rowId'] as String;
-                _rowBlockBindings[rowId!] = blockId;
+                _rowBlockBindings[rowId] = blockId;
                 break;
               }
             } catch (e) {

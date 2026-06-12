@@ -20,7 +20,6 @@
 /// - 适用于大文件的小范围修改场景（如文档同步）
 /// - 配合端到端加密使用，在加密前执行增量计算
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 /// Rdiff 块签名 —— 包含弱哈希和强哈希
@@ -226,19 +225,7 @@ class RdiffService {
   /// - blockLen: 窗口大小
   ///
   /// 返回: (newSum1, newSum2)
-  (int, int) _rollWeakChecksum(
-    int oldSum1,
-    int oldSum2,
-    int outByte,
-    int inByte,
-    int blockLen,
-  ) {
-    int newSum1 = (oldSum1 - outByte + inByte) % _checksumModulus;
-    if (newSum1 < 0) newSum1 += _checksumModulus;
-    int newSum2 = (oldSum2 - blockLen * outByte + newSum1) % _checksumModulus;
-    if (newSum2 < 0) newSum2 += _checksumModulus;
-    return (newSum1, newSum2);
-  }
+  
 
   /// 计算数据块的强哈希（简化版 MD5-like 哈希）
   ///

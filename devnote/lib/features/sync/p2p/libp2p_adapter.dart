@@ -434,9 +434,8 @@ class LibP2PAdapter {
             _callRustWebRTC('webrtc_add_ice_candidate', {
               'peer_id': peerId,
               'candidate': candidateJson,
-            }).catchError((_) {
+            }).catchError((_) => <String, dynamic>{});
               // ICE 候选添加失败，忽略（Trickle ICE 允许部分失败）
-            });
           }
           break;
 
@@ -981,10 +980,10 @@ class LibP2PAdapter {
       // 通过 FFI 关闭 PeerConnection 和 DataChannel
       await _callRustWebRTC('webrtc_datachannel_close', {
         'peer_id': peerId,
-      }).catchError((_) {});
+      }).catchError((_) => <String, dynamic>{});
       await _callRustWebRTC('webrtc_peerconnection_close', {
         'peer_id': peerId,
-      }).catchError((_) {});
+      }).catchError((_) => <String, dynamic>{});
 
       if (_peers.containsKey(peerId)) {
         _peers[peerId] = _peers[peerId]!.copyWith(

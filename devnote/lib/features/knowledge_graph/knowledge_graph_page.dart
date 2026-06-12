@@ -21,7 +21,6 @@
 /// - 仍保留 BLoC 架构（GraphBloc + GraphEvent + GraphState）
 /// - 仍保留 GraphFilterPanel 侧边栏
 
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:graphview/GraphView.dart';
@@ -31,7 +30,6 @@ import 'package:devnote/features/knowledge_graph/bloc/graph_state.dart';
 import 'package:devnote/features/knowledge_graph/graph_service.dart';
 import 'package:devnote/features/knowledge_graph/widgets/graph_node_widget.dart';
 import 'package:devnote/features/knowledge_graph/widgets/graph_filter_panel.dart';
-import 'package:go_router/go_router.dart';
 
 class KnowledgeGraphPage extends StatelessWidget {
   const KnowledgeGraphPage({super.key});

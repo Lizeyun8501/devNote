@@ -226,7 +226,6 @@ class ImportService {
     }
 
     // 创建笔记
-    final now = DateTime.now();
     final note = NoteModel(
       id: _uuid.v4(),
       title: parsed.title,

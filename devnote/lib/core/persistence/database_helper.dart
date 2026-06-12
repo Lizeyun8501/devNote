@@ -222,19 +222,7 @@ class DatabaseHelper {
     }
   }
 
-  Future<void> _restoreFromBackup(String backupPath) async {
-    final dbPath = await getDatabasesPath();
-    final originalPath = join(dbPath, _databaseName);
-    try {
-      final backupFile = File(backupPath);
-      if (await backupFile.exists()) {
-        await backupFile.copy(originalPath);
-        developer.log('Migration restored from backup: $backupPath', name: 'DatabaseHelper');
-      }
-    } catch (e) {
-      developer.log('Could not restore from backup', name: 'DatabaseHelper', error: e);
-    }
-  }
+  
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     await _backupBeforeMigration();

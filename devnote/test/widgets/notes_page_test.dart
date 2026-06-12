@@ -7,9 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/notes/bloc/notes_bloc.dart';
-import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/features/notes/bloc/folder_bloc.dart';
-import 'package:devnote/features/notes/bloc/folder_state.dart';
 import 'package:devnote/features/notes/bloc/folder_event.dart'; // 修复: 添加 LoadFolders 导入
 import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';

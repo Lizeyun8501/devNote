@@ -57,7 +57,6 @@ class _SettingsPageState extends State<SettingsPage> {
       if (result is Success<Uint8List, FlowyInternalError>) {
         if (!mounted) return;
         final decoded = String.fromCharCodes(result.value);
-        final List<dynamic> flags = [];
         // Parse the JSON response
         try {
           final parsed = _parseJsonList(decoded);

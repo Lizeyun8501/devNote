@@ -141,10 +141,6 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
         emit(const DatabaseError('数据库ID不能为空'));
         return;
       }
-      if (event.cells == null) {
-        emit(const DatabaseError('单元格数据不能为空'));
-        return;
-      }
 
       await _databaseService.addRow(
         databaseId: event.databaseId,
@@ -153,11 +149,6 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
       // 添加成功后刷新数据库详情
       final database = await _databaseService.getDatabase(event.databaseId);
       final state = this.state;
-      // 结果验证：确保数据库对象不为空
-      if (database == null) {
-        emit(const DatabaseError('获取数据库详情失败'));
-        return;
-      }
       if (state is DatabaseDetailLoaded) {
         emit(state.copyWith(database: database));
       } else {
@@ -194,11 +185,6 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
       );
       final database = await _databaseService.getDatabase(event.databaseId);
       final state = this.state;
-      // 结果验证：确保数据库对象不为空
-      if (database == null) {
-        emit(const DatabaseError('获取数据库详情失败'));
-        return;
-      }
       if (state is DatabaseDetailLoaded) {
         emit(state.copyWith(database: database));
       } else {
@@ -229,11 +215,6 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
       );
       final database = await _databaseService.getDatabase(event.databaseId);
       final state = this.state;
-      // 结果验证：确保数据库对象不为空
-      if (database == null) {
-        emit(const DatabaseError('获取数据库详情失败'));
-        return;
-      }
       if (state is DatabaseDetailLoaded) {
         emit(state.copyWith(database: database));
       } else {
@@ -265,11 +246,6 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
       );
       final database = await _databaseService.getDatabase(event.databaseId);
       final state = this.state;
-      // 结果验证：确保数据库对象不为空
-      if (database == null) {
-        emit(const DatabaseError('获取数据库详情失败'));
-        return;
-      }
       if (state is DatabaseDetailLoaded) {
         emit(state.copyWith(database: database));
       } else {
@@ -300,11 +276,6 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
       );
       final database = await _databaseService.getDatabase(event.databaseId);
       final state = this.state;
-      // 结果验证：确保数据库对象不为空
-      if (database == null) {
-        emit(const DatabaseError('获取数据库详情失败'));
-        return;
-      }
       if (state is DatabaseDetailLoaded) {
         emit(state.copyWith(database: database));
       } else {
@@ -389,11 +360,11 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
     List<SortModel> sorts,
   ) {
     // 输入验证：空数组直接返回
-    if (rows == null || rows.isEmpty) return <DatabaseRowModel>[];
+    if (rows.isEmpty) return <DatabaseRowModel>[];
     var result = rows.toList();
 
     // 过滤阶段：按条件逐行筛选
-    if (filters != null && filters.isNotEmpty) {
+    if (filters.isNotEmpty) {
       for (final filter in filters) {
         result = result.where((row) {
           final cell = row.cells.firstWhere(
@@ -428,7 +399,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
     }
 
     // 排序阶段：按排序规则逐字段排序
-    if (sorts != null && sorts.isNotEmpty) {
+    if (sorts.isNotEmpty) {
       result.sort((a, b) {
         for (final sort in sorts) {
           final aCell = a.cells.firstWhere(

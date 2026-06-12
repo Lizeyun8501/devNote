@@ -28,7 +28,6 @@ import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/block_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 import 'package:devnote/core/persistence/models/tag_model.dart';
-import 'package:get_it/get_it.dart';
 
 /// FRB Dispatch —— 替代原 Event-Dispatch 模式
 ///

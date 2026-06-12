@@ -1,8 +1,4 @@
-import 'dart:convert';
-
 import 'package:uuid/uuid.dart';
-import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/ffi_request.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 
@@ -22,7 +18,6 @@ import 'package:devnote/core/persistence/database_helper.dart';
 class EditorService {
   final _uuid = const Uuid();
   final DatabaseHelper _db = DatabaseHelper();
-  final FFIBridge _ffi = FFIBridge();
 
   /// 内存缓存：noteId → [BlockModel, ...]
   /// UI 从缓存读取以获得即时响应，持久化由 SQLite 保证。
@@ -177,13 +172,7 @@ class EditorService {
     return null;
   }
 
-  BlockType _parseBlockType(String? name) {
-    if (name == null) return BlockType.paragraph;
-    return BlockType.values.firstWhere(
-      (e) => e.name == name,
-      orElse: () => BlockType.paragraph,
-    );
-  }
+  
 
   /// 将块列表持久化到 SQLite（思源笔记风格：先清空再批量插入）
   Future<void> _persistBlocks(String noteId, List<BlockModel> blocks) async {

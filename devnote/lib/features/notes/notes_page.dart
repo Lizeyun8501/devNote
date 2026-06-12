@@ -14,7 +14,6 @@ import 'package:devnote/features/notes/bloc/folder_state.dart';
 import 'package:devnote/features/notes/widgets/folder_tree.dart';
 import 'package:devnote/features/notes/widgets/note_list.dart';
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
-import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/sync_status_widget.dart';
 

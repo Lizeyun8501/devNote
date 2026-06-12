@@ -704,7 +704,7 @@ class _LearningProgressPageState extends State<LearningProgressPage> {
                           Expanded(
                             child: OutlinedButton(
                               onPressed: () {
-                                _deleteGoal(existingGoal!);
+                                _deleteGoal(existingGoal);
                                 Navigator.pop(sheetContext);
                               },
                               style: OutlinedButton.styleFrom(
@@ -751,7 +751,7 @@ class _LearningProgressPageState extends State<LearningProgressPage> {
       setState(() {
         if (isEditing) {
           // 更新现有目标
-          final index = _goals.indexWhere((g) => g.id == existingGoal!.id);
+          final index = _goals.indexWhere((g) => g.id == existingGoal.id);
           if (index >= 0) {
             _goals[index] = _goals[index].copyWith(
               title: result['title'] as String,

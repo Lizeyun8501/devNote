@@ -60,9 +60,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-// 借鉴 OpenTelemetry Dart SDK —— 来源: https://pub.dev/packages/opentelemetry
-// 使用 OTel API 和 SDK 中的类型（Attributes、Resource 等）
-import 'package:opentelemetry/api.dart' as otel_api;
 import 'package:opentelemetry/sdk.dart' as otel_sdk;
 
 // ==================== OpenTelemetry 指标仪器实现 ====================

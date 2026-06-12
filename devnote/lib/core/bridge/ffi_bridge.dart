@@ -17,10 +17,8 @@
 /// 版本: v2.12.0
 /// Flutter Favorite: ✅
 
-import 'dart:convert';
 import 'dart:developer';
 import 'dart:ffi';
-import 'dart:typed_data';
 
 // ============================================================
 // FRB 生成的绑定导入
@@ -31,7 +29,6 @@ import 'dart:typed_data';
 //   取消下方注释并删除 flutter_rust_bridge 的通用导入：
 //   import 'package:devnote_ffi/src/rust/api/frb_api.dart' as rust_api;
 // ============================================================
-import 'package:flutter_rust_bridge/flutter_rust_bridge.dart';
 
 /// FFI 协议版本 —— 与 Rust 端 frb_api.rs 中 FFI_API_VERSION 常量严格一致
 const int kFFIApiVersion = 1;

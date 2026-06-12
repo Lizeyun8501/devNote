@@ -25,7 +25,7 @@ class TableView extends StatefulWidget {
 }
 
 class _TableViewState extends State<TableView> {
-  /// PlutoGrid 控制器，管理列、行及网格状态
+  // ignore: unused_field
   late PlutoGridStateManager _stateManager;
 
   /// 将 DatabaseFieldModel 转换为 PlutoColumn
@@ -286,16 +286,7 @@ class _TableViewState extends State<TableView> {
         ));
   }
 
-  /// 解析颜色值
-  Color? _parseColor(dynamic colorValue) {
-    if (colorValue is String && colorValue.startsWith('#')) {
-      final hex = colorValue.replaceFirst('#', '');
-      if (hex.length == 6) {
-        return Color(int.parse('FF$hex', radix: 16));
-      }
-    }
-    return null;
-  }
+  
 
   @override
   Widget build(BuildContext context) {

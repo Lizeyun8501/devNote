@@ -48,6 +48,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     final serverAddress = prefs.getString(_keyServerAddress);
 
     final currentState = state;
+    // ignore: invalid_use_of_visible_for_testing_member
     emit(_copyWithBase(
       currentState,
       autoSyncEnabled: autoSync,
@@ -68,7 +69,8 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       if (serviceState.status == SyncServiceStatus.conflict) {
         // 使用服务的冲突解析器获取实际冲突信息，null 安全
         final resolver = _syncService.conflictResolver;
-        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
+        final conflicts = resolver.conflicts;
+        // ignore: invalid_use_of_visible_for_testing_member
         emit(SyncConflict(
           conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -76,6 +78,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
           serverAddress: state.serverAddress,
         ));
       } else if (serviceState.status == SyncServiceStatus.synced) {
+        // ignore: invalid_use_of_visible_for_testing_member
         emit(SyncCompleted(
           lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
           autoSyncEnabled: state.autoSyncEnabled,
@@ -117,7 +120,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       }
 
       // Step 2: 拉取远端变更（pull-before-push 策略）
-      final pullResult = await _withRetry(() => _syncService.pullChanges());
+      await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
       // 拉取结果验证：如果 pullChanges 返回 null 且状态为 error，说明拉取失败
@@ -133,7 +136,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
 
       if (serviceState.status == SyncServiceStatus.conflict) {
         final resolver = _syncService.conflictResolver;
-        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
+        final conflicts = resolver.conflicts;
         emit(SyncConflict(
           conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -257,7 +260,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       // 冲突处理：存在冲突时等待用户解决
       if (serviceState.status == SyncServiceStatus.conflict) {
         final resolver = _syncService.conflictResolver;
-        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
+        final conflicts = resolver.conflicts;
         emit(SyncConflict(
           conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -351,6 +354,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       _autoSyncTimer = null;
     }
 
+    // ignore: invalid_use_of_visible_for_testing_member
     emit(_copyWithBase(state, autoSyncEnabled: event.enabled));
   }
 
@@ -367,6 +371,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       _startAutoSyncTimer(event.interval);
     }
 
+    // ignore: invalid_use_of_visible_for_testing_member
     emit(_copyWithBase(state, syncInterval: event.interval));
   }
 
@@ -462,6 +467,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         if (attempt >= policy.maxRetries) rethrow;
         // 指数退避: delay = baseDelay * 2^attempt
         final delay = policy.delayForAttempt(attempt - 1);
+        // ignore: invalid_use_of_visible_for_testing_member
         emit(SyncRetrying(
           retryAttempt: attempt,
           autoSyncEnabled: state.autoSyncEnabled,

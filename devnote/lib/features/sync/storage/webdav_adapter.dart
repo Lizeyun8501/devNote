@@ -199,7 +199,6 @@ class WebDavAdapter implements StorageAdapter {
       final files = <String>[];
       final hrefRegex = RegExp(r'<d:href>(.*?)</d:href>');
       final basePath = _config.effectiveBasePath;
-      final prefixPath = '$basePath/${prefix.replaceAll(RegExp(r'^/+|/+$'), '')}';
 
       for (final match in hrefRegex.allMatches(response.body)) {
         var href = Uri.decodeFull(match.group(1)!);
