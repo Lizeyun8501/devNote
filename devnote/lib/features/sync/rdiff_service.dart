@@ -121,7 +121,11 @@ class RdiffDeltaInstruction {
   }
 
   /// 从二进制格式解码 —— 与 encode() 对应
+  /// 修复：添加越界检查，防止恶意或损坏的增量数据导致崩溃
   static RdiffDeltaInstruction decode(Uint8List encoded, int offset) {
+    if (offset + 5 > encoded.length) {
+      throw ArgumentError('Invalid delta data: offset $offset exceeds buffer length ${encoded.length}');
+    }
     final opByte = encoded[offset];
     final op = opByte == 0 ? RdiffDeltaOp.literal : RdiffDeltaOp.copy;
     final length = (encoded[offset + 1] << 24) |
@@ -130,6 +134,9 @@ class RdiffDeltaInstruction {
         encoded[offset + 4];
 
     if (op == RdiffDeltaOp.literal) {
+      if (offset + 5 + length > encoded.length) {
+        throw ArgumentError('Invalid literal data: expected $length bytes at offset $offset, buffer has ${encoded.length}');
+      }
       final data = Uint8List(length);
       data.setRange(0, length, encoded, offset + 5);
       return RdiffDeltaInstruction(
@@ -138,6 +145,9 @@ class RdiffDeltaInstruction {
         data: data,
       );
     } else {
+      if (offset + 9 > encoded.length) {
+        throw ArgumentError('Invalid copy instruction at offset $offset: buffer too short');
+      }
       final sourceBlockIndex = (encoded[offset + 5] << 24) |
           (encoded[offset + 6] << 16) |
           (encoded[offset + 7] << 8) |

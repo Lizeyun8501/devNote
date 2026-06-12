@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:devnote/core/bridge/dispatch.dart';
@@ -518,14 +519,16 @@ class P2PService {
   }
 
   String _generatePeerId() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final random = StringBuffer();
-    for (var i = 0; i < 16; i++) {
-      random.write(timestamp % 16 < 10
-          ? String.fromCharCode(48 + (timestamp % 16))
-          : String.fromCharCode(87 + (timestamp % 16)));
-      timestamp ~/ 16;
+    // 修复：使用 Random.secure() 生成密码学安全的随机节点 ID
+    // 原代码仅使用 timestamp 取模生成，多次调用产生相同或不唯一的 ID
+    final random = Random.secure();
+    final randomPart = StringBuffer();
+    for (var i = 0; i < 32; i++) {
+      final value = random.nextInt(16);
+      randomPart.write(value < 10
+          ? String.fromCharCode(48 + value)
+          : String.fromCharCode(87 + value));
     }
-    return 'Qm${random.toString()}${timestamp.toRadixString(16).padLeft(8, '0')}';
+    return 'Qm$randomPart';
   }
 }
