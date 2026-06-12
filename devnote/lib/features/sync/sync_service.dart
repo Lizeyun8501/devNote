@@ -181,12 +181,15 @@ class SyncService {
       final jsonStr = utf8.decode(decryptedBytes);
       final data = jsonDecode(jsonStr) as Map<String, dynamic>;
 
+      // 修复：先更新 lastSyncTime，但不设 synced 状态
+      // 原代码在数据返回给调用方应用前就设 synced，如果调用方应用数据失败，
+      // 状态显示已同步但实际数据未生效，导致不一致
       final prefs = await SharedPreferences.getInstance();
       final now = DateTime.now();
       await prefs.setInt(_keyLastSyncTime, now.millisecondsSinceEpoch);
 
       _state = _state.copyWith(
-        status: SyncServiceStatus.synced,
+        status: SyncServiceStatus.syncing,
         lastSyncedAt: now,
       );
       _notifyListeners();

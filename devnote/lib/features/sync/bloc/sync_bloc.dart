@@ -291,10 +291,10 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       }
 
       // 拉取成功验证：result 为 null 表示无需应用数据（无变更）
-      // result 非 null 表示数据已由 SyncService 写入本地数据库
-      if (result != null && serviceState.status == SyncServiceStatus.synced) {
-        developer.log('拉取同步完成，数据已应用到本地: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
-      } else if (result == null && serviceState.status == SyncServiceStatus.synced) {
+      // result 非 null 表示数据已由 SyncService 返回，需由调用方写入本地数据库
+      if (result != null && serviceState.status != SyncServiceStatus.error) {
+        developer.log('拉取同步完成，数据已返回待应用: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
+      } else if (result == null && serviceState.status != SyncServiceStatus.error) {
         developer.log('拉取完成，远端无新数据', name: 'SyncBloc');
       }
     } catch (e) {
