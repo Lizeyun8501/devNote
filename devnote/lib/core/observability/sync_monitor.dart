@@ -446,6 +446,12 @@ class OTelMeterProvider {
     _exportTimer?.cancel();
     _exportTimer = null;
   }
+
+  /// 释放资源：停止导出定时器，清空 Meter 缓存
+  void dispose() {
+    stopExport();
+    _meters.clear();
+  }
 }
 
 // ==================== 全局 MeterProvider 实例 ====================

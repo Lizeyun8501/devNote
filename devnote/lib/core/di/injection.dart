@@ -15,6 +15,8 @@ import 'package:devnote/features/settings/crypto/crypto_service.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
 import 'package:devnote/features/sync/p2p/p2p_service.dart';
 import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/workflow/external_editor_sync.dart';
+import 'package:devnote/features/workflow/file_watcher_service.dart';
 
 final GetIt getIt = GetIt.instance;
 
@@ -48,4 +50,47 @@ Future<void> setupDependencies() async {
   getIt.registerLazySingleton<E2ECryptoService>(() => E2ECryptoService());
   getIt.registerLazySingleton<P2PService>(() => P2PService());
   getIt.registerLazySingleton<SyncService>(() => SyncService());
+  getIt.registerLazySingleton<FileWatcherService>(() => FileWatcherService());
+  getIt.registerLazySingleton<ExternalEditorSyncService>(
+    () => ExternalEditorSyncService(),
+  );
+}
+
+/// 统一释放所有已注册单例的资源
+///
+/// 调用时机：
+/// - 应用退出前（通过 WidgetsBindingObserver.didRequestAppExit）
+/// - 测试 tearDown 中清理全局状态
+///
+/// 借鉴 Flutter 官方 dispose 模式：按注册顺序逆序释放，避免依赖倒置
+void disposeAll() {
+  if (!getIt.isRegistered<FFIBridge>()) return;
+
+  // 先释放有 dispose/close 方法的高级服务
+  if (getIt.isRegistered<SyncService>()) {
+    getIt<SyncService>().dispose();
+  }
+  if (getIt.isRegistered<P2PService>()) {
+    getIt<P2PService>().dispose();
+  }
+  if (getIt.isRegistered<ExternalEditorSyncService>()) {
+    getIt<ExternalEditorSyncService>().dispose();
+  }
+  if (getIt.isRegistered<FileWatcherService>()) {
+    getIt<FileWatcherService>().dispose();
+  }
+
+  // 释放核心桥接层（逆序）
+  if (getIt.isRegistered<Dispatch>()) {
+    getIt<Dispatch>().dispose();
+  }
+  if (getIt.isRegistered<WebSocketBridge>()) {
+    getIt<WebSocketBridge>().dispose();
+  }
+  if (getIt.isRegistered<FFIBridge>()) {
+    getIt<FFIBridge>().dispose();
+  }
+
+  // 清空 GetIt 容器
+  getIt.reset();
 }

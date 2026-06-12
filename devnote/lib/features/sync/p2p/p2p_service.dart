@@ -52,6 +52,7 @@ class P2PState {
   final String? localPeerId;
   final List<P2PPeerInfo> peers;
   final String? signalingServerUrl;
+  final List<String> bootstrapPeers;
   final String? lastError;
 
   const P2PState({
@@ -60,6 +61,7 @@ class P2PState {
     this.localPeerId,
     this.peers = const [],
     this.signalingServerUrl,
+    this.bootstrapPeers = const [],
     this.lastError,
   });
 
@@ -69,6 +71,7 @@ class P2PState {
     String? localPeerId,
     List<P2PPeerInfo>? peers,
     String? signalingServerUrl,
+    List<String>? bootstrapPeers,
     String? lastError,
   }) {
     return P2PState(
@@ -77,6 +80,7 @@ class P2PState {
       localPeerId: localPeerId ?? this.localPeerId,
       peers: peers ?? this.peers,
       signalingServerUrl: signalingServerUrl ?? this.signalingServerUrl,
+      bootstrapPeers: bootstrapPeers ?? this.bootstrapPeers,
       lastError: lastError,
     );
   }
@@ -121,12 +125,12 @@ class P2PService {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_keyEnabled) ?? false;
     final signalingServer = prefs.getString(_keySignalingServer);
-    // TODO: 将 bootstrapPeers 存储到 P2PState 并在 discoverPeers 中使用
-    final _ = prefs.getStringList(_keyBootstrapPeers) ?? [];
+    final bootstrapPeers = prefs.getStringList(_keyBootstrapPeers) ?? [];
 
     _state = _state.copyWith(
       isEnabled: enabled,
       signalingServerUrl: signalingServer ?? 'https://signal.devnote.app',
+      bootstrapPeers: bootstrapPeers,
     );
 
     if (enabled) {

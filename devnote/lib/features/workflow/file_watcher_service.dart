@@ -137,4 +137,9 @@ class FileWatcherService {
 
   /// 获取当前监听的目录路径
   List<String> get externalPaths => List.unmodifiable(_watchedExternalPaths);
+
+  /// 释放资源：取消定时器，关闭流控制器
+  Future<void> dispose() async {
+    await stopWatching();
+  }
 }

@@ -508,6 +508,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   Future<void> close() {
     _autoSyncTimer?.cancel();
     _serviceStateSubscription?.cancel();
+    _syncService.dispose();
     return super.close();
   }
 }

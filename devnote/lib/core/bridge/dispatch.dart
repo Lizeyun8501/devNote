@@ -368,6 +368,12 @@ class Dispatch {
 
     throw UnimplementedError('Event not mapped to FRB: $event');
   }
+
+  /// 释放 Dispatch 层持有的资源
+  void dispose() {
+    // FRB 模式下 Dispatch 不持有需要显式释放的资源
+    // 保留此方法供 DI 容器 disposeAll() 统一调用
+  }
 }
 
 // 修复: 移除 dispatch.dart 内部重复定义的 FlowyResult / FlowyInternalError

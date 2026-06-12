@@ -20,8 +20,10 @@ import 'package:devnote/features/workflow/file_watcher_service.dart';
 /// 监听外部编辑器（如 VS Code、Vim 等）对笔记文件的修改，
 /// 自动将变更同步到 DevNote 应用中，实现外部编辑器与 DevNote 的实时同步。
 class ExternalEditorSyncService {
-  final Dispatch _dispatch = getIt<Dispatch>();
-  final FileWatcherService _fileWatcher = FileWatcherService();
+  ExternalEditorSyncService();
+
+  Dispatch get _dispatch => getIt<Dispatch>();
+  FileWatcherService get _fileWatcher => getIt<FileWatcherService>();
 
   Timer? _debounceTimer;
   StreamSubscription? _watcherSubscription;
@@ -188,4 +190,10 @@ class ExternalEditorSyncService {
 
   /// 获取当前监听的目录
   String? get watchingDir => _watchingDir;
+
+  /// 释放资源：停止监听，关闭文件监听器
+  Future<void> dispose() async {
+    await stopWatching();
+    await _fileWatcher.dispose();
+  }
 }
