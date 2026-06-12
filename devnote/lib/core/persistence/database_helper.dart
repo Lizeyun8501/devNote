@@ -24,7 +24,16 @@ class DatabaseHelper {
       version: _databaseVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
+      onConfigure: _onConfigure,
     );
+  }
+
+  /// 启用 SQLite 外键约束
+  /// 修复：sqflite 默认不启用 PRAGMA foreign_keys，导致所有 ON DELETE CASCADE
+  /// 约束静默失效，产生大量孤儿数据。必须在 onConfigure 中启用，确保每次
+  /// 打开数据库连接时都生效（包括 WAL 模式下的连接池）。
+  Future<void> _onConfigure(Database db) async {
+    await db.execute('PRAGMA foreign_keys = ON');
   }
 
   Future<void> _onCreate(Database db, int version) async {

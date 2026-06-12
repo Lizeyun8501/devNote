@@ -91,15 +91,36 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     final currentState = state;
     if (currentState is NotesLoaded) {
       if (event.query.isEmpty) {
-        emit(currentState.copyWith(searchQuery: null));
+        // 清空搜索时，从数据库重新加载原始列表
+        try {
+          final folderId = currentState.filterFolderId;
+          final allNotes = folderId != null
+              ? await _noteRepository.listNotes(folderId)
+              : await _noteRepository.listNotes('');
+          emit(currentState.copyWith(
+            searchQuery: null,
+            notes: _sortNotes(allNotes, currentState.sortBy),
+          ));
+        } catch (_) {
+          emit(currentState.copyWith(searchQuery: null));
+        }
         return;
       }
-      final filtered = currentState.notes
-          .where((n) =>
-              n.title.toLowerCase().contains(event.query.toLowerCase()) ||
-              n.content.toLowerCase().contains(event.query.toLowerCase()))
-          .toList();
-      emit(currentState.copyWith(searchQuery: event.query, notes: filtered));
+      // 搜索时始终从数据库查询，避免在过滤后的子集上重复搜索
+      try {
+        final folderId = currentState.filterFolderId;
+        final allNotes = folderId != null
+            ? await _noteRepository.listNotes(folderId)
+            : await _noteRepository.listNotes('');
+        final filtered = allNotes
+            .where((n) =>
+                n.title.toLowerCase().contains(event.query.toLowerCase()) ||
+                n.content.toLowerCase().contains(event.query.toLowerCase()))
+            .toList();
+        emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(filtered, currentState.sortBy)));
+      } catch (e) {
+        emit(NotesError(e.toString()));
+      }
     }
   }
 

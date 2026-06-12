@@ -76,7 +76,39 @@ class SqliteFolderRepository implements FolderRepository {
     }
     developer.log('FFI not available, falling back to sqflite for deleteFolder', level: 900);
     final db = await _dbHelper.database;
-    await db.delete('folders', where: 'id = ?', whereArgs: [id]);
+    // 修复：级联删除文件夹及其所有子文件夹中的笔记
+    // notes.folder_id 不是 FK，不会自动 CASCADE，必须手动删除
+    // 递归收集所有子文件夹 ID
+    final allFolderIds = await _collectSubfolderIds(db, id);
+    allFolderIds.add(id);
+    // 删除所有关联文件夹中的笔记
+    for (final folderId in allFolderIds) {
+      await db.delete('notes', where: 'folder_id = ?', whereArgs: [folderId]);
+    }
+    // 删除所有子文件夹（从最深层开始，避免 FK 冲突）
+    // folders.parent_id 不是 FK，直接删除即可
+    await db.delete(
+      'folders',
+      where: 'id IN (${List.filled(allFolderIds.length, '?').join(',')})',
+      whereArgs: allFolderIds,
+    );
+  }
+
+  /// 递归收集指定文件夹的所有子文件夹 ID
+  Future<List<String>> _collectSubfolderIds(dynamic db, String parentId) async {
+    final children = await db.query(
+      'folders',
+      columns: ['id'],
+      where: 'parent_id = ?',
+      whereArgs: [parentId],
+    );
+    final ids = <String>[];
+    for (final row in children) {
+      final childId = row['id'] as String;
+      ids.add(childId);
+      ids.addAll(await _collectSubfolderIds(db, childId));
+    }
+    return ids;
   }
 
   @override

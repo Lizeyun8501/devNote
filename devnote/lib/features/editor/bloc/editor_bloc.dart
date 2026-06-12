@@ -162,10 +162,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
 
   /// 切换 block 类型
   /// 例如：paragraph → heading、heading → bullet_list 等
+  /// 同时将类型变更持久化到 SQLite
   Future<void> _onToggleBlockType(ToggleBlockType event, Emitter<EditorState> emit) async {
     try {
       final state = this.state;
       if (state is EditorLoaded) {
+        // 持久化 block_type 变更到 SQLite
+        await _editorService.updateBlockType(blockId: event.blockId, newType: event.newType);
         final blocks = state.blocks.map((b) {
           if (b.id == event.blockId) {
             return b.copyWith(blockType: event.newType);

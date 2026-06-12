@@ -380,6 +380,15 @@ class E2ECryptoService {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
+  /// 密钥派生函数
+  ///
+  /// 安全警告：当前实现使用自定义 XOR+迭代哈希，仅用于原型阶段。
+  /// 生产环境应替换为标准 KDF（如 Argon2id、PBKDF2、scrypt），
+  /// 通过 FFI 调用 Rust 的 ring/argon2 库实现。
+  /// 自定义实现的问题：
+  /// 1. 迭代次数仅 10 次，远低于 OWASP 推荐的 600,000+ 次（PBKDF2-SHA256）
+  /// 2. XOR 运算不提供雪崩效应，密钥分布不均匀
+  /// 3. 无内存硬性要求，易受 GPU/ASIC 暴力破解
   Uint8List _deriveKey(String password, Uint8List salt) {
     final key = Uint8List(32);
     final passwordBytes = utf8.encode(password);
@@ -419,6 +428,12 @@ class E2ECryptoService {
     return _xorEncrypt(ciphertext, key, nonce);
   }
 
+  /// 加密/解密核心函数
+  ///
+  /// 安全警告：当前使用 XOR 流密码，仅用于原型阶段。
+  /// XOR 加密不提供语义安全性（SEM），相同明文+密钥产生相同密文，
+  /// 且无法抵抗已知明文攻击。生产环境应替换为 XChaCha20-Poly1305
+  /// 或 AES-256-GCM，通过 FFI 调用 Rust 加密库实现。
   Uint8List _xorEncrypt(Uint8List data, Uint8List key, Uint8List nonce) {
     final result = Uint8List(data.length);
     for (var i = 0; i < data.length; i++) {

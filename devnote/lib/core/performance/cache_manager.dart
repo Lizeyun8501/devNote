@@ -167,9 +167,31 @@ class CacheManager {
     return oldestKey;
   }
 
-  /// 粗略估算缓存条目占用的内存字节数
+  /// 估算缓存条目占用的内存字节数
+  ///
+  /// 按类型估算：
+  /// - String: UTF-16 编码，每字符 2 字节
+  /// - List/Map: 递归估算元素大小（上限 1KB 防止无限递归）
+  /// - 其他类型: 默认 64 字节
   static int _estimateBytes(dynamic value) {
-    return value.toString().length;
+    if (value is String) {
+      return value.length * 2; // UTF-16 编码
+    } else if (value is List) {
+      int total = 64; // List 对象开销
+      for (final item in value.take(20)) {
+        total += _estimateBytes(item);
+        if (total > 1024) break; // 上限 1KB
+      }
+      return total.clamp(64, 1024);
+    } else if (value is Map) {
+      int total = 64; // Map 对象开销
+      for (final entry in value.entries.take(20)) {
+        total += _estimateBytes(entry.key) + _estimateBytes(entry.value);
+        if (total > 1024) break;
+      }
+      return total.clamp(64, 1024);
+    }
+    return 64; // 默认估算
   }
 
   int size(CacheType type) {

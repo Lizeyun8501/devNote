@@ -1,5 +1,6 @@
 import 'package:uuid/uuid.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 
 /// 编辑器服务 - 负责 block 的 CRUD 与 Markdown 解析。
@@ -17,7 +18,9 @@ import 'package:devnote/core/persistence/database_helper.dart';
 /// 当 FFI 不可用时回退到 Dart 侧实现。
 class EditorService {
   final _uuid = const Uuid();
-  final DatabaseHelper _db = DatabaseHelper();
+  /// 修复：使用 DI 容器中的 DatabaseHelper 单例，避免创建多个数据库连接实例
+  /// 原代码 `DatabaseHelper()` 直接 new，绕过 DI 导致多连接、潜在数据不一致
+  final DatabaseHelper _db = getIt<DatabaseHelper>();
 
   /// 内存缓存：noteId → [BlockModel, ...]
   /// UI 从缓存读取以获得即时响应，持久化由 SQLite 保证。
@@ -84,7 +87,27 @@ class EditorService {
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
-        blocks[index] = blocks[index].copyWith(content: content);
+        blocks[index] = blocks[index].copyWith(content: content, updatedAt: DateTime.now());
+        return;
+      }
+    }
+  }
+
+  /// 更新 block 类型并持久化到 SQLite
+  Future<void> updateBlockType({required String blockId, required BlockType newType}) async {
+    final db = await _db.database;
+    final now = DateTime.now();
+    await db.update(
+      'blocks',
+      {'block_type': newType.name, 'updated_at': now.toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [blockId],
+    );
+
+    for (final blocks in _noteBlocks.values) {
+      final index = blocks.indexWhere((b) => b.id == blockId);
+      if (index != -1) {
+        blocks[index] = blocks[index].copyWith(blockType: newType, updatedAt: now);
         return;
       }
     }
