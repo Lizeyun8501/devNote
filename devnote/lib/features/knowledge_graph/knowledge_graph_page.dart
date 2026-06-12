@@ -24,7 +24,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:graphview/graphview.dart';
+import 'package:graphview/GraphView.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_bloc.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_event.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_state.dart';
@@ -58,7 +58,7 @@ class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
 
   /// FruchtermanReingold 力导向布局算法（借鉴 d3-force）
   FruchtermanReingoldAlgorithm _algorithm = FruchtermanReingoldAlgorithm(
-    iterations: 100,
+    FruchtermanReingoldConfiguration(),
   );
 
   bool _showFilterPanel = false;
@@ -83,7 +83,7 @@ class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
     // 使用 FruchtermanReingold 力导向布局
     // 借鉴 d3-force 的力导向布局思想，graphview 内置实现更成熟
     _algorithm = FruchtermanReingoldAlgorithm(
-      iterations: 100,
+      FruchtermanReingoldConfiguration(),
     );
   }
 

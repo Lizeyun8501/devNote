@@ -187,7 +187,7 @@ class StartupManager {
     if (criticalPathEnd == null) return;
 
     // 回溯关键路径上的任务
-    final criticalPathTasks = <String>[];
+    var criticalPathTasks = <String>[];
     String? current = criticalPathEnd;
     while (current != null) {
       criticalPathTasks.add(current);
@@ -206,7 +206,7 @@ class StartupManager {
       current = longestDep;
     }
 
-    criticalPathTasks.reverse();
+    criticalPathTasks = criticalPathTasks.reversed.toList();
 
     developer.log(
       '关键路径分析: 总耗时=${criticalPathTotal.inMilliseconds}ms, '

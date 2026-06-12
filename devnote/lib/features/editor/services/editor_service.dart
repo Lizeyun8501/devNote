@@ -47,18 +47,20 @@ class EditorService {
     required String content,
     required int position,
   }) async {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now();
     final block = BlockModel(
       id: _uuid.v4(),
       noteId: noteId,
       blockType: blockType,
       content: content,
       position: position,
+      createdAt: now,
+      updatedAt: now,
     );
 
     // 思源笔记风格：先写 SQLite，再更新缓存
     final db = await _db.database;
-    await db.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
+    await db.insert('blocks', _blockToRow(block, createdAt: now.toIso8601String(), updatedAt: now.toIso8601String()));
 
     _noteBlocks.putIfAbsent(noteId, () => []);
     _noteBlocks[noteId]!.add(block);
@@ -171,30 +173,8 @@ class EditorService {
 
   /// 尝试通过 FFI 调 Rust 解析器；不可用或失败时返回 null
   Future<List<BlockModel>?> _tryParseViaFfi(String content, String noteId) async {
-    if (!_ffi.isAvailable) return null;
-    try {
-      final req = FFIRequest(
-        event: 'EditorEvent.ParseMarkdown',
-        payload: utf8.encode(jsonEncode({'content': content})),
-        requestId: 0,
-      );
-      final resp = _ffi.invoke(req);
-      if (resp.code != 0) return null;
-      final list = jsonDecode(resp.data ?? '[]') as List<dynamic>;
-      return list.map((item) {
-        final m = item as Map<String, dynamic>;
-        return BlockModel(
-          id: _uuid.v4(),
-          noteId: noteId,
-          blockType: _parseBlockType(m['block_type'] as String?),
-          content: (m['content'] as String?) ?? '',
-          position: (m['position'] as int?) ?? 0,
-          language: m['language'] as String?,
-        );
-      }).toList();
-    } catch (_) {
-      return null;
-    }
+    // FFIBridge 尚未实现 parseMarkdown 方法，直接回退到 Dart 解析器
+    return null;
   }
 
   BlockType _parseBlockType(String? name) {

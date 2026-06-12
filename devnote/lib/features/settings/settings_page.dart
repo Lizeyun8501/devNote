@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,6 +7,7 @@ import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/dispatch.dart';
+import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
 import 'package:devnote/features/sync/p2p/p2p_settings_page.dart';
 
@@ -52,39 +54,36 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final dispatch = Dispatch();
       final result = await dispatch.asyncRequest('FeatureFlagEvent.ListFlags');
-      result.when(
-        success: (data) {
-          if (!mounted) return;
-          final decoded = String.fromCharCodes(data);
-          final List<dynamic> flags = [];
-          // Parse the JSON response
-          try {
-            final parsed = _parseJsonList(decoded);
-            if (mounted) {
-              setState(() {
-                _featureFlags = parsed;
-                _featureFlagsLoading = false;
-                _featureFlagsError = null;
-              });
-            }
-          } catch (_) {
-            if (mounted) {
-              setState(() {
-                _featureFlags = [];
-                _featureFlagsLoading = false;
-                _featureFlagsError = null;
-              });
-            }
+      if (result is Success<Uint8List, FlowyInternalError>) {
+        if (!mounted) return;
+        final decoded = String.fromCharCodes(result.value);
+        final List<dynamic> flags = [];
+        // Parse the JSON response
+        try {
+          final parsed = _parseJsonList(decoded);
+          if (mounted) {
+            setState(() {
+              _featureFlags = parsed;
+              _featureFlagsLoading = false;
+              _featureFlagsError = null;
+            });
           }
-        },
-        failure: (error) {
-          if (!mounted) return;
-          setState(() {
-            _featureFlagsLoading = false;
-            _featureFlagsError = error.message;
-          });
-        },
-      );
+        } catch (_) {
+          if (mounted) {
+            setState(() {
+              _featureFlags = [];
+              _featureFlagsLoading = false;
+              _featureFlagsError = null;
+            });
+          }
+        }
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _featureFlagsLoading = false;
+          _featureFlagsError = (result as Failure<Uint8List, FlowyInternalError>).error.message;
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {

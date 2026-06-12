@@ -66,12 +66,10 @@ class PdfExportService {
           // 标题
           pw.Header(
             level: 0,
-            title: pw.Text(
-              note.title,
-              style: pw.TextStyle(
-                fontSize: 24,
-                fontWeight: pw.FontWeight.bold,
-              ),
+            text: note.title,
+            textStyle: pw.TextStyle(
+              fontSize: 24,
+              fontWeight: pw.FontWeight.bold,
             ),
           ),
           pw.SizedBox(height: 8),
@@ -87,7 +85,7 @@ class PdfExportService {
           pw.Divider(),
           pw.SizedBox(height: 16),
           // 正文内容（借鉴 wkhtmltopdf 的段落排版）
-          _buildContentWidgets(note.content),
+          ..._buildContentWidgets(note.content),
         ],
       ),
     );
@@ -114,12 +112,10 @@ class PdfExportService {
           children: [
             pw.Header(
               level: 0,
-              title: pw.Text(
-                '笔记目录',
-                style: pw.TextStyle(
-                  fontSize: 28,
-                  fontWeight: pw.FontWeight.bold,
-                ),
+              text: '笔记目录',
+              textStyle: pw.TextStyle(
+                fontSize: 28,
+                fontWeight: pw.FontWeight.bold,
               ),
             ),
             pw.SizedBox(height: 16),
@@ -160,12 +156,10 @@ class PdfExportService {
           build: (context) => [
             pw.Header(
               level: 0,
-              title: pw.Text(
-                note.title,
-                style: pw.TextStyle(
-                  fontSize: 24,
-                  fontWeight: pw.FontWeight.bold,
-                ),
+              text: note.title,
+              textStyle: pw.TextStyle(
+                fontSize: 24,
+                fontWeight: pw.FontWeight.bold,
               ),
             ),
             pw.SizedBox(height: 8),
@@ -179,7 +173,7 @@ class PdfExportService {
             ),
             pw.Divider(),
             pw.SizedBox(height: 16),
-            _buildContentWidgets(note.content),
+            ..._buildContentWidgets(note.content),
           ],
         ),
       );
@@ -211,7 +205,7 @@ class PdfExportService {
           fontStyle: pw.FontStyle.italic,
         ),
         maxLines: 1,
-        overflow: pw.TextOverflow.ellipsis,
+        overflow: pw.TextOverflow.clip,
       ),
     );
   }
@@ -370,7 +364,6 @@ class PdfExportService {
         code,
         style: pw.TextStyle(
           fontSize: 10,
-          fontFamilies: ['Courier', 'monospace'],
         ),
       ),
     );

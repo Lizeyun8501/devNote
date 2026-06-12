@@ -60,7 +60,7 @@ class SentryConfig {
       // 撤回同意:立即清空 PII
       try {
         await Sentry.configureScope((scope) {
-          scope.user = null;
+          scope.setUser(null);
           scope.setTag('consent', 'revoked');
         });
       } catch (_) {
@@ -125,14 +125,15 @@ Future<void> setupSentry({SentryConfig? config}) async {
       }
 
       // 过滤 PII（个人身份信息）
-      options.beforeSend = (event, {hint}) {
+      options.beforeSend = (event, hint) {
         // 用户未同意时直接丢弃事件
         if (!cfg._userConsent) {
           return null;
         }
         // 移除可能包含敏感信息的请求体
         if (event.request?.url?.contains('/auth/') ?? false) {
-          event.request?.data = null;
+          // SentryRequest.data 不可变，通过克隆方式移除敏感数据
+          event = event.copyWith(request: event.request?.copyWith(data: null));
         }
         // 移除环境变量中的敏感信息
         event.tags?.removeWhere((key, _) =>
