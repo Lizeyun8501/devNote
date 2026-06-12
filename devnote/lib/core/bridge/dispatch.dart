@@ -303,7 +303,8 @@ class Dispatch {
       return Uint8List(0);
     }
     if (event == 'NoteEvent.ListNotes') {
-      final result = await listNotes(payloadMap['folder_id'] as String);
+      // 修复：folder_id 缺少时默认使用空字符串（根目录），避免 null as String 崩溃
+      final result = await listNotes((payloadMap['folder_id'] as String?) ?? '');
       return utf8.encode(jsonEncode(result.map((n) => n.toJson()).toList()));
     }
 

@@ -32,6 +32,10 @@ void main() async {
   // Initialize dependency injection
   await setupDependencies();
 
+  // 修复：Sentry 初始化提前到 FFI Bridge 之前，确保 FFI 初始化过程中的
+  // 错误能被 Sentry 捕获上报，防止启动阶段异常丢失
+  await setupSentry();
+
   // Initialize Rust FFI bridge
   try {
     await getIt<FFIBridge>().init();
@@ -61,10 +65,6 @@ void main() async {
 
   // Set memory limit
   getIt<MemoryManager>().setMemoryLimit(100 * 1024 * 1024);
-
-  // 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
-  // 来源: https://github.com/AppFlowy-IO/AppFlowy
-  await setupSentry();
 
   runApp(const DevNoteApp());
 }

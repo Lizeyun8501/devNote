@@ -57,11 +57,30 @@ class EditorService {
     );
 
     // 思源笔记风格：先写 SQLite，再更新缓存
+    // 修复：在插入新 block 前，将 position >= 新位置的所有已有 block 位置 +1
+    // 原代码只插入不移动，导致数据库中位置信息不一致
+    // Bloc 在内存中做了位置纠正，但 Service 的缓存和数据库都没有更新
     final db = await _db.database;
-    await db.insert('blocks', _blockToRow(block, createdAt: now.toIso8601String(), updatedAt: now.toIso8601String()));
+    await db.transaction((txn) async {
+      // 将 position >= 新位置的所有已有 block 向后移动一格
+      await txn.execute(
+        'UPDATE blocks SET position = position + 1, updated_at = ? '
+        'WHERE note_id = ? AND position >= ?',
+        [now.toIso8601String(), noteId, position],
+      );
+      // 插入新 block
+      await txn.insert('blocks', _blockToRow(block, createdAt: now.toIso8601String(), updatedAt: now.toIso8601String()));
+    });
 
     _noteBlocks.putIfAbsent(noteId, () => []);
-    _noteBlocks[noteId]!.add(block);
+    // 在缓存中也调整位置，保持一致性
+    final cached = _noteBlocks[noteId]!;
+    for (var i = 0; i < cached.length; i++) {
+      if (cached[i].position >= position) {
+        cached[i] = cached[i].copyWith(position: cached[i].position + 1);
+      }
+    }
+    cached.add(block);
     return block;
   }
 
