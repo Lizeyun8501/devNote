@@ -45,7 +45,9 @@ class GraphBloc extends Bloc<GraphEvent, GraphState> {
     final currentState = state;
     if (currentState is! GraphLoaded) return;
     try {
-      await _graphService.getBacklinks(event.noteId);
+      // 修复：emit 返回的反向链接结果到状态，原代码丢弃了结果
+      final backlinks = await _graphService.getBacklinks(event.noteId);
+      emit(currentState.copyWith(backlinks: backlinks));
     } catch (e) {
       emit(GraphError(e.toString()));
     }
@@ -53,7 +55,13 @@ class GraphBloc extends Bloc<GraphEvent, GraphState> {
 
   Future<void> _onGetShortestPath(GetShortestPath event, Emitter<GraphState> emit) async {
     try {
-      await _graphService.getShortestPath(event.fromId, event.toId);
+      // 修复：emit 返回的最短路径结果到状态，原代码丢弃了结果
+      final path = await _graphService.getShortestPath(event.fromId, event.toId);
+      // emit 最短路径到当前已加载的图状态中
+      final currentState = state;
+      if (currentState is GraphLoaded) {
+        emit(currentState.copyWith(shortestPath: path));
+      }
     } catch (e) {
       emit(GraphError(e.toString()));
     }
@@ -61,7 +69,12 @@ class GraphBloc extends Bloc<GraphEvent, GraphState> {
 
   Future<void> _onGetRelatedNodes(GetRelatedNodes event, Emitter<GraphState> emit) async {
     try {
-      await _graphService.getRelatedNodes(event.nodeId, event.limit);
+      // 修复：emit 返回的相关节点结果到状态，原代码丢弃了结果
+      final relatedNodes = await _graphService.getRelatedNodes(event.nodeId, event.limit);
+      final currentState = state;
+      if (currentState is GraphLoaded) {
+        emit(currentState.copyWith(relatedNodes: relatedNodes));
+      }
     } catch (e) {
       emit(GraphError(e.toString()));
     }

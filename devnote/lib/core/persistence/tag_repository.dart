@@ -74,11 +74,12 @@ class SqliteTagRepository implements TagRepository {
 
   @override
   Future<List<TagModel>> getTagsForNote(String noteId) async {
+    // 修复：FFI 路径下 PersistenceDispatch.list 不支持 tag 的 note_id 过滤，
+    // getTagsForNote 需要 JOIN note_tags 表，FFI 桥接层未实现此查询。
+    // 因此始终使用 sqflite 路径执行 JOIN 查询，确保返回正确的标签。
     if (_useFFI) {
-      final items = await _dispatch.list(entity: 'tag', filter: {'note_id': noteId});
-      return items.map((json) => TagModel.fromJson(json)).toList();
+      developer.log('FFI 模式下 getTagsForNote 降级到 sqflite（FFI 不支持 note_id 过滤）', level: 900);
     }
-    developer.log('FFI not available, falling back to sqflite for getTagsForNote', level: 900);
     final db = await _dbHelper.database;
     final results = await db.rawQuery('''
       SELECT t.id, t.name, t.created_at

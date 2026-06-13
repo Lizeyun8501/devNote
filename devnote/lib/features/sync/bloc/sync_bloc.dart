@@ -310,12 +310,10 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   /// 处理同步状态变更通知
+  /// 修复：根据当前状态决定如何转换，而非始终 emit SyncIdle
   void _onStatusChanged(SyncStatusChanged event, Emitter<SyncState> emit) {
-    emit(SyncIdle(
-      autoSyncEnabled: state.autoSyncEnabled,
-      syncInterval: state.syncInterval,
-      serverAddress: state.serverAddress,
-    ));
+    // 保留当前配置，切换到空闲状态
+    emit(_copyWithBase(state));
   }
 
   /// 解决冲突

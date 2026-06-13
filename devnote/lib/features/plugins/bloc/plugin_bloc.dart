@@ -22,8 +22,15 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
   ) async {
     try {
       final plugins = _pluginService.listPlugins();
-      final marketplacePlugins =
-          await _pluginService.fetchMarketplacePlugins();
+      // 修复：marketplace 获取失败时不应隐藏本地已安装的插件
+      // 原代码 marketplace fetch 失败会直接 emit PluginError，
+      // 导致用户连本地插件都看不到
+      List<MarketplacePlugin> marketplacePlugins = <MarketplacePlugin>[];
+      try {
+        marketplacePlugins = await _pluginService.fetchMarketplacePlugins();
+      } catch (_) {
+        // marketplace 获取失败时，本地插件仍可正常使用
+      }
       emit(PluginsLoaded(
         plugins: plugins,
         marketplacePlugins: marketplacePlugins,
