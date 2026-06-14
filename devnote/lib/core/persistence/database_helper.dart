@@ -6,7 +6,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 4;
+  static const _databaseVersion = 5;
 
   static Database? _database;
 
@@ -24,7 +24,16 @@ class DatabaseHelper {
       version: _databaseVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
+      onConfigure: _onConfigure,
     );
+  }
+
+  /// 启用 SQLite 外键约束
+  /// 修复：sqflite 默认不启用 PRAGMA foreign_keys，导致所有 ON DELETE CASCADE
+  /// 约束静默失效，产生大量孤儿数据。必须在 onConfigure 中启用，确保每次
+  /// 打开数据库连接时都生效（包括 WAL 模式下的连接池）。
+  Future<void> _onConfigure(Database db) async {
+    await db.execute('PRAGMA foreign_keys = ON');
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -35,7 +44,8 @@ class DatabaseHelper {
         content TEXT NOT NULL DEFAULT '',
         folder_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
       )
     ''');
     await db.execute('''
@@ -44,7 +54,8 @@ class DatabaseHelper {
         name TEXT NOT NULL,
         parent_id TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
       )
     ''');
     await db.execute('''
@@ -222,19 +233,7 @@ class DatabaseHelper {
     }
   }
 
-  Future<void> _restoreFromBackup(String backupPath) async {
-    final dbPath = await getDatabasesPath();
-    final originalPath = join(dbPath, _databaseName);
-    try {
-      final backupFile = File(backupPath);
-      if (await backupFile.exists()) {
-        await backupFile.copy(originalPath);
-        developer.log('Migration restored from backup: $backupPath', name: 'DatabaseHelper');
-      }
-    } catch (e) {
-      developer.log('Could not restore from backup', name: 'DatabaseHelper', error: e);
-    }
-  }
+  
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     await _backupBeforeMigration();
@@ -358,6 +357,40 @@ class DatabaseHelper {
                 FOREIGN KEY (relation_id) REFERENCES object_relations_definitions(id) ON DELETE CASCADE
               )
             ''');
+            break;
+          case 5:
+            // v5: 为 notes.folder_id 和 folders.parent_id 添加 FK 约束
+            // SQLite 不支持 ALTER TABLE ADD CONSTRAINT，需要重建表
+            // 步骤：创建新表 → 复制数据 → 删除旧表 → 重命名新表
+            // folders 表先迁移（notes 依赖 folders）
+            batch.execute('''
+              CREATE TABLE folders_v5 (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                parent_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (parent_id) REFERENCES folders_v5(id) ON DELETE CASCADE
+              )
+            ''');
+            batch.execute('INSERT INTO folders_v5 SELECT * FROM folders');
+            batch.execute('DROP TABLE folders');
+            batch.execute('ALTER TABLE folders_v5 RENAME TO folders');
+            // notes 表迁移
+            batch.execute('''
+              CREATE TABLE notes_v5 (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                folder_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
+              )
+            ''');
+            batch.execute('INSERT INTO notes_v5 SELECT * FROM notes');
+            batch.execute('DROP TABLE notes');
+            batch.execute('ALTER TABLE notes_v5 RENAME TO notes');
             break;
           default:
             break;

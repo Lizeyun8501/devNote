@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -76,14 +75,17 @@ class GrpcBridge {
   }
 
   /// Connect to a gRPC server
+  /// 修复：添加 try-finally 确保 FFI 分配的内存即使异常也能释放
   FFIResponse connect(String serverAddr) {
     final addrPtr = serverAddr.toNativeUtf8();
-    final responsePtr = devnoteGrpcConnect(addrPtr);
-    malloc.free(addrPtr);
-
-    final response = _readResponse(responsePtr);
-    devnoteDestroy(responsePtr);
-    return response;
+    try {
+      final responsePtr = devnoteGrpcConnect(addrPtr);
+      final response = _readResponse(responsePtr);
+      devnoteDestroy(responsePtr);
+      return response;
+    } finally {
+      malloc.free(addrPtr);
+    }
   }
 
   /// Disconnect from the gRPC server
@@ -95,30 +97,38 @@ class GrpcBridge {
   }
 
   /// Dispatch a request via gRPC
+  /// 修复：添加 try-finally 确保 FFI 分配的内存即使异常也能释放
   FFIResponse dispatch(String method, {String? payload}) {
     final methodPtr = method.toNativeUtf8();
     final payloadPtr = payload?.toNativeUtf8() ?? nullptr;
-
-    final responsePtr = devnoteGrpcDispatch(methodPtr, payloadPtr);
-
-    malloc.free(methodPtr);
-    if (payloadPtr != nullptr) {
-      malloc.free(payloadPtr);
+    try {
+      final responsePtr = devnoteGrpcDispatch(methodPtr, payloadPtr);
+      final response = _readResponse(responsePtr);
+      devnoteDestroy(responsePtr);
+      return response;
+    } finally {
+      malloc.free(methodPtr);
+      if (payloadPtr != nullptr) {
+        malloc.free(payloadPtr);
+      }
     }
-
-    final response = _readResponse(responsePtr);
-    devnoteDestroy(responsePtr);
-    return response;
   }
 
   FFIResponse _readResponse(Pointer<FFIResponseC> ptr) {
     final code = ptr.ref.code;
-    final message = ptr.ref.message.toDartString();
+    // 修复: 原代码对 Pointer<Uint8> 调用 toDartString() 不存在,改为 cast 到 Pointer<Utf8>
+    final message = ptr.ref.message.cast<Utf8>().toDartString();
     final dataPtr = ptr.ref.data;
 
     Uint8List? data;
     if (dataPtr != nullptr) {
-      data = Uint8List.fromList(dataPtr.toDartString().codeUnits);
+      // 修复: 原代码将字节流误用 toDartString 后取 codeUnits,
+      // 正确做法是按 data_len 长度复制字节
+      final length = ptr.ref.data_len;
+      data = Uint8List(length);
+      for (var i = 0; i < length; i++) {
+        data[i] = dataPtr.elementAt(i).value;
+      }
     }
 
     return FFIResponse(code: code, message: message, data: data);

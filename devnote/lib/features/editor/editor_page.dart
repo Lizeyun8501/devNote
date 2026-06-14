@@ -57,8 +57,8 @@ class _EditorViewState extends State<_EditorView> {
       onSave: () {
         // Save is handled automatically by the bloc on each change
       },
-      onUndo: () => context.read<EditorBloc>().add(const UndoEvent()),
-      onRedo: () => context.read<EditorBloc>().add(const RedoEvent()),
+      onUndo: () => context.read<EditorBloc>().add(UndoEvent()),
+      onRedo: () => context.read<EditorBloc>().add(RedoEvent()),
       onBold: _applyBold,
       onItalic: _applyItalic,
       onLink: _insertLink,
@@ -395,7 +395,7 @@ class _EditorViewState extends State<_EditorView> {
         title: const Text('导出笔记'),
         content: SelectableText(
           content.isEmpty ? '（空笔记）' : content,
-          maxHeight: 300,
+          maxLines: 20,
         ),
         actions: [
           TextButton(
@@ -432,7 +432,7 @@ class _EditorViewState extends State<_EditorView> {
     if (confirmed == true) {
       // Delete all blocks in the note through the bloc
       for (final block in state.blocks) {
-        bloc.add(DeleteBlock(block.id));
+        context.read<EditorBloc>().add(DeleteBlock(block.id));
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

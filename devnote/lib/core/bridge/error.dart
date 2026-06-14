@@ -93,11 +93,13 @@ sealed class DevNoteError implements Exception {
   const DevNoteError(this.message);
 
   factory DevNoteError.from(dynamic error) {
-    if (error is DatabaseError) return DevNoteDatabaseError(error.message);
-    if (error is NetworkError) return DevNoteNetworkError(error.message);
-    if (error is ValidationError) return DevNoteValidationError(error.message);
-    if (error is AuthError) return DevNoteAuthError(error.message);
-    if (error is SyncError) return DevNoteSyncError(error.message);
+    // 修复: 原代码引用未定义的 DatabaseError/NetworkError/ValidationError/
+    // AuthError/SyncError,改用 sealed class 的具体子类判断,保持类型安全
+    if (error is DevNoteDatabaseError) return error;
+    if (error is DevNoteNetworkError) return error;
+    if (error is DevNoteValidationError) return error;
+    if (error is DevNoteAuthError) return error;
+    if (error is DevNoteSyncError) return error;
     return DevNoteUnknownError(error.toString());
   }
 }

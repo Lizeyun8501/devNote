@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -199,17 +200,24 @@ class CryptoService {
   }
 
   Uint8List _generateSalt() {
+    // 修复：原代码使用 DateTime.now().microsecondsSinceEpoch % 256 生成盐值，
+    // 导致所有字节几乎相同且完全可预测，严重不安全。
+    // 改为使用 dart:math 的 Random.secure() 生成密码学安全的随机盐值
+    final random = Random.secure();
     final salt = Uint8List(32);
     for (var i = 0; i < 32; i++) {
-      salt[i] = DateTime.now().microsecondsSinceEpoch % 256;
+      salt[i] = random.nextInt(256);
     }
     return salt;
   }
 
   Uint8List _generateNonce() {
+    // 修复：同 _generateSalt，原代码使用时间戳取模生成 nonce，完全可预测。
+    // 改为使用 Random.secure() 生成密码学安全的随机 nonce
+    final random = Random.secure();
     final nonce = Uint8List(24);
     for (var i = 0; i < 24; i++) {
-      nonce[i] = DateTime.now().microsecondsSinceEpoch % 256;
+      nonce[i] = random.nextInt(256);
     }
     return nonce;
   }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:devnote/core/bridge/dispatch.dart';
@@ -52,6 +53,7 @@ class P2PState {
   final String? localPeerId;
   final List<P2PPeerInfo> peers;
   final String? signalingServerUrl;
+  final List<String> bootstrapPeers;
   final String? lastError;
 
   const P2PState({
@@ -60,6 +62,7 @@ class P2PState {
     this.localPeerId,
     this.peers = const [],
     this.signalingServerUrl,
+    this.bootstrapPeers = const [],
     this.lastError,
   });
 
@@ -69,6 +72,7 @@ class P2PState {
     String? localPeerId,
     List<P2PPeerInfo>? peers,
     String? signalingServerUrl,
+    List<String>? bootstrapPeers,
     String? lastError,
   }) {
     return P2PState(
@@ -77,6 +81,7 @@ class P2PState {
       localPeerId: localPeerId ?? this.localPeerId,
       peers: peers ?? this.peers,
       signalingServerUrl: signalingServerUrl ?? this.signalingServerUrl,
+      bootstrapPeers: bootstrapPeers ?? this.bootstrapPeers,
       lastError: lastError,
     );
   }
@@ -121,11 +126,12 @@ class P2PService {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_keyEnabled) ?? false;
     final signalingServer = prefs.getString(_keySignalingServer);
-    prefs.getStringList(_keyBootstrapPeers) ?? [];
+    final bootstrapPeers = prefs.getStringList(_keyBootstrapPeers) ?? [];
 
     _state = _state.copyWith(
       isEnabled: enabled,
       signalingServerUrl: signalingServer ?? 'https://signal.devnote.app',
+      bootstrapPeers: bootstrapPeers,
     );
 
     if (enabled) {
@@ -513,14 +519,16 @@ class P2PService {
   }
 
   String _generatePeerId() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final random = StringBuffer();
-    for (var i = 0; i < 16; i++) {
-      random.write(timestamp % 16 < 10
-          ? String.fromCharCode(48 + (timestamp % 16))
-          : String.fromCharCode(87 + (timestamp % 16)));
-      timestamp ~/ 16;
+    // 修复：使用 Random.secure() 生成密码学安全的随机节点 ID
+    // 原代码仅使用 timestamp 取模生成，多次调用产生相同或不唯一的 ID
+    final random = Random.secure();
+    final randomPart = StringBuffer();
+    for (var i = 0; i < 32; i++) {
+      final value = random.nextInt(16);
+      randomPart.write(value < 10
+          ? String.fromCharCode(48 + value)
+          : String.fromCharCode(87 + value));
     }
-    return 'Qm${random.toString()}${timestamp.toRadixString(16).padLeft(8, '0')}';
+    return 'Qm$randomPart';
   }
 }

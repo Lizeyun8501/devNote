@@ -14,7 +14,7 @@ class NoteList extends StatelessWidget {
   Widget build(BuildContext context) {
     return BlocBuilder<NotesBloc, NotesState>(
       builder: (context, state) {
-        if (state is NotesLoadedData) {
+        if (state is NotesLoaded) {
           return Column(
             children: [
               _NoteListToolbar(viewMode: state.viewMode, sortBy: state.sortBy),

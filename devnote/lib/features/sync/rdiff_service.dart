@@ -20,7 +20,6 @@
 /// - 适用于大文件的小范围修改场景（如文档同步）
 /// - 配合端到端加密使用，在加密前执行增量计算
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 /// Rdiff 块签名 —— 包含弱哈希和强哈希
@@ -122,7 +121,11 @@ class RdiffDeltaInstruction {
   }
 
   /// 从二进制格式解码 —— 与 encode() 对应
+  /// 修复：添加越界检查，防止恶意或损坏的增量数据导致崩溃
   static RdiffDeltaInstruction decode(Uint8List encoded, int offset) {
+    if (offset + 5 > encoded.length) {
+      throw ArgumentError('Invalid delta data: offset $offset exceeds buffer length ${encoded.length}');
+    }
     final opByte = encoded[offset];
     final op = opByte == 0 ? RdiffDeltaOp.literal : RdiffDeltaOp.copy;
     final length = (encoded[offset + 1] << 24) |
@@ -131,6 +134,9 @@ class RdiffDeltaInstruction {
         encoded[offset + 4];
 
     if (op == RdiffDeltaOp.literal) {
+      if (offset + 5 + length > encoded.length) {
+        throw ArgumentError('Invalid literal data: expected $length bytes at offset $offset, buffer has ${encoded.length}');
+      }
       final data = Uint8List(length);
       data.setRange(0, length, encoded, offset + 5);
       return RdiffDeltaInstruction(
@@ -139,6 +145,9 @@ class RdiffDeltaInstruction {
         data: data,
       );
     } else {
+      if (offset + 9 > encoded.length) {
+        throw ArgumentError('Invalid copy instruction at offset $offset: buffer too short');
+      }
       final sourceBlockIndex = (encoded[offset + 5] << 24) |
           (encoded[offset + 6] << 16) |
           (encoded[offset + 7] << 8) |
@@ -226,19 +235,7 @@ class RdiffService {
   /// - blockLen: 窗口大小
   ///
   /// 返回: (newSum1, newSum2)
-  (int, int) _rollWeakChecksum(
-    int oldSum1,
-    int oldSum2,
-    int outByte,
-    int inByte,
-    int blockLen,
-  ) {
-    int newSum1 = (oldSum1 - outByte + inByte) % _checksumModulus;
-    if (newSum1 < 0) newSum1 += _checksumModulus;
-    int newSum2 = (oldSum2 - blockLen * outByte + newSum1) % _checksumModulus;
-    if (newSum2 < 0) newSum2 += _checksumModulus;
-    return (newSum1, newSum2);
-  }
+  
 
   /// 计算数据块的强哈希（简化版 MD5-like 哈希）
   ///

@@ -7,9 +7,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/notes/bloc/notes_bloc.dart';
-import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/features/notes/bloc/folder_bloc.dart';
-import 'package:devnote/features/notes/bloc/folder_state.dart';
+import 'package:devnote/features/notes/bloc/folder_event.dart'; // 修复: 添加 LoadFolders 导入
 import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
@@ -33,6 +32,10 @@ class MockNoteRepository implements NoteRepository {
   @override
   Future<List<NoteModel>> listNotes(String folderId) async =>
       _notes.where((n) => n.folderId == folderId).toList();
+  // 修复: 添加 listNotesPaged 的桩实现,NoteRepository 接口要求此方法
+  @override
+  Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0}) async =>
+      _notes.where((n) => n.folderId == folderId).skip(offset).take(limit).toList();
 }
 
 class MockFolderRepository implements FolderRepository {

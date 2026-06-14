@@ -6,17 +6,12 @@
 // 借鉴内容: 用户在 UI 中显式同意后才上报 (user_consent flag),撤回同意立即清空 user 上下文
 
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Sentry 配置类 —— 集中管理 DSN、环境、采样率、用户同意状态等设置
 class SentryConfig {
-  /// Sentry DSN —— 从环境变量 SENTRY_DSN 读取
-  /// TODO: 替换为实际 Sentry DSN
-  static const String _defaultDsn = 'https://example@sentry.io/0';
-
   /// 当前运行环境
   final String environment;
 
@@ -60,7 +55,7 @@ class SentryConfig {
       // 撤回同意:立即清空 PII
       try {
         await Sentry.configureScope((scope) {
-          scope.user = null;
+          scope.setUser(null);
           scope.setTag('consent', 'revoked');
         });
       } catch (_) {
@@ -73,15 +68,6 @@ class SentryConfig {
         });
       } catch (_) {}
     }
-  }
-
-  /// 从环境变量读取 DSN
-  static String _resolveDsn() {
-    const dsn = String.fromEnvironment('SENTRY_DSN');
-    if (dsn.isNotEmpty) {
-      return dsn;
-    }
-    return _defaultDsn;
   }
 
   /// 从持久化加载用户同意状态
@@ -125,14 +111,15 @@ Future<void> setupSentry({SentryConfig? config}) async {
       }
 
       // 过滤 PII（个人身份信息）
-      options.beforeSend = (event, {hint}) {
+      options.beforeSend = (event, hint) {
         // 用户未同意时直接丢弃事件
         if (!cfg._userConsent) {
           return null;
         }
         // 移除可能包含敏感信息的请求体
         if (event.request?.url?.contains('/auth/') ?? false) {
-          event.request?.data = null;
+          // SentryRequest.data 不可变，通过克隆方式移除敏感数据
+          event = event.copyWith(request: event.request?.copyWith(data: null));
         }
         // 移除环境变量中的敏感信息
         event.tags?.removeWhere((key, _) =>

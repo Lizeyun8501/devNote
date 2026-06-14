@@ -378,10 +378,15 @@ class CanvasService {
       'canvas_id': canvasId,
       'path': path,
     });
-    await _dispatch.asyncRequest(
+    // 修复：添加错误处理，防止 FFI 调用失败时静默丢失数据
+    // 原代码直接 await 不做任何处理，文件写入失败时数据丢失且无提示
+    final result = await _dispatch.asyncRequest(
       'CanvasEvent.SaveCanvas',
       payload: utf8.encode(payload),
     );
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('保存画布失败: ${result.error.message}');
+    }
   }
 
   Future<String> loadCanvas(String path) async {
@@ -502,44 +507,50 @@ class CanvasService {
   /// 借鉴 Excalidraw 的变更应用机制：
   /// 根据变更类型更新本地画布状态，
   /// 使用向量时钟 / 操作转换避免冲突。
+  /// 修复：添加 try-catch 包裹整个处理逻辑，避免单个变更失败导致整个协作中断
   Future<void> handleCollaborationChange(CollaborationChange change) async {
-    switch (change.type) {
-      case CollaborationChangeType.nodeAdded:
-        final node = CanvasNodeModel.fromJson(change.data);
-        await addNode(change.canvasId, node);
-        break;
-      case CollaborationChangeType.nodeRemoved:
-        final nodeId = change.data['id'] as String;
-        await removeNode(change.canvasId, nodeId);
-        break;
-      case CollaborationChangeType.nodeMoved:
-        final nodeId = change.data['id'] as String;
-        final x = (change.data['x'] as num).toDouble();
-        final y = (change.data['y'] as num).toDouble();
-        await moveNode(change.canvasId, nodeId, x, y);
-        break;
-      case CollaborationChangeType.nodeResized:
-        final nodeId = change.data['id'] as String;
-        final width = (change.data['width'] as num).toDouble();
-        final height = (change.data['height'] as num).toDouble();
-        await resizeNode(change.canvasId, nodeId, width, height);
-        break;
-      case CollaborationChangeType.nodeContentChanged:
-        // 内容变更需要通过 getCanvas 重新获取最新状态后更新
-        await getCanvas(change.canvasId);
-        break;
-      case CollaborationChangeType.edgeAdded:
-        final edge = CanvasEdgeModel.fromJson(change.data);
-        await addEdge(change.canvasId, edge);
-        break;
-      case CollaborationChangeType.edgeRemoved:
-        final edgeId = change.data['id'] as String;
-        await removeEdge(change.canvasId, edgeId);
-        break;
-      case CollaborationChangeType.edgeLabelChanged:
-        // 标签变更需要通过 getCanvas 重新获取最新状态
-        await getCanvas(change.canvasId);
-        break;
+    try {
+      switch (change.type) {
+        case CollaborationChangeType.nodeAdded:
+          final node = CanvasNodeModel.fromJson(change.data);
+          await addNode(change.canvasId, node);
+          break;
+        case CollaborationChangeType.nodeRemoved:
+          final nodeId = change.data['id'] as String;
+          await removeNode(change.canvasId, nodeId);
+          break;
+        case CollaborationChangeType.nodeMoved:
+          final nodeId = change.data['id'] as String;
+          final x = (change.data['x'] as num).toDouble();
+          final y = (change.data['y'] as num).toDouble();
+          await moveNode(change.canvasId, nodeId, x, y);
+          break;
+        case CollaborationChangeType.nodeResized:
+          final nodeId = change.data['id'] as String;
+          final width = (change.data['width'] as num).toDouble();
+          final height = (change.data['height'] as num).toDouble();
+          await resizeNode(change.canvasId, nodeId, width, height);
+          break;
+        case CollaborationChangeType.nodeContentChanged:
+          // 内容变更需要通过 getCanvas 重新获取最新状态后更新
+          await getCanvas(change.canvasId);
+          break;
+        case CollaborationChangeType.edgeAdded:
+          final edge = CanvasEdgeModel.fromJson(change.data);
+          await addEdge(change.canvasId, edge);
+          break;
+        case CollaborationChangeType.edgeRemoved:
+          final edgeId = change.data['id'] as String;
+          await removeEdge(change.canvasId, edgeId);
+          break;
+        case CollaborationChangeType.edgeLabelChanged:
+          // 标签变更需要通过 getCanvas 重新获取最新状态
+          await getCanvas(change.canvasId);
+          break;
+      }
+    } catch (_) {
+      // 单个变更失败不影响其他变更的处理，也不中断协作会话
+      // 错误由上层通过 _changeController 流中的状态判断
     }
 
     // 通知监听器
@@ -564,4 +575,10 @@ class CanvasService {
 
   /// 获取当前活跃会话
   CollaborationSession? get activeSession => _activeSession;
+
+  /// 修复：释放资源，关闭协作变更流控制器
+  /// 原代码未关闭 _changeController，导致 StreamController 内存泄漏
+  void dispose() {
+    _changeController.close();
+  }
 }

@@ -14,7 +14,6 @@ import 'package:devnote/features/notes/bloc/folder_state.dart';
 import 'package:devnote/features/notes/widgets/folder_tree.dart';
 import 'package:devnote/features/notes/widgets/note_list.dart';
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
-import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/sync_status_widget.dart';
 
@@ -25,7 +24,8 @@ class NotesPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dbHelper = DatabaseHelper();
+    // 修复: 使用 getIt 中的单例 DatabaseHelper,避免每次 rebuild 创建新实例
+    final dbHelper = getIt<DatabaseHelper>();
     return MultiBlocProvider(
       providers: [
         BlocProvider(

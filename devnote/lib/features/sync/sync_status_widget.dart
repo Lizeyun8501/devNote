@@ -62,7 +62,7 @@ class SyncStatusWidget extends StatelessWidget {
       SyncInProgress(:final pushCount, :final pullCount) =>
         '同步中 ↑$pushCount ↓$pullCount',
       SyncCompleted() => '已同步',
-      SyncError(:final message) => '同步错误',
+      SyncError() => '同步错误',
       SyncConflict(:final conflicts) => '${conflicts.length}个冲突',
       _ => '',
     };

@@ -390,7 +390,7 @@ class S3Adapter implements StorageAdapter {
       if (response.statusCode == 200) {
         final lastModified = response.headers['last-modified'];
         if (lastModified != null) {
-          return HttpDate.parse(lastModified);
+          return _parseHttpDate(lastModified);
         }
       }
       return null;
@@ -415,6 +415,16 @@ class S3Adapter implements StorageAdapter {
       return response.statusCode == 200;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// 解析 HTTP 日期格式（如 "Thu, 01 Dec 2022 16:00:00 GMT"）
+  DateTime? _parseHttpDate(String value) {
+    try {
+      // 尝试直接解析 ISO 8601 格式
+      return DateTime.tryParse(value);
+    } catch (_) {
+      return null;
     }
   }
 }

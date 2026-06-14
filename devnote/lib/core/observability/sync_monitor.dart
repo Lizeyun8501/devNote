@@ -57,11 +57,9 @@
 /// ```
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
-// 借鉴 OpenTelemetry Dart SDK —— 来源: https://pub.dev/packages/opentelemetry
-// 使用 OTel API 和 SDK 中的类型（Attributes、Resource 等）
-import 'package:opentelemetry/api.dart' as otel_api;
 import 'package:opentelemetry/sdk.dart' as otel_sdk;
 
 // ==================== OpenTelemetry 指标仪器实现 ====================
@@ -431,7 +429,8 @@ class OTelMeterProvider {
         try {
           final request = await client.postUrl(uri);
           request.headers.set('Content-Type', 'application/json');
-          request.write(metrics.toString());
+          // 修复: 使用 jsonEncode 生成合法 JSON,原 Map.toString() 不是 JSON
+          request.write(jsonEncode(metrics));
           await request.close().timeout(exporterConfig!.exportTimeout);
         } finally {
           client.close();
@@ -446,6 +445,12 @@ class OTelMeterProvider {
   void stopExport() {
     _exportTimer?.cancel();
     _exportTimer = null;
+  }
+
+  /// 释放资源：停止导出定时器，清空 Meter 缓存
+  void dispose() {
+    stopExport();
+    _meters.clear();
   }
 }
 

@@ -38,10 +38,12 @@ class FolderBloc extends Bloc<FolderEvent, FolderState> {
         createdAt: now,
         updatedAt: now,
       );
-      await _folderRepository.createFolder(folder);
+      // 修复：使用 repository 返回的模型，而非本地创建的对象
+      // FFI 模式下 Rust 端可能返回不同的时间戳或 ID，使用本地对象会导致数据不一致
+      final created = await _folderRepository.createFolder(folder);
       final currentState = state;
       if (currentState is FolderLoaded) {
-        final newNode = FolderNode(folder: folder);
+        final newNode = FolderNode(folder: created);
         List<FolderNode> updatedNodes;
         if (event.parentId == null) {
           updatedNodes = List<FolderNode>.from(currentState.rootNodes)..add(newNode);

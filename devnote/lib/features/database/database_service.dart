@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/features/database/bloc/database_state.dart';
 
 class DatabaseService {
   final _uuid = const Uuid();
-  final DatabaseHelper _dbHelper = DatabaseHelper();
+  /// 修复：使用 DI 容器中的 DatabaseHelper 单例，避免创建多个数据库连接实例
+  /// 原代码 `DatabaseHelper()` 直接 new，绕过 DI 导致多连接、潜在数据不一致
+  final DatabaseHelper _dbHelper = getIt<DatabaseHelper>();
 
   // -- Helper methods to map rows to models --
 
@@ -204,11 +208,32 @@ class DatabaseService {
 
   Future<void> deleteDatabase(String databaseId) async {
     final db = await _dbHelper.database;
-    await db.delete(
-      'databases',
-      where: 'id = ?',
-      whereArgs: [databaseId],
-    );
+    // 修复：将多步级联删除包装在事务中，确保原子性
+    // 中途失败则整体回滚，避免部分删除导致数据不一致
+    await db.transaction((txn) async {
+      // 1. 删除所有 cells（通过 rows 关联）
+      final rowIds = (await txn.query(
+        'database_rows',
+        columns: ['id'],
+        where: 'database_id = ?',
+        whereArgs: [databaseId],
+      )).map((r) => r['id'] as String).toList();
+      if (rowIds.isNotEmpty) {
+        await txn.delete(
+          'database_cells',
+          where: 'row_id IN (${List.filled(rowIds.length, '?').join(',')})',
+          whereArgs: rowIds,
+        );
+      }
+      // 2. 删除 rows
+      await txn.delete('database_rows', where: 'database_id = ?', whereArgs: [databaseId]);
+      // 3. 删除 fields
+      await txn.delete('database_fields', where: 'database_id = ?', whereArgs: [databaseId]);
+      // 4. 删除 views
+      await txn.delete('database_views', where: 'database_id = ?', whereArgs: [databaseId]);
+      // 5. 删除主表
+      await txn.delete('databases', where: 'id = ?', whereArgs: [databaseId]);
+    });
   }
 
   Future<DatabaseModel> getDatabase(String databaseId) async {
@@ -312,11 +337,19 @@ class DatabaseService {
     await getDatabase(databaseId);
 
     final db = await _dbHelper.database;
-    await db.delete(
-      'database_fields',
-      where: 'id = ? AND database_id = ?',
-      whereArgs: [fieldId, databaseId],
-    );
+    // 修复：将级联删除包装在事务中，确保原子性
+    await db.transaction((txn) async {
+      await txn.delete(
+        'database_cells',
+        where: 'field_id = ?',
+        whereArgs: [fieldId],
+      );
+      await txn.delete(
+        'database_fields',
+        where: 'id = ? AND database_id = ?',
+        whereArgs: [fieldId, databaseId],
+      );
+    });
   }
 
   Future<DatabaseRowModel> addRow({
@@ -375,31 +408,35 @@ class DatabaseService {
     final nowStr = now.toIso8601String();
     final db = await _dbHelper.database;
 
-    // Update row timestamp
-    await db.update(
-      'database_rows',
-      {'updated_at': nowStr},
-      where: 'id = ? AND database_id = ?',
-      whereArgs: [rowId, databaseId],
-    );
+    // 修复：将更新行操作包装在事务中，确保原子性
+    // delete + insert cells 必须在同一事务中，避免 delete 成功但 insert 失败导致数据丢失
+    await db.transaction((txn) async {
+      // Update row timestamp
+      await txn.update(
+        'database_rows',
+        {'updated_at': nowStr},
+        where: 'id = ? AND database_id = ?',
+        whereArgs: [rowId, databaseId],
+      );
 
-    // Delete existing cells for this row
-    await db.delete(
-      'database_cells',
-      where: 'row_id = ?',
-      whereArgs: [rowId],
-    );
+      // Delete existing cells for this row
+      await txn.delete(
+        'database_cells',
+        where: 'row_id = ?',
+        whereArgs: [rowId],
+      );
 
-    // Insert new cells
-    for (final cell in cells) {
-      final cellId = _uuid.v4();
-      await db.insert('database_cells', {
-        'id': cellId,
-        'row_id': rowId,
-        'field_id': cell['fieldId'] as String,
-        'value': _encodeCellValue(cell['value']),
-      });
-    }
+      // Insert new cells
+      for (final cell in cells) {
+        final cellId = _uuid.v4();
+        await txn.insert('database_cells', {
+          'id': cellId,
+          'row_id': rowId,
+          'field_id': cell['fieldId'] as String,
+          'value': _encodeCellValue(cell['value']),
+        });
+      }
+    });
 
     final cellModels = cells
         .map((c) => DatabaseCellModel(
@@ -434,11 +471,19 @@ class DatabaseService {
     await getDatabase(databaseId);
 
     final db = await _dbHelper.database;
-    await db.delete(
-      'database_rows',
-      where: 'id = ? AND database_id = ?',
-      whereArgs: [rowId, databaseId],
-    );
+    // 修复：将级联删除包装在事务中，确保原子性
+    await db.transaction((txn) async {
+      await txn.delete(
+        'database_cells',
+        where: 'row_id = ?',
+        whereArgs: [rowId],
+      );
+      await txn.delete(
+        'database_rows',
+        where: 'id = ? AND database_id = ?',
+        whereArgs: [rowId, databaseId],
+      );
+    });
   }
 
   Future<DatabaseCellModel> updateCell({
@@ -453,27 +498,31 @@ class DatabaseService {
     final now = DateTime.now().toIso8601String();
     final db = await _dbHelper.database;
 
-    // Update row timestamp
-    await db.update(
-      'database_rows',
-      {'updated_at': now},
-      where: 'id = ?',
-      whereArgs: [rowId],
-    );
+    // 修复：将 upsert 操作包装在事务中，确保原子性
+    // delete + insert 必须在同一事务中，避免 delete 成功但 insert 失败导致数据丢失
+    await db.transaction((txn) async {
+      // Update row timestamp
+      await txn.update(
+        'database_rows',
+        {'updated_at': now},
+        where: 'id = ?',
+        whereArgs: [rowId],
+      );
 
-    // Upsert cell: delete then insert
-    await db.delete(
-      'database_cells',
-      where: 'row_id = ? AND field_id = ?',
-      whereArgs: [rowId, fieldId],
-    );
+      // Upsert cell: delete then insert
+      await txn.delete(
+        'database_cells',
+        where: 'row_id = ? AND field_id = ?',
+        whereArgs: [rowId, fieldId],
+      );
 
-    final cellId = _uuid.v4();
-    await db.insert('database_cells', {
-      'id': cellId,
-      'row_id': rowId,
-      'field_id': fieldId,
-      'value': _encodeCellValue(value),
+      final cellId = _uuid.v4();
+      await txn.insert('database_cells', {
+        'id': cellId,
+        'row_id': rowId,
+        'field_id': fieldId,
+        'value': _encodeCellValue(value),
+      });
     });
 
     return DatabaseCellModel(fieldId: fieldId, value: value);
@@ -580,7 +629,7 @@ class DatabaseService {
               final data = jsonDecode(raw) as Map<String, dynamic>;
               if (data['blockId'] == blockId) {
                 rowId = data['rowId'] as String;
-                _rowBlockBindings[rowId!] = blockId;
+                _rowBlockBindings[rowId] = blockId;
                 break;
               }
             } catch (e) {

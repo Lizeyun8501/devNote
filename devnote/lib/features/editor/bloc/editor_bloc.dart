@@ -40,10 +40,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           content: '',
           position: 0,
         );
-        if (newBlock == null) {
-          emit(const EditorError('创建默认块失败'));
-          return;
-        }
         emit(EditorLoaded(noteId: event.noteId, blocks: [newBlock]));
       } else {
         emit(EditorLoaded(noteId: event.noteId, blocks: blocks));
@@ -57,11 +53,7 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           content: '',
           position: 0,
         );
-        if (defaultBlock != null) {
-          emit(EditorLoaded(noteId: event.noteId, blocks: [defaultBlock]));
-        } else {
-          emit(EditorError('加载笔记失败: ${e.toString()}'));
-        }
+        emit(EditorLoaded(noteId: event.noteId, blocks: [defaultBlock]));
       } catch (_) {
         emit(EditorError('加载笔记失败: ${e.toString()}'));
       }
@@ -79,11 +71,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         content: event.content,
         position: event.position,
       );
-      // 错误处理：block 创建失败时中止操作，保留原有状态
-      if (newBlock == null) {
-        emit(const EditorError('创建块失败'));
-        return;
-      }
       final state = this.state;
       if (state is EditorLoaded) {
         final blocks = List<BlockModel>.from(state.blocks);
@@ -139,10 +126,6 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
             content: '',
             position: 0,
           );
-          if (newBlock == null) {
-            emit(const EditorError('创建默认块失败'));
-            return;
-          }
           emit(state.pushUndo(state.blocks).copyWith(blocks: [newBlock], activeBlockId: newBlock.id));
         } else {
           emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
@@ -179,10 +162,13 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
 
   /// 切换 block 类型
   /// 例如：paragraph → heading、heading → bullet_list 等
+  /// 同时将类型变更持久化到 SQLite
   Future<void> _onToggleBlockType(ToggleBlockType event, Emitter<EditorState> emit) async {
     try {
       final state = this.state;
       if (state is EditorLoaded) {
+        // 持久化 block_type 变更到 SQLite
+        await _editorService.updateBlockType(blockId: event.blockId, newType: event.newType);
         final blocks = state.blocks.map((b) {
           if (b.id == event.blockId) {
             return b.copyWith(blockType: event.newType);

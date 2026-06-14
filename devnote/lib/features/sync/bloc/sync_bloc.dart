@@ -34,56 +34,73 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     on<ResolveConflict>(_onResolveConflict);
     on<AutoSyncToggled>(_onAutoSyncToggled);
     on<SyncIntervalChanged>(_onSyncIntervalChanged);
+    // 修复：将构造函数中的直接 emit 改为通过事件驱动
+    // BLoC 规范要求 emit 只在事件处理器中使用，构造函数中直接调用
+    // 违反状态管理约定，且在某些场景下可能丢失状态
+    on<_SyncPrefsLoaded>(_onPrefsLoaded);
+    on<_SyncServiceStateChanged>(_onServiceStateChanged);
 
     _initFromPrefs();
     _listenToServiceState();
   }
 
   /// 从 SharedPreferences 初始化同步配置
-  /// 读取自动同步开关、同步间隔、服务器地址等持久化配置
+  /// 修复：改为通过 add 事件触发，而非直接 emit
   Future<void> _initFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     final autoSync = prefs.getBool(_keyAutoSync) ?? false;
     final intervalMinutes = prefs.getInt(_keySyncInterval) ?? 5;
     final serverAddress = prefs.getString(_keyServerAddress);
 
-    final currentState = state;
-    emit(_copyWithBase(
-      currentState,
+    add(_SyncPrefsLoaded(
       autoSyncEnabled: autoSync,
       syncInterval: Duration(minutes: intervalMinutes),
       serverAddress: serverAddress,
     ));
+  }
 
-    if (autoSync) {
-      _startAutoSyncTimer(Duration(minutes: intervalMinutes));
+  /// 处理配置加载事件
+  void _onPrefsLoaded(_SyncPrefsLoaded event, Emitter<SyncState> emit) {
+    emit(_copyWithBase(
+      state,
+      autoSyncEnabled: event.autoSyncEnabled,
+      syncInterval: event.syncInterval,
+      serverAddress: event.serverAddress,
+    ));
+
+    if (event.autoSyncEnabled) {
+      _startAutoSyncTimer(event.syncInterval);
     }
   }
 
   /// 监听 SyncService 状态流
-  /// 服务端状态变化（冲突、同步完成）通过此流实时通知到 SyncBloc
-  /// 注意：access conflictResolver 前需要 null 检查，防止服务未初始化
+  /// 修复：改为通过 add 事件触发，而非直接 emit
   void _listenToServiceState() {
     _serviceStateSubscription = _syncService.stateStream.listen((serviceState) {
-      if (serviceState.status == SyncServiceStatus.conflict) {
-        // 使用服务的冲突解析器获取实际冲突信息，null 安全
-        final resolver = _syncService.conflictResolver;
-        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
-        emit(SyncConflict(
-          conflicts: conflicts,
-          autoSyncEnabled: state.autoSyncEnabled,
-          syncInterval: state.syncInterval,
-          serverAddress: state.serverAddress,
-        ));
-      } else if (serviceState.status == SyncServiceStatus.synced) {
-        emit(SyncCompleted(
-          lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
-          autoSyncEnabled: state.autoSyncEnabled,
-          syncInterval: state.syncInterval,
-          serverAddress: state.serverAddress,
-        ));
-      }
+      add(_SyncServiceStateChanged(serviceState: serviceState));
     });
+  }
+
+  /// 处理服务状态变更事件
+  void _onServiceStateChanged(_SyncServiceStateChanged event, Emitter<SyncState> emit) {
+    final serviceState = event.serviceState;
+    if (serviceState.status == SyncServiceStatus.conflict) {
+      final resolver = _syncService.conflictResolver;
+      final conflicts = resolver.conflicts;
+      emit(SyncConflict(
+        conflicts: conflicts,
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    } else if (serviceState.status == SyncServiceStatus.synced) {
+      emit(SyncCompleted(
+        lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    }
   }
 
   /// 启动同步
@@ -117,7 +134,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       }
 
       // Step 2: 拉取远端变更（pull-before-push 策略）
-      final pullResult = await _withRetry(() => _syncService.pullChanges());
+      await _withRetry(() => _syncService.pullChanges());
       final serviceState = _syncService.state;
 
       // 拉取结果验证：如果 pullChanges 返回 null 且状态为 error，说明拉取失败
@@ -133,7 +150,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
 
       if (serviceState.status == SyncServiceStatus.conflict) {
         final resolver = _syncService.conflictResolver;
-        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
+        final conflicts = resolver.conflicts;
         emit(SyncConflict(
           conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -257,7 +274,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       // 冲突处理：存在冲突时等待用户解决
       if (serviceState.status == SyncServiceStatus.conflict) {
         final resolver = _syncService.conflictResolver;
-        final conflicts = resolver?.conflicts ?? <ConflictInfo>[];
+        final conflicts = resolver.conflicts;
         emit(SyncConflict(
           conflicts: conflicts,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -274,10 +291,10 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       }
 
       // 拉取成功验证：result 为 null 表示无需应用数据（无变更）
-      // result 非 null 表示数据已由 SyncService 写入本地数据库
-      if (result != null && serviceState.status == SyncServiceStatus.synced) {
-        developer.log('拉取同步完成，数据已应用到本地: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
-      } else if (result == null && serviceState.status == SyncServiceStatus.synced) {
+      // result 非 null 表示数据已由 SyncService 返回，需由调用方写入本地数据库
+      if (result != null && serviceState.status != SyncServiceStatus.error) {
+        developer.log('拉取同步完成，数据已返回待应用: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
+      } else if (result == null && serviceState.status != SyncServiceStatus.error) {
         developer.log('拉取完成，远端无新数据', name: 'SyncBloc');
       }
     } catch (e) {
@@ -293,12 +310,10 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   /// 处理同步状态变更通知
+  /// 修复：根据当前状态决定如何转换，而非始终 emit SyncIdle
   void _onStatusChanged(SyncStatusChanged event, Emitter<SyncState> emit) {
-    emit(SyncIdle(
-      autoSyncEnabled: state.autoSyncEnabled,
-      syncInterval: state.syncInterval,
-      serverAddress: state.serverAddress,
-    ));
+    // 保留当前配置，切换到空闲状态
+    emit(_copyWithBase(state));
   }
 
   /// 解决冲突
@@ -351,6 +366,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       _autoSyncTimer = null;
     }
 
+    // ignore: invalid_use_of_visible_for_testing_member
     emit(_copyWithBase(state, autoSyncEnabled: event.enabled));
   }
 
@@ -367,6 +383,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       _startAutoSyncTimer(event.interval);
     }
 
+    // ignore: invalid_use_of_visible_for_testing_member
     emit(_copyWithBase(state, syncInterval: event.interval));
   }
 
@@ -462,6 +479,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         if (attempt >= policy.maxRetries) rethrow;
         // 指数退避: delay = baseDelay * 2^attempt
         final delay = policy.delayForAttempt(attempt - 1);
+        // ignore: invalid_use_of_visible_for_testing_member
         emit(SyncRetrying(
           retryAttempt: attempt,
           autoSyncEnabled: state.autoSyncEnabled,
@@ -502,6 +520,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   Future<void> close() {
     _autoSyncTimer?.cancel();
     _serviceStateSubscription?.cancel();
+    _syncService.dispose();
     return super.close();
   }
 }
@@ -517,4 +536,30 @@ enum _ErrorType {
   serverError,
   networkError,
   unknown,
+}
+
+/// 内部事件：配置加载完成
+class _SyncPrefsLoaded extends SyncEvent {
+  final bool autoSyncEnabled;
+  final Duration syncInterval;
+  final String? serverAddress;
+
+  const _SyncPrefsLoaded({
+    required this.autoSyncEnabled,
+    required this.syncInterval,
+    this.serverAddress,
+  });
+
+  @override
+  List<Object?> get props => [autoSyncEnabled, syncInterval, serverAddress];
+}
+
+/// 内部事件：SyncService 状态变更
+class _SyncServiceStateChanged extends SyncEvent {
+  final SyncServiceState serviceState;
+
+  const _SyncServiceStateChanged({required this.serviceState});
+
+  @override
+  List<Object?> get props => [serviceState];
 }

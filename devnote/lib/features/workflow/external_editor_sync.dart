@@ -20,12 +20,16 @@ import 'package:devnote/features/workflow/file_watcher_service.dart';
 /// 监听外部编辑器（如 VS Code、Vim 等）对笔记文件的修改，
 /// 自动将变更同步到 DevNote 应用中，实现外部编辑器与 DevNote 的实时同步。
 class ExternalEditorSyncService {
-  final Dispatch _dispatch = getIt<Dispatch>();
-  final FileWatcherService _fileWatcher = FileWatcherService();
+  ExternalEditorSyncService();
+
+  Dispatch get _dispatch => getIt<Dispatch>();
+  FileWatcherService get _fileWatcher => getIt<FileWatcherService>();
 
   Timer? _debounceTimer;
   StreamSubscription? _watcherSubscription;
   String? _watchingDir;
+
+  // 保留 _debounceTimer 引用以保持向后兼容，但实际使用 _fileTimers
 
   /// 开始监听指定目录的文件变更
   /// 借鉴 VS Code 的文件监听机制，结合防抖处理避免频繁同步
@@ -59,6 +63,12 @@ class ExternalEditorSyncService {
 
     _debounceTimer?.cancel();
     _debounceTimer = null;
+
+    // 修复：清理所有文件级别定时器
+    for (final timer in _fileTimers.values) {
+      timer.cancel();
+    }
+    _fileTimers.clear();
 
     await _fileWatcher.stopWatching();
     _watchingDir = null;
@@ -115,6 +125,11 @@ class ExternalEditorSyncService {
 
   /// 处理文件变更事件
   /// 借鉴 VS Code 的防抖机制，避免短时间内多次同步
+  /// 修复：使用逐个文件防抖而非全局覆盖，避免事件丢失
+  /// 原代码使用单个 _debounceTimer，新事件覆盖旧定时器导致旧事件被丢弃
+  /// 例如文件 A 在 t=0 变更，文件 B 在 t=0.3s 变更，文件 A 的定时器被取消导致丢失
+  final Map<String, Timer> _fileTimers = {};
+
   void _handleFileChange(FileChangeEvent event, String notesDir) {
     // 忽略目录变更，只处理文件
     if (event.path.endsWith('/')) {
@@ -127,9 +142,10 @@ class ExternalEditorSyncService {
       return;
     }
 
-    // 取消之前的定时器，重新开始计时
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+    // 取消该文件的旧定时器，重新开始计时
+    _fileTimers[event.path]?.cancel();
+    _fileTimers[event.path] = Timer(const Duration(milliseconds: 500), () {
+      _fileTimers.remove(event.path);
       // 防抖后执行同步
       switch (event.kind) {
         case FileChangeKind.create:
@@ -188,4 +204,10 @@ class ExternalEditorSyncService {
 
   /// 获取当前监听的目录
   String? get watchingDir => _watchingDir;
+
+  /// 释放资源：停止监听，关闭文件监听器
+  Future<void> dispose() async {
+    await stopWatching();
+    await _fileWatcher.dispose();
+  }
 }

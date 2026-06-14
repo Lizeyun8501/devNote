@@ -67,6 +67,9 @@ class FlashcardBloc extends Bloc<FlashcardEvent, FlashcardState> {
         back: event.back,
         noteId: event.noteId,
       );
+      // 修复：创建成功后重新加载牌组，确保 UI 反映新增的卡片
+      final decks = await _flashcardService.listDecks();
+      emit(DecksLoaded(decks: decks));
     } catch (e) {
       emit(FlashcardError(e.toString()));
     }
@@ -75,6 +78,9 @@ class FlashcardBloc extends Bloc<FlashcardEvent, FlashcardState> {
   Future<void> _onDeleteFlashcard(DeleteFlashcardEvent event, Emitter<FlashcardState> emit) async {
     try {
       await _flashcardService.deleteFlashcard(event.flashcardId);
+      // 修复：删除成功后重新加载牌组，确保 UI 反映删除
+      final decks = await _flashcardService.listDecks();
+      emit(DecksLoaded(decks: decks));
     } catch (e) {
       emit(FlashcardError(e.toString()));
     }

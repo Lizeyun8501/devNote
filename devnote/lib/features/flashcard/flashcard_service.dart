@@ -311,7 +311,7 @@ class FlashcardService {
   /// 批量导入闪卡（从文本文件）
   /// 支持 CSV / TSV 格式：正面\t背面\t标签1,标签2
   /// 借鉴 Anki 的文本文件导入格式
-  Future<int> batchImportCards(String filePath, {String delimiter = '\t'}) async {
+  Future<int> batchImportCards(String filePath, {String deckId = 'default', String delimiter = '\t'}) async {
     final file = File(filePath);
     if (!await file.exists()) {
       throw Exception('文件不存在: $filePath');
@@ -333,7 +333,7 @@ class FlashcardService {
         // 自动识别卡片类型：包含 Cloze 标记则创建 cloze 卡片
         final cardType = _detectCardType(front, back);
         await createFlashcard(
-          deckId: 'default',
+          deckId: deckId,
           cardType: cardType,
           front: front,
           back: back,

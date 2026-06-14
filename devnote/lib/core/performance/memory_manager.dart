@@ -1,7 +1,8 @@
 import 'dart:typed_data';
-// 引入 Flutter 图像编解码 API，用于在 isolate 之外对图片进行重新编码压缩。
-// 借鉴 1Password 等应用的思路：解码 -> 按质量重新编码 -> 比较大小。
-import 'package:flutter/painting.dart' as ui;
+// 引入 Flutter 图像编解码 API,用于在 isolate 之外对图片进行重新编码压缩。
+// 借鉴 1Password 等应用的思路:解码 -> 按质量重新编码 -> 比较大小。
+// 修复: paint 中没有 instantiateImageCodec,该函数在 ui 库中
+import 'dart:ui' as ui;
 
 class MemoryManager {
   MemoryManager();

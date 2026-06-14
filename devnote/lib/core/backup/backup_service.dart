@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
@@ -79,7 +80,6 @@ class BackupInfo {
 class BackupService {
   static const String _backupManifestFile = 'backup_manifest.json';
   Timer? _autoBackupTimer;
-  BackupManifest? _lastManifest;
 
   /// 创建备份
   ///

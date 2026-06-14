@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
+export 'package:flutter_gen/gen_l10n/app_localizations.dart' show AppLocalizations;
+
 /// Provider for runtime locale switching.
 /// Use [LocaleProvider.instance] as a singleton [ValueNotifier<Locale>].
 class LocaleProvider extends ValueNotifier<Locale> {

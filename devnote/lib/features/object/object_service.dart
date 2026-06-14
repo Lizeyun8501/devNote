@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:uuid/uuid.dart';
 
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 
 class ObjectTypeModel {
@@ -106,7 +107,8 @@ class ObjectService {
   final DatabaseHelper _dbHelper;
   final _uuid = const Uuid();
 
-  ObjectService([DatabaseHelper? dbHelper]) : _dbHelper = dbHelper ?? DatabaseHelper();
+  /// 修复：默认使用 DI 容器中的 DatabaseHelper 单例，避免创建多个数据库连接实例
+  ObjectService([DatabaseHelper? dbHelper]) : _dbHelper = dbHelper ?? getIt<DatabaseHelper>();
 
   Future<ObjectTypeModel> createObjectType(String name, String icon, List<ObjectPropertyModel> properties) async {
     final id = _uuid.v4();
@@ -160,7 +162,38 @@ class ObjectService {
 
   Future<void> deleteObjectType(String typeId) async {
     final db = await _dbHelper.database;
-    await db.delete('object_types', where: 'id = ?', whereArgs: [typeId]);
+    // 修复：级联删除对象类型及其所有关联数据
+    // 虽然 schema 定义了 ON DELETE CASCADE，但需要确保删除顺序正确且在事务中执行
+    // 1. 先删除引用 objects 的 object_relations（source_id/target_id）
+    // 2. 再删除该类型下的所有 objects（CASCADE 会删 object_properties, object_relations_definitions）
+    // 3. 最后删除 object_types（CASCADE 会删 object_properties, object_relations_definitions）
+    await db.transaction((txn) async {
+      // 获取该类型下所有对象 ID
+      final objectRows = await txn.query(
+        'objects',
+        columns: ['id'],
+        where: 'type_id = ?',
+        whereArgs: [typeId],
+      );
+      final objectIds = objectRows.map((r) => r['id'] as String).toList();
+      // 删除引用这些对象的关系记录
+      if (objectIds.isNotEmpty) {
+        final placeholders = List.filled(objectIds.length, '?').join(',');
+        await txn.delete(
+          'object_relations',
+          where: 'source_id IN ($placeholders) OR target_id IN ($placeholders)',
+          whereArgs: [...objectIds, ...objectIds],
+        );
+      }
+      // 删除该类型下的所有对象
+      await txn.delete('objects', where: 'type_id = ?', whereArgs: [typeId]);
+      // 删除关系定义
+      await txn.delete('object_relations_definitions', where: 'type_id = ?', whereArgs: [typeId]);
+      // 删除属性
+      await txn.delete('object_properties', where: 'type_id = ?', whereArgs: [typeId]);
+      // 最后删除类型本身
+      await txn.delete('object_types', where: 'id = ?', whereArgs: [typeId]);
+    });
   }
 
   Future<List<ObjectTypeModel>> listObjectTypes() async {
@@ -195,7 +228,7 @@ class ObjectService {
     );
   }
 
-  Future<ObjectModel> updateObject(String objectId, Map<String, dynamic> properties) async {
+  Future<ObjectModel?> updateObject(String objectId, Map<String, dynamic> properties) async {
     final db = await _dbHelper.database;
     final rows = await db.query('objects', where: 'id = ?', whereArgs: [objectId], limit: 1);
     if (rows.isEmpty) throw Exception('Object not found');
@@ -214,7 +247,16 @@ class ObjectService {
 
   Future<void> deleteObject(String objectId) async {
     final db = await _dbHelper.database;
-    await db.delete('objects', where: 'id = ?', whereArgs: [objectId]);
+    // 修复：级联删除对象及其关联的关系记录
+    // object_relations 引用了 objects.id，需要先删除关系再删除对象
+    await db.transaction((txn) async {
+      await txn.delete(
+        'object_relations',
+        where: 'source_id = ? OR target_id = ?',
+        whereArgs: [objectId, objectId],
+      );
+      await txn.delete('objects', where: 'id = ?', whereArgs: [objectId]);
+    });
   }
 
   Future<ObjectModel> getObject(String objectId) async {

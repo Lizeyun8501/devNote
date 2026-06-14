@@ -13,8 +13,6 @@
 /// 来源: https://pub.dev/packages/flutter_rust_bridge
 /// 借鉴 AppFlowy 的 Repository + FFI 模式（已升级为 FRB 直接调用）
 
-import 'dart:convert';
-
 import 'dispatch.dart';
 
 class PersistenceDispatch {
@@ -25,6 +23,7 @@ class PersistenceDispatch {
   final _dispatch = Dispatch();
 
   /// 列表查询 —— 直接调用 FRB 类型安全方法
+  /// 修复: 返回 Map 列表(序列化后的 model),而非 model 列表
   Future<List<Map<String, dynamic>>> list({
     required String entity,
     Map<String, dynamic>? filter,
@@ -32,15 +31,19 @@ class PersistenceDispatch {
     switch (entity) {
       case 'note':
         final folderId = filter?['folder_id'] as String? ?? '';
-        return await _dispatch.listNotes(folderId);
+        final list = await _dispatch.listNotes(folderId);
+        return list.map((m) => m.toJson()).toList();
       case 'folder':
         final parentId = filter?['parent_id'] as String?;
-        return await _dispatch.listFolders(parentId: parentId);
+        final list = await _dispatch.listFolders(parentId: parentId);
+        return list.map((m) => m.toJson()).toList();
       case 'tag':
-        return await _dispatch.listTags();
+        final list = await _dispatch.listTags();
+        return list.map((m) => m.toJson()).toList();
       case 'block':
         final noteId = filter?['note_id'] as String? ?? '';
-        return await _dispatch.getBlocks(noteId);
+        final list = await _dispatch.getBlocks(noteId);
+        return list.map((m) => m.toJson()).toList();
       default:
         return [];
     }
@@ -53,25 +56,29 @@ class PersistenceDispatch {
   }) async {
     switch (entity) {
       case 'note':
-        return await _dispatch.createNote(
+        final result = await _dispatch.createNote(
           title: data['title'] as String,
           content: data['content'] as String,
           folderId: data['folder_id'] as String,
         );
+        return result.toJson();
       case 'folder':
-        return await _dispatch.createFolder(
+        final result = await _dispatch.createFolder(
           name: data['name'] as String,
           parentId: data['parent_id'] as String?,
         );
+        return result.toJson();
       case 'tag':
-        return await _dispatch.createTag(data['name'] as String);
+        final result = await _dispatch.createTag(data['name'] as String);
+        return result.toJson();
       case 'block':
-        return await _dispatch.insertBlock(
+        final result = await _dispatch.insertBlock(
           noteId: data['note_id'] as String,
           blockType: data['block_type'] as String,
           content: data['content'] as String,
           position: data['position'] as int?,
         );
+        return result.toJson();
       default:
         throw UnimplementedError('Entity not supported: $entity');
     }
@@ -85,11 +92,12 @@ class PersistenceDispatch {
   }) async {
     switch (entity) {
       case 'note':
-        return await _dispatch.updateNote(
+        final result = await _dispatch.updateNote(
           id: id,
           title: data['title'] as String,
           content: data['content'] as String,
         );
+        return result.toJson();
       case 'block':
         await _dispatch.updateBlock(id: id, content: data['content'] as String);
         return {'id': id};
@@ -124,7 +132,8 @@ class PersistenceDispatch {
   }) async {
     switch (entity) {
       case 'note':
-        return await _dispatch.getNote(id);
+        final result = await _dispatch.getNote(id);
+        return result?.toJson();
       default:
         throw UnimplementedError('Entity not supported for get: $entity');
     }

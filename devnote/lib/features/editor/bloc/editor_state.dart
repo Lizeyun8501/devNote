@@ -53,10 +53,12 @@ final class EditorLoaded extends EditorState {
     return copyWith(blocks: next, undoStack: newUndoStack, redoStack: newRedoStack);
   }
 
+  /// 修复：copyWith 使用 _Sentinel 模式支持清除 activeBlockId
+  /// 原代码 `activeBlockId ?? this.activeBlockId` 无法传 null 取消选中
   EditorLoaded copyWith({
     String? noteId,
     List<BlockModel>? blocks,
-    String? activeBlockId,
+    Object? activeBlockId = _sentinel,
     List<List<BlockModel>>? undoStack,
     List<List<BlockModel>>? redoStack,
     int? maxUndoLevels,
@@ -64,13 +66,16 @@ final class EditorLoaded extends EditorState {
     return EditorLoaded(
       noteId: noteId ?? this.noteId,
       blocks: blocks ?? this.blocks,
-      activeBlockId: activeBlockId ?? this.activeBlockId,
+      activeBlockId: activeBlockId == _sentinel ? this.activeBlockId : activeBlockId as String?,
       undoStack: undoStack ?? this.undoStack,
       redoStack: redoStack ?? this.redoStack,
       maxUndoLevels: maxUndoLevels ?? this.maxUndoLevels,
     );
   }
 }
+
+/// Sentinel 值用于区分"未传参"和"显式传 null"
+const _sentinel = Object();
 
 final class EditorError extends EditorState {
   final String message;

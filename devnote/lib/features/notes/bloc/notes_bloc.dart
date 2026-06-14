@@ -51,7 +51,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       );
       await _noteRepository.createNote(note);
       final currentState = state;
-      if (currentState is NotesLoadedData) {
+      if (currentState is NotesLoaded) {
         final notes = List<NoteModel>.from(currentState.notes)..insert(0, note);
         emit(currentState.copyWith(notes: notes, selectedNoteId: note.id));
       } else {
@@ -66,7 +66,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     try {
       await _noteRepository.deleteNote(event.noteId);
       final currentState = state;
-      if (currentState is NotesLoadedData) {
+      if (currentState is NotesLoaded) {
         final notes = currentState.notes.where((n) => n.id != event.noteId).toList();
         emit(currentState.copyWith(
           notes: notes,
@@ -82,30 +82,51 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
 
   Future<void> _onSelectNote(SelectNote event, Emitter<NotesState> emit) async {
     final currentState = state;
-    if (currentState is NotesLoadedData) {
+    if (currentState is NotesLoaded) {
       emit(currentState.copyWith(selectedNoteId: event.noteId));
     }
   }
 
   Future<void> _onSearchNotes(SearchNotes event, Emitter<NotesState> emit) async {
     final currentState = state;
-    if (currentState is NotesLoadedData) {
+    if (currentState is NotesLoaded) {
       if (event.query.isEmpty) {
-        emit(currentState.copyWith(searchQuery: null));
+        // 清空搜索时，从数据库重新加载原始列表
+        try {
+          final folderId = currentState.filterFolderId;
+          final allNotes = folderId != null
+              ? await _noteRepository.listNotes(folderId)
+              : await _noteRepository.listNotes('');
+          emit(currentState.copyWith(
+            searchQuery: null,
+            notes: _sortNotes(allNotes, currentState.sortBy),
+          ));
+        } catch (_) {
+          emit(currentState.copyWith(searchQuery: null));
+        }
         return;
       }
-      final filtered = currentState.notes
-          .where((n) =>
-              n.title.toLowerCase().contains(event.query.toLowerCase()) ||
-              n.content.toLowerCase().contains(event.query.toLowerCase()))
-          .toList();
-      emit(currentState.copyWith(searchQuery: event.query, notes: filtered));
+      // 搜索时始终从数据库查询，避免在过滤后的子集上重复搜索
+      try {
+        final folderId = currentState.filterFolderId;
+        final allNotes = folderId != null
+            ? await _noteRepository.listNotes(folderId)
+            : await _noteRepository.listNotes('');
+        final filtered = allNotes
+            .where((n) =>
+                n.title.toLowerCase().contains(event.query.toLowerCase()) ||
+                n.content.toLowerCase().contains(event.query.toLowerCase()))
+            .toList();
+        emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(filtered, currentState.sortBy)));
+      } catch (e) {
+        emit(NotesError(e.toString()));
+      }
     }
   }
 
   Future<void> _onFilterByTag(FilterByTag event, Emitter<NotesState> emit) async {
     final currentState = state;
-    if (currentState is NotesLoadedData) {
+    if (currentState is NotesLoaded) {
       emit(currentState.copyWith(filterTagId: event.tagId));
     }
   }
@@ -114,7 +135,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     try {
       final notes = await _noteRepository.listNotes(event.folderId);
       final currentState = state;
-      if (currentState is NotesLoadedData) {
+      if (currentState is NotesLoaded) {
         emit(currentState.copyWith(
           notes: _sortNotes(notes, currentState.sortBy),
           filterFolderId: event.folderId,
@@ -132,14 +153,14 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
 
   void _onChangeViewMode(ChangeViewMode event, Emitter<NotesState> emit) {
     final currentState = state;
-    if (currentState is NotesLoadedData) {
+    if (currentState is NotesLoaded) {
       emit(currentState.copyWith(viewMode: event.viewMode));
     }
   }
 
   void _onChangeSortBy(ChangeSortBy event, Emitter<NotesState> emit) {
     final currentState = state;
-    if (currentState is NotesLoadedData) {
+    if (currentState is NotesLoaded) {
       final sorted = _sortNotes(currentState.notes, event.sortBy);
       emit(currentState.copyWith(sortBy: event.sortBy, notes: sorted));
     }
@@ -161,7 +182,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
   /// 分页加载更多笔记 —— 借鉴 Android Paging Library 的增量加载模式
   Future<void> _onLoadMoreNotes(LoadMoreNotes event, Emitter<NotesState> emit) async {
     final currentState = state;
-    if (currentState is NotesLoadedData && currentState.hasMore) {
+    if (currentState is NotesLoaded && currentState.hasMore) {
       try {
         final nextPage = currentState.currentPage + 1;
         final moreNotes = await _noteRepository.listNotesPaged(

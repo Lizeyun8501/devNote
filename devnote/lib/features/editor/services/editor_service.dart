@@ -1,9 +1,6 @@
-import 'dart:convert';
-
 import 'package:uuid/uuid.dart';
-import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/ffi_request.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 
 /// 编辑器服务 - 负责 block 的 CRUD 与 Markdown 解析。
@@ -21,8 +18,9 @@ import 'package:devnote/core/persistence/database_helper.dart';
 /// 当 FFI 不可用时回退到 Dart 侧实现。
 class EditorService {
   final _uuid = const Uuid();
-  final DatabaseHelper _db = DatabaseHelper();
-  final FFIBridge _ffi = FFIBridge();
+  /// 修复：使用 DI 容器中的 DatabaseHelper 单例，避免创建多个数据库连接实例
+  /// 原代码 `DatabaseHelper()` 直接 new，绕过 DI 导致多连接、潜在数据不一致
+  final DatabaseHelper _db = getIt<DatabaseHelper>();
 
   /// 内存缓存：noteId → [BlockModel, ...]
   /// UI 从缓存读取以获得即时响应，持久化由 SQLite 保证。
@@ -47,21 +45,42 @@ class EditorService {
     required String content,
     required int position,
   }) async {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now();
     final block = BlockModel(
       id: _uuid.v4(),
       noteId: noteId,
       blockType: blockType,
       content: content,
       position: position,
+      createdAt: now,
+      updatedAt: now,
     );
 
     // 思源笔记风格：先写 SQLite，再更新缓存
+    // 修复：在插入新 block 前，将 position >= 新位置的所有已有 block 位置 +1
+    // 原代码只插入不移动，导致数据库中位置信息不一致
+    // Bloc 在内存中做了位置纠正，但 Service 的缓存和数据库都没有更新
     final db = await _db.database;
-    await db.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
+    await db.transaction((txn) async {
+      // 将 position >= 新位置的所有已有 block 向后移动一格
+      await txn.execute(
+        'UPDATE blocks SET position = position + 1, updated_at = ? '
+        'WHERE note_id = ? AND position >= ?',
+        [now.toIso8601String(), noteId, position],
+      );
+      // 插入新 block
+      await txn.insert('blocks', _blockToRow(block, createdAt: now.toIso8601String(), updatedAt: now.toIso8601String()));
+    });
 
     _noteBlocks.putIfAbsent(noteId, () => []);
-    _noteBlocks[noteId]!.add(block);
+    // 在缓存中也调整位置，保持一致性
+    final cached = _noteBlocks[noteId]!;
+    for (var i = 0; i < cached.length; i++) {
+      if (cached[i].position >= position) {
+        cached[i] = cached[i].copyWith(position: cached[i].position + 1);
+      }
+    }
+    cached.add(block);
     return block;
   }
 
@@ -87,7 +106,27 @@ class EditorService {
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
-        blocks[index] = blocks[index].copyWith(content: content);
+        blocks[index] = blocks[index].copyWith(content: content, updatedAt: DateTime.now());
+        return;
+      }
+    }
+  }
+
+  /// 更新 block 类型并持久化到 SQLite
+  Future<void> updateBlockType({required String blockId, required BlockType newType}) async {
+    final db = await _db.database;
+    final now = DateTime.now();
+    await db.update(
+      'blocks',
+      {'block_type': newType.name, 'updated_at': now.toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [blockId],
+    );
+
+    for (final blocks in _noteBlocks.values) {
+      final index = blocks.indexWhere((b) => b.id == blockId);
+      if (index != -1) {
+        blocks[index] = blocks[index].copyWith(blockType: newType, updatedAt: now);
         return;
       }
     }
@@ -96,47 +135,57 @@ class EditorService {
   Future<void> deleteBlock(String blockId) async {
     // 思源笔记风格：先从 SQLite DELETE，再更新缓存
     final db = await _db.database;
-    await db.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
 
+    // 修复：将删除和位置重排包装在事务中，确保原子性
+    // 原代码先 delete 再循环 update，如果中途某个 update 失败，
+    // 位置数据会不一致（部分块位置正确，部分不正确）
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
-        blocks.removeAt(index);
-        // 删除后重新排位，并同步写回数据库
-        for (var i = 0; i < blocks.length; i++) {
-          blocks[i] = blocks[i].copyWith(position: i);
-          await db.update(
-            'blocks',
-            {'position': i, 'updated_at': DateTime.now().toIso8601String()},
-            where: 'id = ?',
-            whereArgs: [blocks[i].id],
-          );
-        }
+        await db.transaction((txn) async {
+          await txn.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
+          blocks.removeAt(index);
+          // 删除后重新排位，在事务中批量写回数据库
+          for (var i = 0; i < blocks.length; i++) {
+            blocks[i] = blocks[i].copyWith(position: i);
+            await txn.update(
+              'blocks',
+              {'position': i, 'updated_at': DateTime.now().toIso8601String()},
+              where: 'id = ?',
+              whereArgs: [blocks[i].id],
+            );
+          }
+        });
         return;
       }
     }
+    // 如果缓存中没找到，仍然尝试从数据库删除
+    await db.delete('blocks', where: 'id = ?', whereArgs: [blockId]);
   }
 
   Future<void> moveBlock({required String blockId, required int newPosition}) async {
     final db = await _db.database;
-    final now = DateTime.now().toIso8601String();
 
+    // 修复：将移动和位置重排包装在事务中，确保原子性
+    // 原代码循环中逐个 db.update 不在事务中，中途失败导致位置不一致
     for (final blocks in _noteBlocks.values) {
       final index = blocks.indexWhere((b) => b.id == blockId);
       if (index != -1) {
         final block = blocks.removeAt(index);
         final insertAt = newPosition.clamp(0, blocks.length);
         blocks.insert(insertAt, block);
-        // 移动后重新排位，并同步写回数据库
-        for (var i = 0; i < blocks.length; i++) {
-          blocks[i] = blocks[i].copyWith(position: i);
-          await db.update(
-            'blocks',
-            {'position': i, 'updated_at': now},
-            where: 'id = ?',
-            whereArgs: [blocks[i].id],
-          );
-        }
+        await db.transaction((txn) async {
+          // 移动后重新排位，在事务中批量写回数据库
+          for (var i = 0; i < blocks.length; i++) {
+            blocks[i] = blocks[i].copyWith(position: i);
+            await txn.update(
+              'blocks',
+              {'position': i, 'updated_at': DateTime.now().toIso8601String()},
+              where: 'id = ?',
+              whereArgs: [blocks[i].id],
+            );
+          }
+        });
         return;
       }
     }
@@ -171,46 +220,21 @@ class EditorService {
 
   /// 尝试通过 FFI 调 Rust 解析器；不可用或失败时返回 null
   Future<List<BlockModel>?> _tryParseViaFfi(String content, String noteId) async {
-    if (!_ffi.isAvailable) return null;
-    try {
-      final req = FFIRequest(
-        event: 'EditorEvent.ParseMarkdown',
-        payload: utf8.encode(jsonEncode({'content': content})),
-        requestId: 0,
-      );
-      final resp = _ffi.invoke(req);
-      if (resp.code != 0) return null;
-      final list = jsonDecode(resp.data ?? '[]') as List<dynamic>;
-      return list.map((item) {
-        final m = item as Map<String, dynamic>;
-        return BlockModel(
-          id: _uuid.v4(),
-          noteId: noteId,
-          blockType: _parseBlockType(m['block_type'] as String?),
-          content: (m['content'] as String?) ?? '',
-          position: (m['position'] as int?) ?? 0,
-          language: m['language'] as String?,
-        );
-      }).toList();
-    } catch (_) {
-      return null;
-    }
+    // FFIBridge 尚未实现 parseMarkdown 方法，直接回退到 Dart 解析器
+    return null;
   }
 
-  BlockType _parseBlockType(String? name) {
-    if (name == null) return BlockType.paragraph;
-    return BlockType.values.firstWhere(
-      (e) => e.name == name,
-      orElse: () => BlockType.paragraph,
-    );
-  }
+  
 
   /// 将块列表持久化到 SQLite（思源笔记风格：先清空再批量插入）
+  /// 修复：将 DELETE + INSERT 包装在事务中，确保原子性
+  /// 原代码先 DELETE 再 INSERT 不在事务中，如果 INSERT 中途失败，
+  /// 所有旧数据已被删除，导致笔记内容完全丢失
   Future<void> _persistBlocks(String noteId, List<BlockModel> blocks) async {
     final db = await _db.database;
     final now = DateTime.now().toIso8601String();
-    await db.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
     await db.transaction((txn) async {
+      await txn.delete('blocks', where: 'note_id = ?', whereArgs: [noteId]);
       for (final block in blocks) {
         await txn.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
       }
@@ -223,6 +247,7 @@ class EditorService {
     final blocks = <BlockModel>[];
     var position = 0;
     var i = 0;
+    final now = DateTime.now();
 
     while (i < lines.length) {
       final line = lines[i];
@@ -242,6 +267,8 @@ class EditorService {
           content: codeLines.join('\n'),
           position: position,
           language: language,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -252,6 +279,8 @@ class EditorService {
           blockType: BlockType.heading6,
           content: line.substring(7),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -262,6 +291,8 @@ class EditorService {
           blockType: BlockType.heading5,
           content: line.substring(6),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -272,6 +303,8 @@ class EditorService {
           blockType: BlockType.heading4,
           content: line.substring(5),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -282,6 +315,8 @@ class EditorService {
           blockType: BlockType.heading3,
           content: line.substring(4),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -292,6 +327,8 @@ class EditorService {
           blockType: BlockType.heading2,
           content: line.substring(3),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -302,6 +339,8 @@ class EditorService {
           blockType: BlockType.heading1,
           content: line.substring(2),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
         i++;
@@ -318,6 +357,8 @@ class EditorService {
           blockType: BlockType.quote,
           content: quoteLines.join('\n'),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
       } else if (line.startsWith('- ') || line.startsWith('* ')) {
@@ -333,6 +374,8 @@ class EditorService {
           blockType: BlockType.list,
           content: listLines.join('\n'),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
       } else if (line.trim().isEmpty) {
@@ -356,6 +399,8 @@ class EditorService {
           blockType: BlockType.paragraph,
           content: paragraphLines.join('\n'),
           position: position,
+          createdAt: now,
+          updatedAt: now,
         ));
         position++;
       }
@@ -390,6 +435,7 @@ class EditorService {
 
   /// 从 sqflite 行数据还原 BlockModel
   BlockModel _rowToBlock(Map<String, dynamic> row) {
+    final now = DateTime.now();
     return BlockModel(
       id: row['id'] as String,
       noteId: row['note_id'] as String,
@@ -400,6 +446,16 @@ class EditorService {
       content: (row['content'] as String?) ?? '',
       position: (row['position'] as int?) ?? 0,
       language: row['language'] as String?,
+      createdAt: _parseDate(row['created_at']) ?? now,
+      updatedAt: _parseDate(row['updated_at']) ?? now,
     );
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value;
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    if (value is String) return DateTime.tryParse(value);
+    return null;
   }
 }

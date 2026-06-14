@@ -1,5 +1,4 @@
 import 'package:equatable/equatable.dart';
-import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 
 abstract class SyncEvent extends Equatable {
   const SyncEvent();

@@ -96,58 +96,62 @@ class ImportService {
   }) async {
     _progressController.add(const ImportProgress());
 
-    final sourceDir = Directory(sourcePath);
-    if (!await sourceDir.exists()) {
-      _progressController.add(const ImportProgress(isComplete: true));
-      return <ImportedNote>[];
-    }
+    try {
+      final sourceDir = Directory(sourcePath);
+      if (!await sourceDir.exists()) {
+        return <ImportedNote>[];
+      }
 
-    // 收集所有 .md 文件
-    final mdFiles = await _collectMarkdownFiles(sourceDir);
-    if (mdFiles.isEmpty) {
-      _progressController.add(const ImportProgress(isComplete: true));
-      return <ImportedNote>[];
-    }
+      // 收集所有 .md 文件
+      final mdFiles = await _collectMarkdownFiles(sourceDir);
+      if (mdFiles.isEmpty) {
+        return <ImportedNote>[];
+      }
 
-    final total = mdFiles.length;
-    final importedNotes = <ImportedNote>[];
+      final total = mdFiles.length;
+      final importedNotes = <ImportedNote>[];
 
-    for (var i = 0; i < mdFiles.length; i++) {
-      final file = mdFiles[i];
-      final fileName = p.basename(file.path);
+      for (var i = 0; i < mdFiles.length; i++) {
+        final file = mdFiles[i];
+        final fileName = p.basename(file.path);
+
+        _progressController.add(ImportProgress(
+          current: i + 1,
+          total: total,
+          currentFile: fileName,
+          isComplete: false,
+        ));
+
+        try {
+          final importedNote = await _importFile(
+            file: file,
+            sourceDir: sourceDir,
+            targetFolderId: targetFolderId,
+            source: source,
+            conflictResolution: conflictResolution,
+          );
+          if (importedNote != null) {
+            importedNotes.add(importedNote);
+          }
+        } catch (_) {
+          // 单个文件导入失败不影响整体流程，跳过继续
+          continue;
+        }
+      }
 
       _progressController.add(ImportProgress(
-        current: i + 1,
+        current: total,
         total: total,
-        currentFile: fileName,
-        isComplete: false,
+        currentFile: '',
+        isComplete: true,
       ));
 
-      try {
-        final importedNote = await _importFile(
-          file: file,
-          sourceDir: sourceDir,
-          targetFolderId: targetFolderId,
-          source: source,
-          conflictResolution: conflictResolution,
-        );
-        if (importedNote != null) {
-          importedNotes.add(importedNote);
-        }
-      } catch (_) {
-        // 单个文件导入失败不影响整体流程，跳过继续
-        continue;
-      }
+      return importedNotes;
+    } catch (e) {
+      // 修复：确保即使 import 方法中途抛异常，进度流也能正确关闭
+      _progressController.add(const ImportProgress(isComplete: true));
+      rethrow;
     }
-
-    _progressController.add(ImportProgress(
-      current: total,
-      total: total,
-      currentFile: '',
-      isComplete: true,
-    ));
-
-    return importedNotes;
   }
 
   /// 递归收集目录下所有 .md 文件
@@ -226,7 +230,6 @@ class ImportService {
     }
 
     // 创建笔记
-    final now = DateTime.now();
     final note = NoteModel(
       id: _uuid.v4(),
       title: parsed.title,

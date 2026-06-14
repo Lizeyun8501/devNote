@@ -254,7 +254,10 @@ GraphDataModel _parseGraphData(FlowyResult<Uint8List, FlowyInternalError> result
     if (json is Map<String, dynamic>) {
       return GraphDataModel.fromJson(json);
     }
-    return const GraphDataModel(nodes: [], edges: []);
+    // 修复：无效 JSON 格式时抛出异常，而非静默返回空数据
+    // 原代码返回空 GraphDataModel，掩盖了数据解析错误，
+    // 导致 UI 显示空图而无法定位问题
+    throw Exception('Invalid graph data format: expected Map, got ${json.runtimeType}');
   }
   if (result is Failure<Uint8List, FlowyInternalError>) {
     throw Exception(result.error.message);

@@ -132,7 +132,9 @@ List<T> _parseListResult<T>(
             .toList();
       }
     }
-    return <T>[];
+    // 修复：非预期格式时抛出异常而非静默返回空列表
+    // 原代码返回 [] 掩盖了 Rust 后端返回格式错误的问题
+    throw Exception('Invalid list response format: expected List, got ${json.runtimeType}');
   }
   if (result is Failure<Uint8List, FlowyInternalError>) {
     throw Exception(result.error.message);
@@ -145,18 +147,27 @@ class GitService {
 
   Future<void> init(String repoPath) async {
     final payload = jsonEncode({'repo_path': repoPath});
-    await _dispatch.asyncRequest(
+    // 修复：检查 FFI 返回结果，避免 git init 失败时静默继续
+    // 原代码直接 await 不处理返回值，init 失败时用户不会收到任何提示
+    final result = await _dispatch.asyncRequest(
       'WorkflowEvent.GitInit',
       payload: utf8.encode(payload),
     );
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('Git初始化失败: ${result.error.message}');
+    }
   }
 
   Future<void> commit(String message) async {
     final payload = jsonEncode({'message': message});
-    await _dispatch.asyncRequest(
+    // 修复：检查 FFI 返回结果，避免 git commit 失败时静默继续
+    final result = await _dispatch.asyncRequest(
       'WorkflowEvent.GitCommit',
       payload: utf8.encode(payload),
     );
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('Git提交失败: ${result.error.message}');
+    }
   }
 
   Future<List<GitCommitInfoModel>> log({int? maxCount}) async {
@@ -179,10 +190,14 @@ class GitService {
 
   Future<void> checkout(String reference) async {
     final payload = jsonEncode({'reference': reference});
-    await _dispatch.asyncRequest(
+    // 修复：检查 FFI 返回结果，避免 checkout 失败时静默继续
+    final result = await _dispatch.asyncRequest(
       'WorkflowEvent.GitCheckout',
       payload: utf8.encode(payload),
     );
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('Git checkout失败: ${result.error.message}');
+    }
   }
 
   Future<List<GitBranchInfoModel>> branch({String? name}) async {

@@ -70,17 +70,68 @@ class SqliteFolderRepository implements FolderRepository {
 
   @override
   Future<void> deleteFolder(String id) async {
+    final db = await _dbHelper.database;
+    // 修复：无论 FFI 是否可用，都先执行级联删除逻辑
+    // 原代码 FFI 路径只调用 _dispatch.delete，不收集子文件夹和笔记，
+    // 导致 FFI 模式下删除文件夹时子文件夹和笔记成为孤儿数据
+    // 现在统一：先递归收集所有子文件夹 → 删除所有关联笔记 → 删除所有文件夹
+    final allFolderIds = await _collectSubfolderIds(db, id);
+    allFolderIds.add(id);
+
+    // 删除所有关联文件夹中的笔记
+    for (final folderId in allFolderIds) {
+      await db.delete('notes', where: 'folder_id = ?', whereArgs: [folderId]);
+    }
+
     if (_useFFI) {
-      await _dispatch.delete(entity: 'folder', id: id);
+      // FFI 路径：逐个删除文件夹（按最深层优先避免 FK 冲突）
+      for (final folderId in allFolderIds.reversed) {
+        await _dispatch.delete(entity: 'folder', id: folderId);
+      }
       return;
     }
+
     developer.log('FFI not available, falling back to sqflite for deleteFolder', level: 900);
-    final db = await _dbHelper.database;
-    await db.delete('folders', where: 'id = ?', whereArgs: [id]);
+    // SQLite 路径：批量删除所有文件夹
+    await db.delete(
+      'folders',
+      where: 'id IN (${List.filled(allFolderIds.length, '?').join(',')})',
+      whereArgs: allFolderIds,
+    );
+  }
+
+  /// 递归收集指定文件夹的所有子文件夹 ID
+  Future<List<String>> _collectSubfolderIds(dynamic db, String parentId) async {
+    final children = await db.query(
+      'folders',
+      columns: ['id'],
+      where: 'parent_id = ?',
+      whereArgs: [parentId],
+    );
+    final ids = <String>[];
+    for (final row in children) {
+      final childId = row['id'] as String;
+      ids.add(childId);
+      ids.addAll(await _collectSubfolderIds(db, childId));
+    }
+    return ids;
   }
 
   @override
   Future<FolderModel> updateFolder(FolderModel folder) async {
+    // 修复：更新文件夹前检查循环引用
+    // 如果设置 parent_id 为自身或子文件夹，会导致无限递归
+    if (folder.parentId != null) {
+      if (folder.parentId == folder.id) {
+        throw ArgumentError('不能将文件夹的父级设为其自身');
+      }
+      final db = await _dbHelper.database;
+      final childIds = await _collectSubfolderIds(db, folder.id);
+      if (childIds.contains(folder.parentId)) {
+        throw ArgumentError('不能将文件夹移动到其子文件夹中，这会造成循环引用');
+      }
+    }
+
     if (_useFFI) {
       final result = await _dispatch.update(entity: 'folder', id: folder.id, data: folder.toJson());
       return FolderModel.fromJson(result);

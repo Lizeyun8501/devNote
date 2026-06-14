@@ -15,7 +15,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter_gen/gen_l10n/app_localizations.dart';
+import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/theme/app_theme.dart';
 import 'package:devnote/core/router/app_router.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
@@ -24,7 +24,6 @@ import 'package:devnote/core/observability/sentry_config.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
-import 'package:devnote/core/i18n/app_localizations.dart' show LocaleProvider;
 import 'package:devnote/core/platform/platform_channel.dart';
 
 void main() async {
@@ -32,6 +31,10 @@ void main() async {
 
   // Initialize dependency injection
   await setupDependencies();
+
+  // 修复：Sentry 初始化提前到 FFI Bridge 之前，确保 FFI 初始化过程中的
+  // 错误能被 Sentry 捕获上报，防止启动阶段异常丢失
+  await setupSentry();
 
   // Initialize Rust FFI bridge
   try {
@@ -62,10 +65,6 @@ void main() async {
 
   // Set memory limit
   getIt<MemoryManager>().setMemoryLimit(100 * 1024 * 1024);
-
-  // 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
-  // 来源: https://github.com/AppFlowy-IO/AppFlowy
-  await setupSentry();
 
   runApp(const DevNoteApp());
 }

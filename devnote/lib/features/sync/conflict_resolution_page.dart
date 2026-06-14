@@ -180,7 +180,7 @@ class _ConflictDiffCardState extends State<_ConflictDiffCard> {
     var hasDifference = false;
 
     for (final diff in diffs) {
-      if (diff.operation == dmp.Operation.equal) {
+      if (diff.operation == dmp.DIFF_EQUAL) {
         if (hasDifference && (localBuffer.isNotEmpty || remoteBuffer.isNotEmpty)) {
           blocks.add(DiffBlock(
             localText: localBuffer.toString(),
@@ -202,10 +202,10 @@ class _ConflictDiffCardState extends State<_ConflictDiffCard> {
         ));
         localBuffer.clear();
         remoteBuffer.clear();
-      } else if (diff.operation == dmp.Operation.delete) {
+      } else if (diff.operation == dmp.DIFF_DELETE) {
         localBuffer.write(diff.text);
         hasDifference = true;
-      } else if (diff.operation == dmp.Operation.insert) {
+      } else if (diff.operation == dmp.DIFF_INSERT) {
         remoteBuffer.write(diff.text);
         hasDifference = true;
       }
@@ -225,7 +225,7 @@ class _ConflictDiffCardState extends State<_ConflictDiffCard> {
       _blockChoices = {
         for (var i = 0; i < blocks.length; i++)
           i: blocks[i].diffs.length == 1 &&
-                  blocks[i].diffs[0].operation == dmp.Operation.equal
+                  blocks[i].diffs[0].operation == dmp.DIFF_EQUAL
               ? BlockChoice.local // Equal blocks default to local
               : BlockChoice.unresolved,
       };
@@ -458,20 +458,20 @@ class _ConflictDiffCardState extends State<_ConflictDiffCard> {
       Color? textColor;
       TextDecoration? decoration;
 
-      if (diff.operation == dmp.Operation.equal) {
+      if (diff.operation == dmp.DIFF_EQUAL) {
         backgroundColor = null;
         textColor = Theme.of(context).textTheme.bodySmall!.color;
-      } else if (diff.operation == dmp.Operation.delete && isLocal) {
+      } else if (diff.operation == dmp.DIFF_DELETE && isLocal) {
         backgroundColor = Colors.red.withValues(alpha: 0.2);
         textColor = Colors.red.shade800;
         decoration = TextDecoration.lineThrough;
-      } else if (diff.operation == dmp.Operation.insert && !isLocal) {
+      } else if (diff.operation == dmp.DIFF_INSERT && !isLocal) {
         backgroundColor = Colors.green.withValues(alpha: 0.2);
         textColor = Colors.green.shade800;
-      } else if (diff.operation == dmp.Operation.delete && !isLocal) {
+      } else if (diff.operation == dmp.DIFF_DELETE && !isLocal) {
         // Skip deletions on remote side
         continue;
-      } else if (diff.operation == dmp.Operation.insert && isLocal) {
+      } else if (diff.operation == dmp.DIFF_INSERT && isLocal) {
         // Skip insertions on local side
         continue;
       }
@@ -532,7 +532,7 @@ class _ConflictDiffCardState extends State<_ConflictDiffCard> {
                 final block = _diffBlocks[i];
                 // Equal blocks default to local, different blocks stay unresolved
                 if (block.diffs.length == 1 &&
-                    block.diffs[0].operation == dmp.Operation.equal) {
+                    block.diffs[0].operation == dmp.DIFF_EQUAL) {
                   _blockChoices[i] = BlockChoice.local;
                 } else {
                   _blockChoices[i] = BlockChoice.unresolved;
@@ -553,7 +553,7 @@ class _ConflictDiffCardState extends State<_ConflictDiffCard> {
       final block = _diffBlocks[i];
       // Only show blocks that have differences
       if (block.diffs.length != 1 ||
-          block.diffs[0].operation != dmp.Operation.equal) {
+          block.diffs[0].operation != dmp.DIFF_EQUAL) {
         conflictBlocks[i] = block;
       }
     }

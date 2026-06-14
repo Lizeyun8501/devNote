@@ -52,6 +52,22 @@ class WebDavAdapter implements StorageAdapter {
     return {'Authorization': 'Basic $credentials'};
   }
 
+  /// 发送 HTTP 请求（兼容 http 包新版本，Client 不再有 request 方法）
+  Future<http.Response> _request(String method, Uri uri, {
+    Map<String, String>? headers,
+    String? body,
+  }) async {
+    final request = http.Request(method, uri);
+    if (headers != null) request.headers.addAll(headers);
+    if (body != null) request.body = body;
+    final streamed = await _client.send(request);
+    return http.Response.fromStream(streamed);
+  }
+
+  DateTime? _parseHttpDate(String value) {
+    return DateTime.tryParse(value);
+  }
+
   Future<bool> _ensureBasePath() async {
     final segments = _config.effectiveBasePath.split('/').where((s) => s.isNotEmpty);
     var currentPath = '';
@@ -62,7 +78,7 @@ class WebDavAdapter implements StorageAdapter {
       );
       final headers = _authHeaders();
       headers['content-length'] = '0';
-      final response = await _client.request('MKCOL', uri, headers: headers);
+      final response = await _request('MKCOL', uri, headers: headers);
       // 201 = created, 405 = already exists, both are fine
       if (response.statusCode != 201 && response.statusCode != 405) {
         return false;
@@ -76,8 +92,7 @@ class WebDavAdapter implements StorageAdapter {
     try {
       final uri = _buildUri('');
       final headers = _authHeaders();
-      final response = await _client
-          .request('PROPFIND', uri, headers: headers)
+      final response = await _request('PROPFIND', uri, headers: headers)
           .timeout(const Duration(seconds: 10));
 
       _configured = response.statusCode == 207 ||
@@ -106,7 +121,7 @@ class WebDavAdapter implements StorageAdapter {
           );
           final headers = _authHeaders();
           headers['content-length'] = '0';
-          await _client.request('MKCOL', uri, headers: headers);
+          await _request('MKCOL', uri, headers: headers);
         }
       }
 
@@ -172,7 +187,7 @@ class WebDavAdapter implements StorageAdapter {
   </d:prop>
 </d:propfind>''';
 
-      final response = await _client.request(
+      final response = await _request(
         'PROPFIND',
         uri,
         headers: headers,
@@ -184,7 +199,6 @@ class WebDavAdapter implements StorageAdapter {
       final files = <String>[];
       final hrefRegex = RegExp(r'<d:href>(.*?)</d:href>');
       final basePath = _config.effectiveBasePath;
-      final prefixPath = '$basePath/${prefix.replaceAll(RegExp(r'^/+|/+$'), '')}';
 
       for (final match in hrefRegex.allMatches(response.body)) {
         var href = Uri.decodeFull(match.group(1)!);
@@ -223,7 +237,7 @@ class WebDavAdapter implements StorageAdapter {
   </d:prop>
 </d:propfind>''';
 
-      final response = await _client.request(
+      final response = await _request(
         'PROPFIND',
         uri,
         headers: headers,
@@ -235,7 +249,7 @@ class WebDavAdapter implements StorageAdapter {
             RegExp(r'<d:getlastmodified>(.*?)</d:getlastmodified>')
                 .firstMatch(response.body);
         if (lastModifiedMatch != null) {
-          return HttpDate.parse(lastModifiedMatch.group(1)!);
+          return _parseHttpDate(lastModifiedMatch.group(1)!);
         }
       }
       return null;

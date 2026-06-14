@@ -3,9 +3,6 @@
 // 现替换为 flutter_highlight，支持 190+ 语言和 87 种主题。
 // 来源: https://pub.dev/packages/flutter_highlight
 import 'package:flutter/material.dart';
-// 借鉴 flutter_highlight 核心库，提供 highlight.parse() 语法解析
-// 来源: https://pub.dev/packages/flutter_highlight
-import 'package:flutter_highlight/flutter_highlight.dart';
 // 借鉴 flutter_highlight 内置主题，替代自研的 3 套配色方案
 // 来源: https://pub.dev/packages/flutter_highlight
 import 'package:flutter_highlight/themes/monokai-sublime.dart';

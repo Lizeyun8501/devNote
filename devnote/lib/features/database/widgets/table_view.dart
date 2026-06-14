@@ -25,7 +25,7 @@ class TableView extends StatefulWidget {
 }
 
 class _TableViewState extends State<TableView> {
-  /// PlutoGrid 控制器，管理列、行及网格状态
+  // ignore: unused_field
   late PlutoGridStateManager _stateManager;
 
   /// 将 DatabaseFieldModel 转换为 PlutoColumn
@@ -41,7 +41,6 @@ class _TableViewState extends State<TableView> {
       enableSorting: false,
       enableFilterMenuItem: false,
       enableContextMenu: false,
-      enableDragMoving: false,
       enableColumnDrag: false,
       textAlign: PlutoColumnTextAlign.center,
     );
@@ -56,7 +55,6 @@ class _TableViewState extends State<TableView> {
         enableSorting: true,
         enableFilterMenuItem: true,
         enableContextMenu: true,
-        enableDragMoving: true,
         enableColumnDrag: true,
         textAlign: field.fieldType == 'Number'
             ? PlutoColumnTextAlign.right
@@ -278,7 +276,7 @@ class _TableViewState extends State<TableView> {
     if (field == null) return;
 
     // 将显示值转换为实际存储值
-    final rawValue = _parseRawValue(field, event.newValue);
+    final rawValue = _parseRawValue(field, event.value);
 
     context.read<DatabaseBloc>().add(UpdateCell(
           databaseId: widget.database.id,
@@ -288,16 +286,7 @@ class _TableViewState extends State<TableView> {
         ));
   }
 
-  /// 解析颜色值
-  Color? _parseColor(dynamic colorValue) {
-    if (colorValue is String && colorValue.startsWith('#')) {
-      final hex = colorValue.replaceFirst('#', '');
-      if (hex.length == 6) {
-        return Color(int.parse('FF$hex', radix: 16));
-      }
-    }
-    return null;
-  }
+  
 
   @override
   Widget build(BuildContext context) {
@@ -347,7 +336,7 @@ class _TableViewState extends State<TableView> {
                 fontWeight: FontWeight.bold,
               ) ??
               const TextStyle(fontWeight: FontWeight.bold),
-          cellTextStyle: Theme.of(context).textTheme.bodyMedium,
+          cellTextStyle: Theme.of(context).textTheme.bodyMedium ?? const TextStyle(),
           gridBorderColor: Theme.of(context).dividerColor,
           gridBorderRadius: BorderRadius.circular(8),
           enableCellBorderVertical: true,
