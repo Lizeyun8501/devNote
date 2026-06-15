@@ -79,6 +79,10 @@ void disposeAll() {
   if (getIt.isRegistered<FileWatcherService>()) {
     getIt<FileWatcherService>().dispose();
   }
+  // 修复：释放 CacheManager 缓存资源
+  if (getIt.isRegistered<CacheManager>()) {
+    getIt<CacheManager>().clearAll();
+  }
 
   // 释放核心桥接层（逆序）
   if (getIt.isRegistered<Dispatch>()) {

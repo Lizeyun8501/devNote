@@ -177,19 +177,24 @@ class DatabaseService {
     final now = DateTime.now().toIso8601String();
     final db = await _dbHelper.database;
 
-    await db.insert('databases', {
-      'id': id,
-      'name': name,
-      'created_at': now,
-      'updated_at': now,
-    });
+    // 修复：将 database 和 view 的创建包装在事务中，确保原子性
+    // 原代码分两次 insert 不在事务中，如果 view 创建失败，
+    // 会留下没有默认视图的孤立数据库
+    await db.transaction((txn) async {
+      await txn.insert('databases', {
+        'id': id,
+        'name': name,
+        'created_at': now,
+        'updated_at': now,
+      });
 
-    await db.insert('database_views', {
-      'id': viewId,
-      'database_id': id,
-      'name': 'Table View',
-      'view_type': 'Table',
-      'created_at': now,
+      await txn.insert('database_views', {
+        'id': viewId,
+        'database_id': id,
+        'name': 'Table View',
+        'view_type': 'Table',
+        'created_at': now,
+      });
     });
 
     return _mapDatabase({
@@ -364,22 +369,27 @@ class DatabaseService {
     final nowStr = now.toIso8601String();
     final db = await _dbHelper.database;
 
-    await db.insert('database_rows', {
-      'id': id,
-      'database_id': databaseId,
-      'created_at': nowStr,
-      'updated_at': nowStr,
-    });
-
-    for (final cell in cells) {
-      final cellId = _uuid.v4();
-      await db.insert('database_cells', {
-        'id': cellId,
-        'row_id': id,
-        'field_id': cell['fieldId'] as String,
-        'value': _encodeCellValue(cell['value']),
+    // 修复：将 row 和 cells 的创建包装在事务中，确保原子性
+    // 原代码 row insert 和 cells insert 不在事务中，
+    // 如果 cells 插入失败，会留下没有 cells 的空行
+    await db.transaction((txn) async {
+      await txn.insert('database_rows', {
+        'id': id,
+        'database_id': databaseId,
+        'created_at': nowStr,
+        'updated_at': nowStr,
       });
-    }
+
+      for (final cell in cells) {
+        final cellId = _uuid.v4();
+        await txn.insert('database_cells', {
+          'id': cellId,
+          'row_id': id,
+          'field_id': cell['fieldId'] as String,
+          'value': _encodeCellValue(cell['value']),
+        });
+      }
+    });
 
     final cellModels = cells
         .map((c) => DatabaseCellModel(

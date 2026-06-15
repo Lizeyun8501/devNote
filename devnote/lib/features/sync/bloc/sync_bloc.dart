@@ -319,6 +319,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   /// 解决冲突
   /// 根据用户选择（保留本地/使用远端）解决指定 block 的冲突
   /// 所有冲突解决后自动完成同步
+  /// 修复：原代码始终传 useRemote=true，忽略用户实际选择
   Future<void> _onResolveConflict(
     ResolveConflict event,
     Emitter<SyncState> emit,
@@ -331,7 +332,14 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
         .where((c) => c.blockId != event.blockId)
         .toList();
 
-    await _syncService.resolveConflict(true);
+    // 判断用户选择的是远端还是本地内容
+    final currentConflict = currentConflicts
+        .where((c) => c.blockId == event.blockId)
+        .firstOrNull;
+    final useRemote = currentConflict != null &&
+        event.resolvedContent == currentConflict.remoteContent;
+
+    await _syncService.resolveConflict(useRemote);
 
     if (remaining.isEmpty) {
       emit(SyncCompleted(

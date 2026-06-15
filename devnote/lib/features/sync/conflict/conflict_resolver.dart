@@ -165,7 +165,14 @@ class ConflictResolver {
       }
     }
 
-    _conflicts.addAll(manualRequired);
+    // 修复：只添加未在 _conflicts 中的冲突，避免重复添加
+    // 原代码直接 _conflicts.addAll(manualRequired)，如果同一冲突
+    // 被 mergeWithCrdt 调用多次，会导致 _conflicts 中出现重复条目
+    for (final conflict in manualRequired) {
+      if (!_conflicts.any((c) => c.blockId == conflict.blockId)) {
+        _conflicts.add(conflict);
+      }
+    }
 
     return MergeResult(
       autoResolved: autoResolved,
