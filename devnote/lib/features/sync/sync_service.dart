@@ -205,8 +205,20 @@ class SyncService {
     }
   }
 
+  /// 解决同步冲突
+  /// 修复：原代码完全忽略 useRemote 参数，始终设置 synced 状态而不做任何实际解决。
+  /// 现在根据 useRemote 参数记录冲突解决方向，并更新状态。
   Future<void> resolveConflict(bool useRemote) async {
-    _state = _state.copyWith(status: SyncServiceStatus.synced);
+    if (useRemote) {
+      // 使用远程版本：当前本地修改已被远程覆盖
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_keyPendingChanges, 0);
+    }
+    _state = _state.copyWith(
+      status: SyncServiceStatus.synced,
+      pendingChanges: useRemote ? 0 : _state.pendingChanges,
+      lastError: null,
+    );
     _notifyListeners();
   }
 

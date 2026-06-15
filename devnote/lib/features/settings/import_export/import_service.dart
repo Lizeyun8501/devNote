@@ -526,9 +526,18 @@ class ImportService {
   }
 
   /// 确保标签存在，返回标签 ID
+  /// 修复：原代码直接创建新标签不检查数据库已有标签，导致同一标签名重复创建
   Future<String> _ensureTag(String tagName) async {
     if (_tagCache.containsKey(tagName)) {
       return _tagCache[tagName]!;
+    }
+
+    // 先检查数据库中是否已存在同名标签
+    final allTags = await _tagRepository.listTags();
+    final existing = allTags.where((t) => t.name == tagName).toList();
+    if (existing.isNotEmpty) {
+      _tagCache[tagName] = existing.first.id;
+      return existing.first.id;
     }
 
     final tag = TagModel(

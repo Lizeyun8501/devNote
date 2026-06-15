@@ -150,11 +150,16 @@ class ExportService {
     }
   }
 
-  /// 收集所有笔记：遍历所有文件夹获取全部笔记
+  /// 收集所有笔记：遍历所有文件夹获取全部笔记，包括根目录下的笔记
+  /// 修复：原代码只从根文件夹获取笔记，遗漏了 folderId 为空字符串的根级别笔记
   Future<List<NoteModel>> _collectAllNotes() async {
     final allNotes = <NoteModel>[];
 
-    // 先获取根文件夹下的笔记
+    // 先获取根级别（folderId 为空）的笔记
+    final rootNotes = await _noteRepository.listNotes('');
+    allNotes.addAll(rootNotes);
+
+    // 获取根文件夹下的笔记
     final rootFolders = await _folderRepository.listFolders(null);
     for (final folder in rootFolders) {
       final notes = await _noteRepository.listNotes(folder.id);

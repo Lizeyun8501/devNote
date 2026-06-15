@@ -165,6 +165,10 @@ class P2PService {
   Future<void> setBootstrapPeers(List<String> peers) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_keyBootstrapPeers, peers);
+    // 修复：原代码只保存到 SharedPreferences，不更新 _state 也不通知监听器，
+    // 导致 UI 无法反映 bootstrapPeers 的变更
+    _state = _state.copyWith(bootstrapPeers: peers);
+    _notifyListeners();
   }
 
   /// 启动 P2P 节点
@@ -242,10 +246,19 @@ class P2PService {
     _notifyListeners();
   }
 
-  /// 释放资源、取消定时器、清理监听器
+  /// 释放资源、取消定时器、停止节点、清理监听器
+  /// 修复：原代码只取消定时器和清理监听器，不停止 P2P 节点。
+  /// 如果节点正在运行，会持续占用后台资源。
   void dispose() {
     _discoveryTimer?.cancel();
     _discoveryTimer = null;
+    if (_state.status == P2PNodeStatus.running || _state.status == P2PNodeStatus.starting) {
+      _state = _state.copyWith(
+        status: P2PNodeStatus.stopped,
+        localPeerId: null,
+        peers: [],
+      );
+    }
     _listeners.clear();
   }
 
