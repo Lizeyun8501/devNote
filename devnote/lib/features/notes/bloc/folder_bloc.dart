@@ -82,8 +82,10 @@ class FolderBloc extends Bloc<FolderEvent, FolderState> {
         final folder = _findFolder(currentState.rootNodes, event.folderId);
         if (folder != null) {
           final updated = folder.copyWith(name: event.newName, updatedAt: DateTime.now());
-          await _folderRepository.updateFolder(updated);
-          final updatedNodes = _updateNode(currentState.rootNodes, event.folderId, updated);
+          // 修复：使用 repository 返回的模型，而非本地 copyWith 的对象
+          // FFI 模式下 Rust 端可能返回不同的时间戳，使用本地对象会导致数据不一致
+          final saved = await _folderRepository.updateFolder(updated);
+          final updatedNodes = _updateNode(currentState.rootNodes, event.folderId, saved);
           emit(currentState.copyWith(rootNodes: updatedNodes));
         }
       }

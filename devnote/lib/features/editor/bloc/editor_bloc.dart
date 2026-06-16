@@ -75,7 +75,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       if (state is EditorLoaded) {
         final blocks = List<BlockModel>.from(state.blocks);
         final insertAt = event.position.clamp(0, blocks.length);
-        blocks.insert(insertAt, newBlock);
+        // 修复：更新 newBlock 的 position 为实际插入位置 insertAt
+        // 原代码 newBlock.position 保留为 event.position，
+        // 当 event.position 被 clamp 截断时（超出数组长度），
+        // newBlock.position 与列表索引不一致
+        blocks.insert(insertAt, newBlock.copyWith(position: insertAt));
         for (var i = insertAt + 1; i < blocks.length; i++) {
           blocks[i] = blocks[i].copyWith(position: i);
         }
