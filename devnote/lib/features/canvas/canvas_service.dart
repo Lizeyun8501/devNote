@@ -16,6 +16,9 @@ enum DistributeDirection { horizontal, vertical }
 
 enum Side { top, bottom, left, right }
 
+/// Sentinel 值用于区分"未传参"和"显式传 null"
+const _canvasSentinel = Object();
+
 class CanvasNodeModel {
   final String id;
   final NodeType nodeType;
@@ -39,6 +42,9 @@ class CanvasNodeModel {
     this.file,
   });
 
+  /// 修复：copyWith 使用 sentinel 模式支持清除 nullable 字段
+  /// 原代码 `content ?? this.content` 无法传 null 清除内容，
+  /// 导致无法删除节点的 content/color/file
   CanvasNodeModel copyWith({
     String? id,
     NodeType? nodeType,
@@ -46,9 +52,9 @@ class CanvasNodeModel {
     double? y,
     double? width,
     double? height,
-    String? content,
-    String? color,
-    String? file,
+    Object? content = _canvasSentinel,
+    Object? color = _canvasSentinel,
+    Object? file = _canvasSentinel,
   }) {
     return CanvasNodeModel(
       id: id ?? this.id,
@@ -57,9 +63,9 @@ class CanvasNodeModel {
       y: y ?? this.y,
       width: width ?? this.width,
       height: height ?? this.height,
-      content: content ?? this.content,
-      color: color ?? this.color,
-      file: file ?? this.file,
+      content: content == _canvasSentinel ? this.content : content as String?,
+      color: color == _canvasSentinel ? this.color : color as String?,
+      file: file == _canvasSentinel ? this.file : file as String?,
     );
   }
 
@@ -268,6 +274,15 @@ CanvasData _parseCanvasData(FlowyResult<Uint8List, FlowyInternalError> result) {
 class CanvasService {
   final Dispatch _dispatch = getIt<Dispatch>();
 
+  /// 修复：统一检查 FFI 变更操作的结果
+  /// 原代码所有变更方法（addNode/removeNode/moveNode 等）忽略返回值，
+  /// FFI 失败时 Dart 侧静默成功，导致本地状态与后端不一致
+  void _checkResult(FlowyResult<Uint8List, FlowyInternalError> result, String operation) {
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('$operation失败: ${result.error.message}');
+    }
+  }
+
   Future<String> createCanvas() async {
     final result = await _dispatch.asyncRequest(
       'CanvasEvent.CreateCanvas',
@@ -296,10 +311,10 @@ class CanvasService {
       'canvas_id': canvasId,
       'node': node.toJson(),
     });
-    await _dispatch.asyncRequest(
+    _checkResult(await _dispatch.asyncRequest(
       'CanvasEvent.AddNode',
       payload: utf8.encode(payload),
-    );
+    ), '添加节点');
   }
 
   Future<void> removeNode(String canvasId, String nodeId) async {
@@ -307,10 +322,10 @@ class CanvasService {
       'canvas_id': canvasId,
       'node_id': nodeId,
     });
-    await _dispatch.asyncRequest(
+    _checkResult(await _dispatch.asyncRequest(
       'CanvasEvent.RemoveNode',
       payload: utf8.encode(payload),
-    );
+    ), '删除节点');
   }
 
   Future<void> moveNode(String canvasId, String nodeId, double x, double y) async {
@@ -320,10 +335,10 @@ class CanvasService {
       'x': x,
       'y': y,
     });
-    await _dispatch.asyncRequest(
+    _checkResult(await _dispatch.asyncRequest(
       'CanvasEvent.MoveNode',
       payload: utf8.encode(payload),
-    );
+    ), '移动节点');
   }
 
   Future<void> resizeNode(String canvasId, String nodeId, double width, double height) async {
@@ -333,10 +348,10 @@ class CanvasService {
       'width': width,
       'height': height,
     });
-    await _dispatch.asyncRequest(
+    _checkResult(await _dispatch.asyncRequest(
       'CanvasEvent.ResizeNode',
       payload: utf8.encode(payload),
-    );
+    ), '调整节点大小');
   }
 
   Future<void> addEdge(String canvasId, CanvasEdgeModel edge) async {
@@ -344,10 +359,10 @@ class CanvasService {
       'canvas_id': canvasId,
       'edge': edge.toJson(),
     });
-    await _dispatch.asyncRequest(
+    _checkResult(await _dispatch.asyncRequest(
       'CanvasEvent.AddEdge',
       payload: utf8.encode(payload),
-    );
+    ), '添加连线');
   }
 
   Future<void> removeEdge(String canvasId, String edgeId) async {
@@ -355,10 +370,10 @@ class CanvasService {
       'canvas_id': canvasId,
       'edge_id': edgeId,
     });
-    await _dispatch.asyncRequest(
+    _checkResult(await _dispatch.asyncRequest(
       'CanvasEvent.RemoveEdge',
       payload: utf8.encode(payload),
-    );
+    ), '删除连线');
   }
 
   Future<CanvasData> autoLayout(String canvasId, LayoutType layoutType) async {

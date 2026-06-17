@@ -164,10 +164,15 @@ class FlashcardService {
 
   Future<void> deleteDeck(String deckId) async {
     final payload = jsonEncode({'deck_id': deckId});
-    await _dispatch.asyncRequest(
+    // 修复：检查 FFI 返回结果，删除失败时抛出异常
+    // 原代码忽略返回值，FFI 失败时 Dart 侧静默成功，导致数据不一致
+    final result = await _dispatch.asyncRequest(
       'FlashcardEvent.DeleteDeck',
       payload: utf8.encode(payload),
     );
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('删除牌组失败: ${result.error.message}');
+    }
   }
 
   Future<List<FlashcardDeckModel>> listDecks() async {
@@ -230,10 +235,14 @@ class FlashcardService {
 
   Future<void> deleteFlashcard(String id) async {
     final payload = jsonEncode({'flashcard_id': id});
-    await _dispatch.asyncRequest(
+    // 修复：检查 FFI 返回结果，删除失败时抛出异常
+    final result = await _dispatch.asyncRequest(
       'FlashcardEvent.DeleteFlashcard',
       payload: utf8.encode(payload),
     );
+    if (result is Failure<Uint8List, FlowyInternalError>) {
+      throw Exception('删除闪卡失败: ${result.error.message}');
+    }
   }
 
   Future<ReviewRecordModel> reviewFlashcard(String flashcardId, int quality) async {

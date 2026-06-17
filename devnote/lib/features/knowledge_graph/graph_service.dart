@@ -81,7 +81,11 @@ class KnowledgeNodeModel {
         (e) => e.name == (json['node_type'] as String),
         orElse: () => GraphNodeType.note,
       ),
-      tags: (json['tags'] as List<dynamic>).map((e) => e as String).toList(),
+      // 修复：tags 可能为 null（笔记无标签时 Rust 端可能省略该字段），
+      // 原代码 (json['tags'] as List<dynamic>) 在 null 时抛出 TypeError
+      tags: (json['tags'] as List<dynamic>? ?? const [])
+          .map((e) => e as String)
+          .toList(),
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
