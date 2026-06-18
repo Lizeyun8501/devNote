@@ -256,7 +256,8 @@ impl CRDTDocument {
             content: content.clone(),
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone()).unwrap();
+        self.apply_operation(op.clone())
+            .expect("apply_operation for Insert always succeeds");
         op
     }
 
@@ -268,7 +269,8 @@ impl CRDTDocument {
             block_id,
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone()).unwrap();
+        self.apply_operation(op.clone())
+            .expect("apply_operation for local Delete: block must exist and not be tombstoned");
         op
     }
 
@@ -282,7 +284,8 @@ impl CRDTDocument {
             new_content,
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone()).unwrap();
+        self.apply_operation(op.clone())
+            .expect("apply_operation for local Replace: block must exist and not be tombstoned");
         op
     }
 
@@ -295,7 +298,8 @@ impl CRDTDocument {
             to_position,
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone()).unwrap();
+        self.apply_operation(op.clone())
+            .expect("apply_operation for local Move: block must exist and not be tombstoned");
         op
     }
 
@@ -445,12 +449,20 @@ impl CRDTDocument {
                         }
                     }
                     // Now set the target block's position
-                    let block = self.blocks.iter_mut().find(|b| b.id == *block_id).unwrap();
+                    let block = self
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.id == *block_id)
+                        .expect("block existence verified earlier in Move handling");
                     block.position = new_pos;
                     block.last_modified_id = id.clone();
                     self.reindex_positions();
                 } else {
-                    let block = self.blocks.iter_mut().find(|b| b.id == *block_id).unwrap();
+                    let block = self
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.id == *block_id)
+                        .expect("block existence verified earlier in Move handling");
                     block.last_modified_id = id.clone();
                 }
             }

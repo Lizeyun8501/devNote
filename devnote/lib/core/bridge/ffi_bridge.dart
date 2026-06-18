@@ -349,6 +349,68 @@ class FFIBridge {
     await _frbApi.canvasAutoLayout(canvasId: canvasId, layoutType: layoutType);
   }
 
+  Future<String> canvasCreateCanvas() async {
+    _checkAvailable();
+    return await _frbApi.canvasCreateCanvas();
+  }
+
+  Future<Map<String, dynamic>> canvasGetCanvas({required String canvasId}) async {
+    _checkAvailable();
+    final result = await _frbApi.canvasGetCanvas(canvasId: canvasId);
+    return _toMap(result);
+  }
+
+  Future<void> canvasMoveNode({required String canvasId, required String nodeId, required double x, required double y}) async {
+    _checkAvailable();
+    await _frbApi.canvasMoveNode(canvasId: canvasId, nodeId: nodeId, x: x, y: y);
+  }
+
+  Future<void> canvasResizeNode({required String canvasId, required String nodeId, required double width, required double height}) async {
+    _checkAvailable();
+    await _frbApi.canvasResizeNode(canvasId: canvasId, nodeId: nodeId, width: width, height: height);
+  }
+
+  Future<void> canvasAddEdge({required String canvasId, required String edgeJson}) async {
+    _checkAvailable();
+    await _frbApi.canvasAddEdge(canvasId: canvasId, edgeJson: edgeJson);
+  }
+
+  Future<void> canvasRemoveEdge({required String canvasId, required String edgeId}) async {
+    _checkAvailable();
+    await _frbApi.canvasRemoveEdge(canvasId: canvasId, edgeId: edgeId);
+  }
+
+  Future<void> canvasSaveCanvas({required String canvasId, required String path}) async {
+    _checkAvailable();
+    await _frbApi.canvasSaveCanvas(canvasId: canvasId, path: path);
+  }
+
+  Future<String> canvasLoadCanvas({required String path}) async {
+    _checkAvailable();
+    return await _frbApi.canvasLoadCanvas(path: path);
+  }
+
+  Future<void> canvasStartCollaboration({required String canvasId, required String sessionId}) async {
+    _checkAvailable();
+    await _frbApi.canvasStartCollaboration(canvasId: canvasId, sessionId: sessionId);
+  }
+
+  Future<Map<String, dynamic>> canvasJoinCollaboration({required String sessionId}) async {
+    _checkAvailable();
+    final result = await _frbApi.canvasJoinCollaboration(sessionId: sessionId);
+    return _toMap(result);
+  }
+
+  Future<void> canvasBroadcastChange({required String changeJson}) async {
+    _checkAvailable();
+    await _frbApi.canvasBroadcastChange(changeJson: changeJson);
+  }
+
+  Future<void> canvasEndCollaboration({required String sessionId}) async {
+    _checkAvailable();
+    await _frbApi.canvasEndCollaboration(sessionId: sessionId);
+  }
+
   // ============================================================
   // 数据库 API —— 替代原 DatabaseEvent.* 事件
   // ============================================================
@@ -381,6 +443,41 @@ class FFIBridge {
     return await _frbApi.detectClusters();
   }
 
+  Future<String> getGraph() async {
+    _checkAvailable();
+    return await _frbApi.getGraph();
+  }
+
+  Future<String> getNodeDetails({required String nodeId}) async {
+    _checkAvailable();
+    return await _frbApi.getNodeDetails(nodeId: nodeId);
+  }
+
+  Future<String> getRelatedNodes({required String nodeId}) async {
+    _checkAvailable();
+    return await _frbApi.getRelatedNodes(nodeId: nodeId);
+  }
+
+  Future<String> searchNodes({required String query}) async {
+    _checkAvailable();
+    return await _frbApi.searchNodes(query: query);
+  }
+
+  Future<String> getGraphStats() async {
+    _checkAvailable();
+    return await _frbApi.getGraphStats();
+  }
+
+  Future<String> getShortestPath({required String fromId, required String toId}) async {
+    _checkAvailable();
+    return await _frbApi.getShortestPath(fromId: fromId, toId: toId);
+  }
+
+  Future<String> getNeighbors({required String nodeId, required int depth}) async {
+    _checkAvailable();
+    return await _frbApi.getNeighbors(nodeId: nodeId, depth: depth);
+  }
+
   // ============================================================
   // 闪卡 API —— 替代原 FlashcardEvent.* 事件
   // ============================================================
@@ -400,6 +497,54 @@ class FFIBridge {
     return await _frbApi.getDueCards(deckId: deckId, limit: limit);
   }
 
+  Future<void> deleteDeck({required String deckId}) async {
+    _checkAvailable();
+    await _frbApi.deleteDeck(deckId: deckId);
+  }
+
+  Future<List<Map<String, dynamic>>> listDecks() async {
+    _checkAvailable();
+    final result = await _frbApi.listDecks();
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
+  Future<Map<String, dynamic>> createFlashcard({
+    required String deckId,
+    required String cardType,
+    required String front,
+    required String back,
+    String? noteId,
+  }) async {
+    _checkAvailable();
+    final result = await _frbApi.createFlashcard(
+      deckId: deckId, cardType: cardType, front: front, back: back, noteId: noteId,
+    );
+    return _toMap(result);
+  }
+
+  Future<Map<String, dynamic>> updateFlashcard({required String id, required String front, required String back}) async {
+    _checkAvailable();
+    final result = await _frbApi.updateFlashcard(id: id, front: front, back: back);
+    return _toMap(result);
+  }
+
+  Future<void> deleteFlashcard({required String flashcardId}) async {
+    _checkAvailable();
+    await _frbApi.deleteFlashcard(flashcardId: flashcardId);
+  }
+
+  Future<Map<String, dynamic>> getReviewStats({required String deckId}) async {
+    _checkAvailable();
+    final result = await _frbApi.getReviewStats(deckId: deckId);
+    return _toMap(result);
+  }
+
+  Future<List<Map<String, dynamic>>> batchGenerateFromNote({required String noteId}) async {
+    _checkAvailable();
+    final result = await _frbApi.batchGenerateFromNote(noteId: noteId);
+    return (result as List).map((e) => _toMap(e)).toList();
+  }
+
   // ============================================================
   // CRDT API —— 替代原 CRDTEvent.* 事件
   // ============================================================
@@ -412,6 +557,98 @@ class FFIBridge {
     _checkAvailable();
     final result = await _frbApi.crdtMerge(docId: docId, deviceId: deviceId, remoteOpsJson: remoteOpsJson);
     return _toMap(result);
+  }
+
+  // ============================================================
+  // Git API —— 替代原 GitEvent.* 事件
+  // ============================================================
+
+  Future<String> gitInit({required String repoPath}) async {
+    _checkAvailable();
+    return await _frbApi.gitInit(repoPath: repoPath);
+  }
+
+  Future<String> gitStatus({required String repoPath}) async {
+    _checkAvailable();
+    return await _frbApi.gitStatus(repoPath: repoPath);
+  }
+
+  Future<String> gitCommit({required String repoPath, required String message}) async {
+    _checkAvailable();
+    return await _frbApi.gitCommit(repoPath: repoPath, message: message);
+  }
+
+  Future<String> gitLog({required String repoPath, required int limit}) async {
+    _checkAvailable();
+    return await _frbApi.gitLog(repoPath: repoPath, limit: limit);
+  }
+
+  Future<String> gitBranch({required String repoPath}) async {
+    _checkAvailable();
+    return await _frbApi.gitBranch(repoPath: repoPath);
+  }
+
+  Future<String> gitCheckout({required String repoPath, required String branch}) async {
+    _checkAvailable();
+    return await _frbApi.gitCheckout(repoPath: repoPath, branch: branch);
+  }
+
+  Future<String> gitDiff({required String repoPath}) async {
+    _checkAvailable();
+    return await _frbApi.gitDiff(repoPath: repoPath);
+  }
+
+  // ============================================================
+  // P2P API —— 替代原 P2PEvent.* 事件
+  // ============================================================
+
+  Future<void> p2pStart({required String peerId}) async {
+    _checkAvailable();
+    await _frbApi.p2pStart(peerId: peerId);
+  }
+
+  Future<void> p2pStop() async {
+    _checkAvailable();
+    await _frbApi.p2pStop();
+  }
+
+  Future<String> p2pGetPeers() async {
+    _checkAvailable();
+    return await _frbApi.p2pGetPeers();
+  }
+
+  Future<void> p2pConnectPeer({required String peerId, required String multiaddr}) async {
+    _checkAvailable();
+    await _frbApi.p2pConnectPeer(peerId: peerId, multiaddr: multiaddr);
+  }
+
+  Future<void> p2pDisconnectPeer({required String peerId}) async {
+    _checkAvailable();
+    await _frbApi.p2pDisconnectPeer(peerId: peerId);
+  }
+
+  Future<String> p2pGetStatus() async {
+    _checkAvailable();
+    return await _frbApi.p2pGetStatus();
+  }
+
+  // ============================================================
+  // Knowledge API —— 替代原 KnowledgeEvent.* 事件
+  // ============================================================
+
+  Future<String> getKnowledgeMap({required String noteId}) async {
+    _checkAvailable();
+    return await _frbApi.getKnowledgeMap(noteId: noteId);
+  }
+
+  Future<String> getLearningStats({required String noteId}) async {
+    _checkAvailable();
+    return await _frbApi.getLearningStats(noteId: noteId);
+  }
+
+  Future<String> getDashboard() async {
+    _checkAvailable();
+    return await _frbApi.getDashboard();
   }
 
   // ============================================================

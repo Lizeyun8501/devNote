@@ -102,6 +102,7 @@ class BackupService {
 
       int filesCopied = 0;
       int totalSize = 0;
+      final copiedFiles = <String, FileStat>{};
 
       for (final file in dataFiles) {
         final stat = await file.stat();
@@ -121,10 +122,11 @@ class BackupService {
         await file.copy(destFile.path);
         filesCopied++;
         totalSize += stat.size;
+        copiedFiles[relativePath] = stat;
       }
 
       // 保存备份清单（借鉴 Joplin 的 manifest 机制）
-      await _saveManifest(backupPath, dataFiles, dataDir.path);
+      await _saveManifest(backupPath, copiedFiles);
 
       return BackupResult.success(
         backupPath: backupPath,
@@ -273,21 +275,19 @@ class BackupService {
   }
 
   /// 保存备份清单（借鉴 Joplin 的 manifest 机制）
+  /// 修复：原代码使用 statSync() 阻塞线程，改为使用 createBackup 中已异步获取的 FileStat
   Future<void> _saveManifest(
     String backupPath,
-    List<File> files,
-    String sourceDir,
+    Map<String, FileStat> fileStats,
   ) async {
     final manifest = BackupManifest(
       createdAt: DateTime.now(),
       lastBackupAt: DateTime.now(),
-      filesCount: files.length,
-      totalSize: files.fold<int>(0, (sum, f) => sum + f.statSync().size),
-      files: {
-        for (final f in files)
-          f.path.substring(sourceDir.length + 1):
-              f.statSync().modified.millisecondsSinceEpoch,
-      },
+      filesCount: fileStats.length,
+      totalSize: fileStats.values.fold<int>(0, (sum, s) => sum + s.size),
+      files: fileStats.map(
+        (path, stat) => MapEntry(path, stat.modified.millisecondsSinceEpoch),
+      ),
       label: 'backup_${DateTime.now().toString().substring(0, 19).replaceAll(' ', '_').replaceAll(':', '-')}',
     );
 

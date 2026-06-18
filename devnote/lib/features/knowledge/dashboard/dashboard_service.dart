@@ -1,7 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 
 class DashboardCardData {
@@ -45,32 +43,20 @@ class DashboardService {
   final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<List<DashboardCardData>> getDashboardCards() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetDashboardCards',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => DashboardCardData.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-      return [];
+    final responseStr = await _dispatch.getDashboard();
+    final json = jsonDecode(responseStr);
+    if (json is List) {
+      return json
+          .map((e) => DashboardCardData.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
-    throw Exception('Unknown result type');
+    return [];
   }
 
   Future<DashboardStats> getDashboardStats() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetDashboardStats',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
+    final responseStr = await _dispatch.getDashboard();
+    try {
+      final json = jsonDecode(responseStr);
       if (json is Map<String, dynamic>) {
         return DashboardStats(
           totalNotes: json['total_notes'] as int? ?? 0,
@@ -85,18 +71,17 @@ class DashboardService {
         totalTags: 0,
         recentEdits: 0,
       );
+    } catch (_) {
+      return const DashboardStats(
+        totalNotes: 0,
+        totalFolders: 0,
+        totalTags: 0,
+        recentEdits: 0,
+      );
     }
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
-    throw Exception('Unknown result type');
   }
 
   Future<void> updateCardOrder(List<String> cardIds) async {
-    final payload = jsonEncode({'card_ids': cardIds});
-    await _dispatch.asyncRequest(
-      'KnowledgeEvent.UpdateCardOrder',
-      payload: utf8.encode(payload),
-    );
+    // FFI 层尚未实现此事件，无操作
   }
 }

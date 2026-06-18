@@ -1,10 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
-import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/workflow/file_watcher_service.dart';
 
@@ -22,7 +17,6 @@ import 'package:devnote/features/workflow/file_watcher_service.dart';
 class ExternalEditorSyncService {
   ExternalEditorSyncService();
 
-  Dispatch get _dispatch => getIt<Dispatch>();
   FileWatcherService get _fileWatcher => getIt<FileWatcherService>();
 
   Timer? _debounceTimer;
@@ -77,50 +71,19 @@ class ExternalEditorSyncService {
   /// 从外部编辑器同步文件到 DevNote
   /// 读取外部编辑器修改的文件内容，更新到 DevNote 数据库
   Future<void> syncFromExternalEditor(String filePath) async {
-    final file = File(filePath);
-    if (!await file.exists()) {
-      return;
-    }
-
-    final content = await file.readAsString();
-    final fileName = file.uri.pathSegments.last;
-
-    // 通过 FFI 桥接将内容同步到 Rust 核心
-    final payload = jsonEncode({
-      'file_path': filePath,
-      'file_name': fileName,
-      'content': content,
-      'sync_source': 'external_editor',
-    });
-
-    await _dispatch.asyncRequest(
-      'WorkflowEvent.SyncFromExternal',
-      payload: utf8.encode(payload),
+    // FFI 层尚未实现此事件
+    throw UnimplementedError(
+      'WorkflowEvent.SyncFromExternal not yet implemented in FFI',
     );
   }
 
   /// 将 DevNote 笔记同步到外部编辑器
   /// 将笔记内容写入外部编辑器可访问的文件路径
   Future<void> syncToExternalEditor(String noteId) async {
-    // 通过 FFI 桥接获取笔记内容
-    final payload = jsonEncode({'note_id': noteId});
-    final result = await _dispatch.asyncRequest(
-      'WorkflowEvent.GetNoteContent',
-      payload: utf8.encode(payload),
+    // FFI 层尚未实现此事件
+    throw UnimplementedError(
+      'WorkflowEvent.GetNoteContent not yet implemented in FFI',
     );
-
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        final content = json['content'] as String?;
-        final filePath = json['file_path'] as String?;
-
-        if (content != null && filePath != null) {
-          final file = File(filePath);
-          await file.writeAsString(content);
-        }
-      }
-    }
   }
 
   /// 处理文件变更事件
@@ -166,14 +129,9 @@ class ExternalEditorSyncService {
 
   /// 处理外部删除事件
   Future<void> _handleExternalDelete(String filePath) async {
-    final payload = jsonEncode({
-      'file_path': filePath,
-      'sync_source': 'external_editor',
-    });
-
-    await _dispatch.asyncRequest(
-      'WorkflowEvent.SyncExternalDelete',
-      payload: utf8.encode(payload),
+    // FFI 层尚未实现此事件
+    throw UnimplementedError(
+      'WorkflowEvent.SyncExternalDelete not yet implemented in FFI',
     );
   }
 

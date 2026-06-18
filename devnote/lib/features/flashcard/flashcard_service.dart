@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 
 enum CardType { basic, cloze, reverse }
@@ -148,42 +146,21 @@ class FlashcardService {
   final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<FlashcardDeckModel> createDeck(String name, String description) async {
-    final payload = jsonEncode({'name': name, 'description': description});
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.CreateDeck',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return FlashcardDeckModel.fromJson(json);
-      }
+    final jsonStr = await _dispatch.createDeck(name: name, description: description);
+    final json = jsonDecode(jsonStr);
+    if (json is Map<String, dynamic>) {
+      return FlashcardDeckModel.fromJson(json);
     }
     throw Exception('Failed to create deck');
   }
 
   Future<void> deleteDeck(String deckId) async {
-    final payload = jsonEncode({'deck_id': deckId});
-    await _dispatch.asyncRequest(
-      'FlashcardEvent.DeleteDeck',
-      payload: utf8.encode(payload),
-    );
+    await _dispatch.deleteDeck(deckId: deckId);
   }
 
   Future<List<FlashcardDeckModel>> listDecks() async {
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.ListDecks',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => FlashcardDeckModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-    }
-    return [];
+    final list = await _dispatch.listDecks();
+    return list.map((e) => FlashcardDeckModel.fromJson(e)).toList();
   }
 
   Future<FlashcardModel> createFlashcard({
@@ -193,94 +170,48 @@ class FlashcardService {
     required String back,
     String? noteId,
   }) async {
-    final payload = jsonEncode({
-      'deck_id': deckId,
-      'card_type': cardType.name,
-      'front': front,
-      'back': back,
-      if (noteId != null) 'note_id': noteId,
-    });
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.CreateFlashcard',
-      payload: utf8.encode(payload),
+    final json = await _dispatch.createFlashcard(
+      deckId: deckId,
+      cardType: cardType.name,
+      front: front,
+      back: back,
+      noteId: noteId,
     );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return FlashcardModel.fromJson(json);
-      }
-    }
-    throw Exception('Failed to create flashcard');
+    return FlashcardModel.fromJson(json);
   }
 
   Future<FlashcardModel> updateFlashcard(String id, String front, String back) async {
-    final payload = jsonEncode({'id': id, 'front': front, 'back': back});
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.UpdateFlashcard',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return FlashcardModel.fromJson(json);
-      }
-    }
-    throw Exception('Failed to update flashcard');
+    final json = await _dispatch.updateFlashcard(id: id, front: front, back: back);
+    return FlashcardModel.fromJson(json);
   }
 
   Future<void> deleteFlashcard(String id) async {
-    final payload = jsonEncode({'flashcard_id': id});
-    await _dispatch.asyncRequest(
-      'FlashcardEvent.DeleteFlashcard',
-      payload: utf8.encode(payload),
-    );
+    await _dispatch.deleteFlashcard(flashcardId: id);
   }
 
   Future<ReviewRecordModel> reviewFlashcard(String flashcardId, int quality) async {
-    final payload = jsonEncode({'flashcard_id': flashcardId, 'quality': quality});
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.ReviewFlashcard',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return ReviewRecordModel.fromJson(json);
-      }
+    final jsonStr = await _dispatch.reviewFlashcard(flashcardId: flashcardId, quality: quality);
+    final json = jsonDecode(jsonStr);
+    if (json is Map<String, dynamic>) {
+      return ReviewRecordModel.fromJson(json);
     }
     throw Exception('Failed to review flashcard');
   }
 
   Future<List<FlashcardModel>> getDueCards(String deckId, int limit) async {
-    final payload = jsonEncode({'deck_id': deckId, 'limit': limit});
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.GetDueCards',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => FlashcardModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
+    final jsonStr = await _dispatch.getDueCards(deckId: deckId, limit: limit);
+    final json = jsonDecode(jsonStr);
+    if (json is List) {
+      return json
+          .map((e) => FlashcardModel.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
     return [];
   }
 
   Future<ReviewStatsModel> getReviewStats(String deckId) async {
-    final payload = jsonEncode({'deck_id': deckId});
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.GetReviewStats',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return ReviewStatsModel.fromJson(json);
-      }
-    }
-    throw Exception('Failed to get review stats');
+    final json = await _dispatch.getReviewStats(deckId: deckId);
+    return ReviewStatsModel.fromJson(json);
   }
 
   // ============================================================
@@ -292,20 +223,8 @@ class FlashcardService {
   /// 识别笔记中的 Q: / A: 格式，自动创建问答卡片
   /// 识别 Cloze 格式 {{c1::答案}}，自动创建填空卡片
   Future<List<FlashcardModel>> batchGenerateFromNote(String noteId) async {
-    final payload = jsonEncode({'note_id': noteId});
-    final result = await _dispatch.asyncRequest(
-      'FlashcardEvent.BatchGenerateFromNote',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => FlashcardModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-    }
-    return [];
+    final list = await _dispatch.batchGenerateFromNote(noteId: noteId);
+    return list.map((e) => FlashcardModel.fromJson(e)).toList();
   }
 
   /// 批量导入闪卡（从文本文件）

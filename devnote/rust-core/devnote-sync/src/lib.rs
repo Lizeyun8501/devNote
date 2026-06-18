@@ -118,7 +118,9 @@ lazy_static::lazy_static! {
 
 /// 检查幂等键是否已处理，防止重复提交
 pub fn check_idempotency(key: &str) -> bool {
-    let mut keys = PROCESSED_KEYS.lock().unwrap();
+    let mut keys = PROCESSED_KEYS
+        .lock()
+        .expect("PROCESSED_KEYS mutex poisoned");
     if keys.contains(key) {
         return false; // Already processed
     }

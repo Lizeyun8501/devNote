@@ -1,9 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
-import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
-import 'package:devnote/core/di/injection.dart';
 
 enum FileChangeKind { create, modify, delete, rename }
 
@@ -28,7 +23,6 @@ class FileChangeEvent {
 }
 
 class FileWatcherService {
-  final Dispatch _dispatch = getIt<Dispatch>();
   StreamController<FileChangeEvent>? _controller;
 
   // ============================================================
@@ -46,10 +40,9 @@ class FileWatcherService {
   }
 
   Future<void> watchDirectory(String path) async {
-    final payload = jsonEncode({'watch_path': path});
-    await _dispatch.asyncRequest(
-      'WorkflowEvent.WatchDirectory',
-      payload: utf8.encode(payload),
+    // FFI 层尚未实现此事件
+    throw UnimplementedError(
+      'WorkflowEvent.WatchDirectory not yet implemented in FFI',
     );
   }
 
@@ -59,16 +52,6 @@ class FileWatcherService {
     _pendingEvents.clear();
     await _controller?.close();
     _controller = null;
-  }
-
-  void handleEvent(FlowyResult<Uint8List, FlowyInternalError> result) {
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        final event = FileChangeEvent.fromJson(json);
-        _addDebouncedEvent(event);
-      }
-    }
   }
 
   /// 防抖处理：短时间内多个文件变更事件合并为一次通知

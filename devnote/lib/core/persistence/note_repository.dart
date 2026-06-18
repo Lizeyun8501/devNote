@@ -78,6 +78,12 @@ class SqliteNoteRepository implements NoteRepository {
       where: 'id = ?',
       whereArgs: [note.id],
     );
+    // 修复：从数据库重新读取，确保返回值与数据库一致
+    // 原代码直接返回本地 note 对象，但数据库可能修改了值（如触发器、默认值）
+    final results = await db.query('notes', where: 'id = ?', whereArgs: [note.id]);
+    if (results.isNotEmpty) {
+      return NoteModel.fromJson(results.first);
+    }
     return note;
   }
 

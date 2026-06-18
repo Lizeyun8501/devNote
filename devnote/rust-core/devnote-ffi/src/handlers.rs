@@ -40,12 +40,14 @@ lazy_static! {
 pub fn register_handler(event: &str, handler: EventHandler) {
     EVENT_REGISTRY
         .write()
-        .unwrap()
+        .expect("EVENT_REGISTRY write lock poisoned")
         .insert(event.to_string(), handler);
 }
 
 pub fn handle_dispatch(event: &str, payload: Option<&str>) -> DispatchResponse {
-    let registry = EVENT_REGISTRY.read().unwrap();
+    let registry = EVENT_REGISTRY
+        .read()
+        .expect("EVENT_REGISTRY read lock poisoned");
     match registry.get(event) {
         Some(handler) => handler(payload),
         None => DispatchResponse::error(

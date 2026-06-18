@@ -69,8 +69,36 @@ void main() async {
   runApp(const DevNoteApp());
 }
 
-class DevNoteApp extends StatelessWidget {
+class DevNoteApp extends StatefulWidget {
   const DevNoteApp({super.key});
+
+  @override
+  State<DevNoteApp> createState() => _DevNoteAppState();
+}
+
+/// 修复：添加 WidgetsBindingObserver 监听应用退出事件
+/// 原代码应用退出时不调用 disposeAll()，导致 SyncService/P2PService 等
+/// 单例资源未释放，可能造成数据丢失（如未完成的同步操作）
+class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    disposeAll();
+    super.dispose();
+  }
+
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    // 应用退出前释放所有单例资源
+    disposeAll();
+    return AppExitResponse.exit;
+  }
 
   @override
   Widget build(BuildContext context) {

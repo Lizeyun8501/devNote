@@ -15,6 +15,8 @@ import 'package:devnote/core/persistence/tag_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 import 'package:devnote/core/persistence/models/tag_model.dart';
+import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/services/editor_service.dart';
 
 enum ExportRange {
   all,
@@ -48,15 +50,18 @@ class ExportService {
   final NoteRepository _noteRepository;
   final FolderRepository _folderRepository;
   final TagRepository _tagRepository;
+  final EditorService _editorService;
   final _progressController = StreamController<ExportProgress>.broadcast();
 
   ExportService({
     required NoteRepository noteRepository,
     required FolderRepository folderRepository,
     required TagRepository tagRepository,
+    EditorService? editorService,
   })  : _noteRepository = noteRepository,
         _folderRepository = folderRepository,
-        _tagRepository = tagRepository;
+        _tagRepository = tagRepository,
+        _editorService = editorService ?? EditorService();
 
   Stream<ExportProgress> get progressStream => _progressController.stream;
 
@@ -150,11 +155,16 @@ class ExportService {
     }
   }
 
-  /// 收集所有笔记：遍历所有文件夹获取全部笔记
+  /// 收集所有笔记：遍历所有文件夹获取全部笔记，包括根目录下的笔记
+  /// 修复：原代码只从根文件夹获取笔记，遗漏了 folderId 为空字符串的根级别笔记
   Future<List<NoteModel>> _collectAllNotes() async {
     final allNotes = <NoteModel>[];
 
-    // 先获取根文件夹下的笔记
+    // 先获取根级别（folderId 为空）的笔记
+    final rootNotes = await _noteRepository.listNotes('');
+    allNotes.addAll(rootNotes);
+
+    // 获取根文件夹下的笔记
     final rootFolders = await _folderRepository.listFolders(null);
     for (final folder in rootFolders) {
       final notes = await _noteRepository.listNotes(folder.id);
@@ -383,6 +393,126 @@ class ExportService {
   String _sanitizeFileName(String name) {
     // 去除文件名中不允许的字符
     return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+  }
+
+  /// 将笔记导出为 Markdown 文件
+  /// 借鉴 Obsidian 的纯 Markdown 存储策略 —— 零数据锁定
+  // 来源: https://help.obsidian.md/Editing+and+formatting/Properties
+  Future<void> exportNoteAsMarkdown(String noteId, String outputPath) async {
+    final note = await _noteRepository.getNote(noteId);
+    if (note == null) return;
+
+    // 获取笔记的所有块
+    final blocks = await _editorService.listBlocks(noteId);
+
+    final buffer = StringBuffer();
+
+    // 写入 YAML front matter，保留元数据以便往返导入
+    buffer.writeln('---');
+    buffer.writeln('title: ${note.title}');
+    buffer.writeln('created: ${note.createdAt.toIso8601String()}');
+    buffer.writeln('updated: ${note.updatedAt.toIso8601String()}');
+    buffer.writeln('---');
+    buffer.writeln();
+
+    if (blocks.isEmpty) {
+      // 无块数据时回退到 note.content（兼容旧数据）
+      buffer.write(note.content);
+    } else {
+      // 逐块转换为 Markdown
+      for (final block in blocks) {
+        buffer.writeln(_blockToMarkdown(block));
+        buffer.writeln();
+      }
+    }
+
+    // 确保输出目录存在并写入文件
+    final file = File(outputPath);
+    await file.parent.create(recursive: true);
+    await file.writeAsString(buffer.toString());
+  }
+
+  /// 批量导出所有笔记为 Markdown 文件（保持文件夹结构）
+  Future<void> exportAllAsMarkdown(String outputDir) async {
+    final notes = await _collectAllNotes();
+
+    final dir = Directory(outputDir);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+
+    for (final note in notes) {
+      try {
+        // 重建文件夹结构
+        final folderPath = await _buildFolderPath(note.folderId);
+        final noteDir = folderPath.isNotEmpty
+            ? Directory(p.join(outputDir, folderPath))
+            : dir;
+        if (!await noteDir.exists()) {
+          await noteDir.create(recursive: true);
+        }
+
+        // 文件名 = 笔记标题（清理非法字符）
+        final fileName = _sanitizeFileName(note.title);
+        final outputPath = p.join(noteDir.path, '$fileName.md');
+        await exportNoteAsMarkdown(note.id, outputPath);
+      } catch (_) {
+        // 单个笔记导出失败不影响整体流程，跳过继续
+        continue;
+      }
+    }
+  }
+
+  /// 将单个块转换为 Markdown 文本
+  String _blockToMarkdown(BlockModel block) {
+    switch (block.blockType) {
+      case BlockType.heading1:
+        return '# ${block.content}';
+      case BlockType.heading2:
+        return '## ${block.content}';
+      case BlockType.heading3:
+        return '### ${block.content}';
+      case BlockType.heading4:
+        return '#### ${block.content}';
+      case BlockType.heading5:
+        return '##### ${block.content}';
+      case BlockType.heading6:
+        return '###### ${block.content}';
+      case BlockType.paragraph:
+        return block.content;
+      case BlockType.codeBlock:
+        final lang = block.language ?? '';
+        return '```$lang\n${block.content}\n```';
+      case BlockType.quote:
+        return block.content.split('\n').map((l) => '> $l').join('\n');
+      case BlockType.list:
+        return block.content
+            .split('\n')
+            .where((l) => l.trim().isNotEmpty)
+            .map((l) => '- $l')
+            .join('\n');
+      case BlockType.orderedList:
+        var idx = 1;
+        return block.content
+            .split('\n')
+            .where((l) => l.trim().isNotEmpty)
+            .map((l) => '${idx++}. $l')
+            .join('\n');
+      case BlockType.taskListBlock:
+        // 任务列表内容已包含 - [x] / - [ ] 前缀
+        return block.content;
+      case BlockType.tableBlock:
+        // 表格内容为原始 Markdown 表格语法
+        return block.content;
+      case BlockType.image:
+        // 图片内容可能为路径或完整 Markdown 语法
+        if (block.content.startsWith('![')) {
+          return block.content;
+        }
+        return '![image](${block.content})';
+      case BlockType.latexBlock:
+        return '\$\$\n${block.content}\n\$\$';
+    }
   }
 
   void dispose() {

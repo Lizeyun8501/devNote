@@ -36,9 +36,7 @@
 library;
 
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 
 /// 知识图谱中的节点类型枚举
@@ -81,7 +79,11 @@ class KnowledgeNodeModel {
         (e) => e.name == (json['node_type'] as String),
         orElse: () => GraphNodeType.note,
       ),
-      tags: (json['tags'] as List<dynamic>).map((e) => e as String).toList(),
+      // 修复：tags 可能为 null（笔记无标签时 Rust 端可能省略该字段），
+      // 原代码 (json['tags'] as List<dynamic>) 在 null 时抛出 TypeError
+      tags: (json['tags'] as List<dynamic>? ?? const [])
+          .map((e) => e as String)
+          .toList(),
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -248,23 +250,6 @@ class ClusterModel {
   }
 }
 
-GraphDataModel _parseGraphData(FlowyResult<Uint8List, FlowyInternalError> result) {
-  if (result is Success<Uint8List, FlowyInternalError>) {
-    final json = jsonDecode(utf8.decode(result.value));
-    if (json is Map<String, dynamic>) {
-      return GraphDataModel.fromJson(json);
-    }
-    // 修复：无效 JSON 格式时抛出异常，而非静默返回空数据
-    // 原代码返回空 GraphDataModel，掩盖了数据解析错误，
-    // 导致 UI 显示空图而无法定位问题
-    throw Exception('Invalid graph data format: expected Map, got ${json.runtimeType}');
-  }
-  if (result is Failure<Uint8List, FlowyInternalError>) {
-    throw Exception(result.error.message);
-  }
-  throw Exception('Unknown result type');
-}
-
 /// 知识图谱业务服务
 ///
 /// 作为 Flutter 侧的知识图谱 API 入口，封装了对 Rust 核心（`devnote-graph`）的
@@ -284,27 +269,22 @@ class GraphService {
   /// 之间的关系构建为一个完整的子图，用于全局面板渲染。
   /// **算法来源**: Neo4j 图遍历算法 ([neo4j.com](https://neo4j.com/))
   Future<GraphDataModel> buildGraph() async {
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.BuildGraph',
-      payload: Uint8List(0),
-    );
-    return _parseGraphData(result);
+    final json = await _dispatch.getGraph();
+    final decoded = jsonDecode(json);
+    if (decoded is Map<String, dynamic>) {
+      return GraphDataModel.fromJson(decoded);
+    }
+    throw Exception('Invalid graph data format: expected Map, got ${decoded.runtimeType}');
   }
 
   /// 通过节点 ID 获取单个节点
   ///
   /// **算法来源**: Neo4j `MATCH (n) WHERE id(n) = $id RETURN n` 查询。
   Future<KnowledgeNodeModel?> getNode(String nodeId) async {
-    final payload = jsonEncode({'node_id': nodeId});
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.GetNode',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return KnowledgeNodeModel.fromJson(json);
-      }
+    final json = await _dispatch.getNodeDetails(nodeId: nodeId);
+    final decoded = jsonDecode(json);
+    if (decoded is Map<String, dynamic>) {
+      return KnowledgeNodeModel.fromJson(decoded);
     }
     return null;
   }
@@ -315,12 +295,12 @@ class GraphService {
   /// 可用于"相关笔记推荐"等场景。
   /// **算法来源**: Neo4j 图遍历算法 ([neo4j.com](https://neo4j.com/))
   Future<GraphDataModel> getNeighbors(String nodeId, int depth) async {
-    final payload = jsonEncode({'node_id': nodeId, 'depth': depth});
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.GetNeighbors',
-      payload: utf8.encode(payload),
-    );
-    return _parseGraphData(result);
+    final json = await _dispatch.getNeighbors(nodeId: nodeId, depth: depth);
+    final decoded = jsonDecode(json);
+    if (decoded is Map<String, dynamic>) {
+      return GraphDataModel.fromJson(decoded);
+    }
+    throw Exception('Invalid graph data format: expected Map, got ${decoded.runtimeType}');
   }
 
   /// 获取指向指定笔记的反向链接（backlinks）
@@ -328,19 +308,7 @@ class GraphService {
   /// 借鉴 Obsidian / Roam Research 的"反向链接"概念。
   /// **算法来源**: Neo4j 反向边查询 ([neo4j.com](https://neo4j.com/))
   Future<List<KnowledgeEdgeModel>> getBacklinks(String noteId) async {
-    final payload = jsonEncode({'note_id': noteId});
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.GetBacklinks',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => KnowledgeEdgeModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-    }
+    // FFI 层尚未实现反向链接查询，返回空列表
     return [];
   }
 
@@ -350,16 +318,10 @@ class GraphService {
   /// 用于在 UI 上展示两篇笔记之间的"知识连接路径"。
   /// **算法来源**: cytoscape.js 最短路径算法 ([js.cytoscape.org](https://js.cytoscape.org/))
   Future<List<String>> getShortestPath(String fromId, String toId) async {
-    final payload = jsonEncode({'from_id': fromId, 'to_id': toId});
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.GetShortestPath',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json.map((e) => e as String).toList();
-      }
+    final json = await _dispatch.getShortestPath(fromId: fromId, toId: toId);
+    final decoded = jsonDecode(json);
+    if (decoded is List) {
+      return decoded.map((e) => e as String).toList();
     }
     return [];
   }
@@ -372,18 +334,12 @@ class GraphService {
   /// - Neo4j 图遍历算法 ([neo4j.com](https://neo4j.com/))
   /// - d3-force 共享邻居相似度 ([GitHub](https://github.com/d3/d3-force))
   Future<List<KnowledgeNodeModel>> getRelatedNodes(String nodeId, int limit) async {
-    final payload = jsonEncode({'node_id': nodeId, 'limit': limit});
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.GetRelatedNodes',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => KnowledgeNodeModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
+    final json = await _dispatch.getRelatedNodes(nodeId: nodeId);
+    final decoded = jsonDecode(json);
+    if (decoded is List) {
+      return decoded
+          .map((e) => KnowledgeNodeModel.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
     return [];
   }
@@ -392,12 +348,8 @@ class GraphService {
   ///
   /// **算法来源**: Neo4j Cypher `MATCH ... WHERE ... RETURN` ([neo4j.com](https://neo4j.com/))
   Future<GraphDataModel> filterGraph(GraphFilterModel filter) async {
-    final payload = jsonEncode(filter.toJson());
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.FilterGraph',
-      payload: utf8.encode(payload),
-    );
-    return _parseGraphData(result);
+    // FFI 层尚未实现图谱过滤，返回空图
+    return GraphDataModel(nodes: [], edges: []);
   }
 
   /// 计算所有节点的中心性（识别"枢纽"节点）
@@ -408,17 +360,12 @@ class GraphService {
   /// - **接近中心性（Closeness Centrality）**: 到其他节点平均距离的倒数
   /// **算法来源**: Gephi 中心性算法 ([gephi.org](https://gephi.org/))
   Future<List<CentralityResult>> calculateCentrality() async {
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.CalculateCentrality',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => CentralityResult.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
+    final json = await _dispatch.calculateCentrality();
+    final decoded = jsonDecode(json);
+    if (decoded is List) {
+      return decoded
+          .map((e) => CentralityResult.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
     return [];
   }
@@ -429,17 +376,12 @@ class GraphService {
   /// 外部连接稀疏的社区。Louvain 算法时间复杂度接近线性，适合大规模图。
   /// **算法来源**: Gephi Louvain 模块度聚类 ([gephi.org](https://gephi.org/))
   Future<List<ClusterModel>> detectClusters() async {
-    final result = await _dispatch.asyncRequest(
-      'GraphEvent.DetectClusters',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => ClusterModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
+    final json = await _dispatch.detectClusters();
+    final decoded = jsonDecode(json);
+    if (decoded is List) {
+      return decoded
+          .map((e) => ClusterModel.fromJson(e as Map<String, dynamic>))
+          .toList();
     }
     return [];
   }

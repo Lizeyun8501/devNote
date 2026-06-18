@@ -20,6 +20,7 @@ final class SearchResults extends SearchState {
   final List<String> tags;
   final DateTime? startDate;
   final DateTime? endDate;
+  final bool semanticEnabled;
 
   const SearchResults({
     required this.query,
@@ -29,6 +30,7 @@ final class SearchResults extends SearchState {
     this.tags = const [],
     this.startDate,
     this.endDate,
+    this.semanticEnabled = false,
   });
 
   /// 修复：copyWith 使用 _Sentinel 模式支持清除 nullable 字段
@@ -41,6 +43,7 @@ final class SearchResults extends SearchState {
     List<String>? tags,
     Object? startDate = _sentinel,
     Object? endDate = _sentinel,
+    bool? semanticEnabled,
   }) {
     return SearchResults(
       query: query ?? this.query,
@@ -50,6 +53,7 @@ final class SearchResults extends SearchState {
       tags: tags ?? this.tags,
       startDate: startDate == _sentinel ? this.startDate : startDate as DateTime?,
       endDate: endDate == _sentinel ? this.endDate : endDate as DateTime?,
+      semanticEnabled: semanticEnabled ?? this.semanticEnabled,
     );
   }
 }

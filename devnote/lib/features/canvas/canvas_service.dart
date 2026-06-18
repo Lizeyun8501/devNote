@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 
 enum NodeType { note, image, file, link, group }
@@ -15,6 +13,9 @@ enum AlignmentType { left, center, right, top, middle, bottom }
 enum DistributeDirection { horizontal, vertical }
 
 enum Side { top, bottom, left, right }
+
+/// Sentinel 值用于区分"未传参"和"显式传 null"
+const _canvasSentinel = Object();
 
 class CanvasNodeModel {
   final String id;
@@ -39,6 +40,9 @@ class CanvasNodeModel {
     this.file,
   });
 
+  /// 修复：copyWith 使用 sentinel 模式支持清除 nullable 字段
+  /// 原代码 `content ?? this.content` 无法传 null 清除内容，
+  /// 导致无法删除节点的 content/color/file
   CanvasNodeModel copyWith({
     String? id,
     NodeType? nodeType,
@@ -46,9 +50,9 @@ class CanvasNodeModel {
     double? y,
     double? width,
     double? height,
-    String? content,
-    String? color,
-    String? file,
+    Object? content = _canvasSentinel,
+    Object? color = _canvasSentinel,
+    Object? file = _canvasSentinel,
   }) {
     return CanvasNodeModel(
       id: id ?? this.id,
@@ -57,9 +61,9 @@ class CanvasNodeModel {
       y: y ?? this.y,
       width: width ?? this.width,
       height: height ?? this.height,
-      content: content ?? this.content,
-      color: color ?? this.color,
-      file: file ?? this.file,
+      content: content == _canvasSentinel ? this.content : content as String?,
+      color: color == _canvasSentinel ? this.color : color as String?,
+      file: file == _canvasSentinel ? this.file : file as String?,
     );
   }
 
@@ -251,157 +255,74 @@ class CollaborationSession {
   });
 }
 
-CanvasData _parseCanvasData(FlowyResult<Uint8List, FlowyInternalError> result) {
-  if (result is Success<Uint8List, FlowyInternalError>) {
-    final json = jsonDecode(utf8.decode(result.value));
-    if (json is Map<String, dynamic>) {
-      return CanvasData.fromJson(json);
-    }
-    return const CanvasData(nodes: [], edges: []);
-  }
-  if (result is Failure<Uint8List, FlowyInternalError>) {
-    throw Exception(result.error.message);
-  }
-  throw Exception('Unknown result type');
-}
-
 class CanvasService {
   final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<String> createCanvas() async {
-    final result = await _dispatch.asyncRequest(
-      'CanvasEvent.CreateCanvas',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      return utf8.decode(result.value);
-    }
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
-    throw Exception('Unknown result type');
+    return _dispatch.canvasCreateCanvas();
   }
 
   Future<CanvasData> getCanvas(String canvasId) async {
-    final payload = jsonEncode({'canvas_id': canvasId});
-    final result = await _dispatch.asyncRequest(
-      'CanvasEvent.GetCanvas',
-      payload: utf8.encode(payload),
-    );
-    return _parseCanvasData(result);
+    final json = await _dispatch.canvasGetCanvas(canvasId: canvasId);
+    return CanvasData.fromJson(json);
   }
 
   Future<void> addNode(String canvasId, CanvasNodeModel node) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'node': node.toJson(),
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.AddNode',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasAddNode(
+      canvasId: canvasId,
+      nodeJson: jsonEncode(node.toJson()),
     );
   }
 
   Future<void> removeNode(String canvasId, String nodeId) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'node_id': nodeId,
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.RemoveNode',
-      payload: utf8.encode(payload),
-    );
+    await _dispatch.canvasRemoveNode(canvasId: canvasId, nodeId: nodeId);
   }
 
   Future<void> moveNode(String canvasId, String nodeId, double x, double y) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'node_id': nodeId,
-      'x': x,
-      'y': y,
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.MoveNode',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasMoveNode(
+      canvasId: canvasId,
+      nodeId: nodeId,
+      x: x,
+      y: y,
     );
   }
 
   Future<void> resizeNode(String canvasId, String nodeId, double width, double height) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'node_id': nodeId,
-      'width': width,
-      'height': height,
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.ResizeNode',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasResizeNode(
+      canvasId: canvasId,
+      nodeId: nodeId,
+      width: width,
+      height: height,
     );
   }
 
   Future<void> addEdge(String canvasId, CanvasEdgeModel edge) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'edge': edge.toJson(),
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.AddEdge',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasAddEdge(
+      canvasId: canvasId,
+      edgeJson: jsonEncode(edge.toJson()),
     );
   }
 
   Future<void> removeEdge(String canvasId, String edgeId) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'edge_id': edgeId,
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.RemoveEdge',
-      payload: utf8.encode(payload),
-    );
+    await _dispatch.canvasRemoveEdge(canvasId: canvasId, edgeId: edgeId);
   }
 
   Future<CanvasData> autoLayout(String canvasId, LayoutType layoutType) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'layout_type': layoutType.name,
-    });
-    final result = await _dispatch.asyncRequest(
-      'CanvasEvent.AutoLayout',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasAutoLayout(
+      canvasId: canvasId,
+      layoutType: layoutType.name,
     );
-    return _parseCanvasData(result);
+    // canvasAutoLayout 返回 void，需重新获取画布数据以拿到最新布局结果
+    final json = await _dispatch.canvasGetCanvas(canvasId: canvasId);
+    return CanvasData.fromJson(json);
   }
 
   Future<void> saveCanvas(String canvasId, String path) async {
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'path': path,
-    });
-    // 修复：添加错误处理，防止 FFI 调用失败时静默丢失数据
-    // 原代码直接 await 不做任何处理，文件写入失败时数据丢失且无提示
-    final result = await _dispatch.asyncRequest(
-      'CanvasEvent.SaveCanvas',
-      payload: utf8.encode(payload),
-    );
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception('保存画布失败: ${result.error.message}');
-    }
+    await _dispatch.canvasSaveCanvas(canvasId: canvasId, path: path);
   }
 
   Future<String> loadCanvas(String path) async {
-    final payload = jsonEncode({'path': path});
-    final result = await _dispatch.asyncRequest(
-      'CanvasEvent.LoadCanvas',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      return utf8.decode(result.value);
-    }
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
-    throw Exception('Unknown result type');
+    return _dispatch.canvasLoadCanvas(path: path);
   }
 
   // =========================================================================
@@ -438,14 +359,9 @@ class CanvasService {
     );
 
     // 通知后端创建协作房间
-    final payload = jsonEncode({
-      'canvas_id': canvasId,
-      'session_id': sessionId,
-      'action': 'create',
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.StartCollaboration',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasStartCollaboration(
+      canvasId: canvasId,
+      sessionId: sessionId,
     );
   }
 
@@ -459,30 +375,17 @@ class CanvasService {
       throw Exception('A collaboration session is already active');
     }
 
-    final payload = jsonEncode({
-      'session_id': sessionId,
-      'action': 'join',
-    });
-    final result = await _dispatch.asyncRequest(
-      'CanvasEvent.JoinCollaboration',
-      payload: utf8.encode(payload),
+    final json = await _dispatch.canvasJoinCollaboration(sessionId: sessionId);
+    _activeSession = CollaborationSession(
+      id: sessionId,
+      canvasId: json['canvasId'] as String,
+      hostId: json['hostId'] as String? ?? '',
+      participantIds: (json['participants'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      createdAt: DateTime.now(),
     );
-
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value)) as Map<String, dynamic>;
-      _activeSession = CollaborationSession(
-        id: sessionId,
-        canvasId: json['canvasId'] as String,
-        hostId: json['hostId'] as String? ?? '',
-        participantIds: (json['participants'] as List<dynamic>?)
-                ?.map((e) => e as String)
-                .toList() ??
-            [],
-        createdAt: DateTime.now(),
-      );
-    } else if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
   }
 
   /// 发送协作变更
@@ -495,10 +398,8 @@ class CanvasService {
       throw Exception('No active collaboration session');
     }
 
-    final payload = jsonEncode(change.toJson());
-    await _dispatch.asyncRequest(
-      'CanvasEvent.BroadcastChange',
-      payload: utf8.encode(payload),
+    await _dispatch.canvasBroadcastChange(
+      changeJson: jsonEncode(change.toJson()),
     );
   }
 
@@ -561,14 +462,7 @@ class CanvasService {
   Future<void> endCollaborationSession() async {
     if (_activeSession == null) return;
 
-    final payload = jsonEncode({
-      'session_id': _activeSession!.id,
-      'action': 'leave',
-    });
-    await _dispatch.asyncRequest(
-      'CanvasEvent.EndCollaboration',
-      payload: utf8.encode(payload),
-    );
+    await _dispatch.canvasEndCollaboration(sessionId: _activeSession!.id);
 
     _activeSession = null;
   }

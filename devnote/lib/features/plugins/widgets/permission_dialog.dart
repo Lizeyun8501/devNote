@@ -22,31 +22,34 @@ class PermissionDialog extends StatelessWidget {
   static const _permissionLabels = {
     PluginPermission.readNotes: '读取笔记',
     PluginPermission.writeNotes: '写入笔记',
-    PluginPermission.accessNetwork: '访问网络',
-    PluginPermission.accessFileSystem: '访问文件系统',
-    PluginPermission.accessUI: '访问界面',
-    PluginPermission.accessCanvas: '访问画布',
-    PluginPermission.accessDatabase: '访问数据库',
+    PluginPermission.readFolders: '读取文件夹',
+    PluginPermission.writeFolders: '写入文件夹',
+    PluginPermission.networkAccess: '网络访问',
+    PluginPermission.fileSystem: '文件系统',
+    PluginPermission.executeCode: '执行代码',
+    PluginPermission.uiExtension: 'UI 扩展',
   };
 
   static const _permissionDescriptions = {
     PluginPermission.readNotes: '允许插件读取笔记内容',
     PluginPermission.writeNotes: '允许插件修改笔记内容',
-    PluginPermission.accessNetwork: '允许插件访问网络',
-    PluginPermission.accessFileSystem: '允许插件访问文件系统',
-    PluginPermission.accessUI: '允许插件操作界面元素',
-    PluginPermission.accessCanvas: '允许插件访问画布功能',
-    PluginPermission.accessDatabase: '允许插件直接访问数据库',
+    PluginPermission.readFolders: '允许插件读取文件夹结构',
+    PluginPermission.writeFolders: '允许插件修改文件夹结构',
+    PluginPermission.networkAccess: '允许插件访问网络',
+    PluginPermission.fileSystem: '允许插件访问文件系统',
+    PluginPermission.executeCode: '允许插件执行代码',
+    PluginPermission.uiExtension: '允许插件扩展界面元素',
   };
 
   static const _permissionIcons = {
     PluginPermission.readNotes: Icons.description_outlined,
     PluginPermission.writeNotes: Icons.edit_outlined,
-    PluginPermission.accessNetwork: Icons.language,
-    PluginPermission.accessFileSystem: Icons.folder_outlined,
-    PluginPermission.accessUI: Icons.widgets_outlined,
-    PluginPermission.accessCanvas: Icons.draw_outlined,
-    PluginPermission.accessDatabase: Icons.storage_outlined,
+    PluginPermission.readFolders: Icons.folder_open,
+    PluginPermission.writeFolders: Icons.create_new_folder_outlined,
+    PluginPermission.networkAccess: Icons.language,
+    PluginPermission.fileSystem: Icons.folder_outlined,
+    PluginPermission.executeCode: Icons.terminal,
+    PluginPermission.uiExtension: Icons.widgets_outlined,
   };
 
   @override

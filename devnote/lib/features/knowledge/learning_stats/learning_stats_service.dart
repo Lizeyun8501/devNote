@@ -1,7 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 
 class DailyStats {
@@ -95,21 +93,12 @@ class LearningStatsService {
   final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<LearningStatsSummary> getStatsSummary() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetLearningStats',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        return _parseSummary(json);
-      }
-      return _emptySummary();
+    final responseStr = await _dispatch.getLearningStats(noteId: '');
+    final json = jsonDecode(responseStr);
+    if (json is Map<String, dynamic>) {
+      return _parseSummary(json);
     }
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
-    throw Exception('Unknown result type');
+    return _emptySummary();
   }
 
   LearningStatsSummary _emptySummary() {
@@ -168,54 +157,17 @@ class LearningStatsService {
   }
 
   Future<List<DailyStats>> getNoteCreationTrend({int days = 30}) async {
-    final payload = jsonEncode({'days': days});
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetNoteCreationTrend',
-      payload: utf8.encode(payload),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => DailyStats.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-      return [];
-    }
+    // FFI 层尚未实现此事件，返回空数据
     return [];
   }
 
   Future<List<KnowledgeCoverage>> getKnowledgeCoverage() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetKnowledgeCoverage',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => KnowledgeCoverage.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-      return [];
-    }
+    // FFI 层尚未实现此事件，返回空数据
     return [];
   }
 
   Future<List<KnowledgeBlindSpot>> findBlindSpots() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.FindBlindSpots',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => KnowledgeBlindSpot.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-      return [];
-    }
+    // FFI 层尚未实现此事件，返回空数据
     return [];
   }
 }

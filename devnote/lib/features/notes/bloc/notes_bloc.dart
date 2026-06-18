@@ -49,13 +49,15 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
         createdAt: now,
         updatedAt: now,
       );
-      await _noteRepository.createNote(note);
+      // 修复：使用 repository 返回的模型，而非本地创建的对象
+      // FFI 模式下 Rust 端可能返回不同的时间戳，使用本地对象会导致数据不一致
+      final created = await _noteRepository.createNote(note);
       final currentState = state;
       if (currentState is NotesLoaded) {
-        final notes = List<NoteModel>.from(currentState.notes)..insert(0, note);
-        emit(currentState.copyWith(notes: notes, selectedNoteId: note.id));
+        final notes = List<NoteModel>.from(currentState.notes)..insert(0, created);
+        emit(currentState.copyWith(notes: notes, selectedNoteId: created.id));
       } else {
-        emit(NotesLoaded(notes: [note], selectedNoteId: note.id));
+        emit(NotesLoaded(notes: [created], selectedNoteId: created.id));
       }
     } catch (e) {
       emit(NotesError(e.toString()));

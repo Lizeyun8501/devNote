@@ -3,6 +3,28 @@ description: "A cloud-based note-taking application"
 publish_to: 'none'
 version: 1.0.0+1
 
+# ============================================================
+# 桌面端支持（macOS / Windows / Linux）
+# ------------------------------------------------------------
+# 借鉴 AppFlowy 的全平台策略 —— Flutter 一套代码覆盖 6 个平台
+# 来源: https://github.com/AppFlowy-IO/AppFlowy
+#
+# 平台目录已就绪：
+#   - macos/    macOS 原生（Xcode + Swift）
+#   - windows/  Windows 原生（MSVC + C++）
+#   - linux/    Linux 原生（CMake + GTK）
+#
+# 如需重新生成或更新平台目录，运行：
+#   ./scripts/enable_desktop.sh
+# 或手动执行：
+#   flutter create --platforms=macos,windows,linux .
+#
+# 构建命令：
+#   flutter build macos
+#   flutter build windows
+#   flutter build linux
+# ============================================================
+
 environment:
   sdk: ^3.7.2
 
@@ -66,6 +88,13 @@ dependencies:
   # 来源: https://pub.dev/packages/flutter_rust_bridge
   # ============================================================
   flutter_rust_bridge: ^2.12.0
+  # ============================================================
+  # pointycastle —— 纯 Dart 加密库，提供 AES-256-GCM 和 PBKDF2
+  # 替代 XOR 原型加密，实现生产级端到端加密（零 FFI 依赖）
+  # 注意：encrypt 包不支持 GCM 模式，故直接使用 pointycastle
+  # 来源: https://pub.dev/packages/pointycastle
+  # ============================================================
+  pointycastle: ^3.7.0
 
 dev_dependencies:
   flutter_test:
@@ -74,6 +103,11 @@ dev_dependencies:
   build_runner: ^2.4.14
   freezed: ^2.5.7
   json_serializable: ^6.9.4
+  # 测试依赖 —— BLoC 测试、Mock 框架、集成测试
+  bloc_test: ^9.1.0
+  mocktail: ^1.0.0
+  integration_test:
+    sdk: flutter
 
 flutter:
   uses-material-design: true
