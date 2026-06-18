@@ -17,6 +17,8 @@ import 'package:devnote/core/persistence/tag_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 import 'package:devnote/core/persistence/models/tag_model.dart';
+import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/services/editor_service.dart';
 
 enum ImportSource {
   markdownFolder,
@@ -70,6 +72,7 @@ class ImportService {
   final NoteRepository _noteRepository;
   final FolderRepository _folderRepository;
   final TagRepository _tagRepository;
+  final EditorService _editorService;
   final _progressController = StreamController<ImportProgress>.broadcast();
   final _uuid = const Uuid();
 
@@ -82,9 +85,11 @@ class ImportService {
     required NoteRepository noteRepository,
     required FolderRepository folderRepository,
     required TagRepository tagRepository,
+    EditorService? editorService,
   })  : _noteRepository = noteRepository,
         _folderRepository = folderRepository,
-        _tagRepository = tagRepository;
+        _tagRepository = tagRepository,
+        _editorService = editorService ?? EditorService();
 
   Stream<ImportProgress> get progressStream => _progressController.stream;
 
@@ -550,6 +555,250 @@ class ImportService {
     return tag.id;
   }
 
+  /// 从 Markdown 文件导入笔记
+  /// 借鉴 Joplin 的 Markdown 导入功能
+  // 来源: https://joplinapp.org/help/apps/import_export/
+  Future<String> importFromMarkdown(String filePath, {String? folderId}) async {
+    final file = File(filePath);
+    final raw = await file.readAsString();
+
+    // 去除 YAML front matter，获取纯内容
+    final content = _stripYamlFrontMatter(raw);
+
+    // 标题：第一个 heading 或文件名
+    final title =
+        _extractTitleFromContent(content) ?? p.basenameWithoutExtension(filePath);
+
+    // 创建笔记
+    final now = DateTime.now();
+    final noteId = _uuid.v4();
+    final note = NoteModel(
+      id: noteId,
+      title: title,
+      content: content,
+      folderId: folderId ?? '',
+      createdAt: now,
+      updatedAt: now,
+    );
+    await _noteRepository.createNote(note);
+
+    // 解析 Markdown 为块并逐个创建
+    final parsedBlocks = _parseMarkdownToBlocks(content);
+    for (var i = 0; i < parsedBlocks.length; i++) {
+      final parsed = parsedBlocks[i];
+      await _editorService.createBlock(
+        noteId: noteId,
+        blockType: parsed.blockType,
+        content: parsed.content,
+        position: i,
+      );
+    }
+
+    return noteId;
+  }
+
+  /// 批量从目录导入 Markdown 文件
+  Future<int> importFromDirectory(String dirPath, {String? folderId}) async {
+    final dir = Directory(dirPath);
+    if (!await dir.exists()) return 0;
+
+    // 列出目录中所有 .md 文件
+    final mdFiles = _collectMdFilesSync(dir);
+    var count = 0;
+
+    for (final file in mdFiles) {
+      try {
+        await importFromMarkdown(file.path, folderId: folderId);
+        count++;
+      } catch (_) {
+        // 单个文件导入失败不影响整体流程，跳过继续
+        continue;
+      }
+    }
+
+    return count;
+  }
+
+  /// 将 Markdown 内容解析为块列表
+  /// 支持：标题、代码块、引用、无序列表、有序列表、任务列表、分隔线、表格、图片、段落
+  List<_ParsedBlock> _parseMarkdownToBlocks(String content) {
+    final lines = content.split('\n');
+    final blocks = <_ParsedBlock>[];
+    var i = 0;
+
+    // 任务列表行正则：- [ ] / - [x] / * [ ] / * [x]
+    final taskRegex = RegExp(r'^[-*]\s+\[[xX ]\]\s+.*$');
+    // 有序列表行正则：1. item
+    final orderedRegex = RegExp(r'^\d+\.\s+(.*)$');
+    // 图片行正则：![alt](path)
+    final imageRegex = RegExp(r'^!\[.*\]\(.*\)\s*$');
+    // 分隔线正则：---（三个及以上连字符）
+    final dividerRegex = RegExp(r'^-{3,}\s*$');
+
+    while (i < lines.length) {
+      final line = lines[i];
+
+      // 代码块：```language ... ```
+      if (line.startsWith('```')) {
+        final language = line.length > 3 ? line.substring(3).trim() : null;
+        final codeLines = <String>[];
+        i++;
+        while (i < lines.length && !lines[i].startsWith('```')) {
+          codeLines.add(lines[i]);
+          i++;
+        }
+        blocks.add(_ParsedBlock(
+          BlockType.codeBlock,
+          codeLines.join('\n'),
+          language: language,
+        ));
+        i++; // 跳过结束的 ```
+        continue;
+      }
+
+      // 标题（从长到短匹配，避免 # 被 ## 误匹配）
+      if (line.startsWith('###### ')) {
+        blocks.add(_ParsedBlock(BlockType.heading6, line.substring(7)));
+        i++;
+        continue;
+      }
+      if (line.startsWith('##### ')) {
+        blocks.add(_ParsedBlock(BlockType.heading5, line.substring(6)));
+        i++;
+        continue;
+      }
+      if (line.startsWith('#### ')) {
+        blocks.add(_ParsedBlock(BlockType.heading4, line.substring(5)));
+        i++;
+        continue;
+      }
+      if (line.startsWith('### ')) {
+        blocks.add(_ParsedBlock(BlockType.heading3, line.substring(4)));
+        i++;
+        continue;
+      }
+      if (line.startsWith('## ')) {
+        blocks.add(_ParsedBlock(BlockType.heading2, line.substring(3)));
+        i++;
+        continue;
+      }
+      if (line.startsWith('# ')) {
+        blocks.add(_ParsedBlock(BlockType.heading1, line.substring(2)));
+        i++;
+        continue;
+      }
+
+      // 任务列表：- [ ] / - [x] / * [ ] / * [x]
+      if (taskRegex.hasMatch(line)) {
+        final taskLines = <String>[line];
+        i++;
+        while (i < lines.length && taskRegex.hasMatch(lines[i])) {
+          taskLines.add(lines[i]);
+          i++;
+        }
+        blocks.add(_ParsedBlock(BlockType.taskListBlock, taskLines.join('\n')));
+        continue;
+      }
+
+      // 分隔线：---
+      if (dividerRegex.hasMatch(line)) {
+        blocks.add(_ParsedBlock(BlockType.paragraph, '---'));
+        i++;
+        continue;
+      }
+
+      // 引用块：> text
+      if (line.startsWith('> ')) {
+        final quoteLines = <String>[line.substring(2)];
+        i++;
+        while (i < lines.length && lines[i].startsWith('> ')) {
+          quoteLines.add(lines[i].substring(2));
+          i++;
+        }
+        blocks.add(_ParsedBlock(BlockType.quote, quoteLines.join('\n')));
+        continue;
+      }
+
+      // 有序列表：1. item
+      if (orderedRegex.hasMatch(line)) {
+        final listLines = <String>[orderedRegex.firstMatch(line)!.group(1)!];
+        i++;
+        while (i < lines.length && orderedRegex.hasMatch(lines[i])) {
+          listLines.add(orderedRegex.firstMatch(lines[i])!.group(1)!);
+          i++;
+        }
+        blocks.add(_ParsedBlock(BlockType.orderedList, listLines.join('\n')));
+        continue;
+      }
+
+      // 无序列表：- item / * item
+      if (line.startsWith('- ') || line.startsWith('* ')) {
+        final listLines = <String>[line.substring(2)];
+        i++;
+        while (i < lines.length &&
+            (lines[i].startsWith('- ') || lines[i].startsWith('* '))) {
+          listLines.add(lines[i].substring(2));
+          i++;
+        }
+        blocks.add(_ParsedBlock(BlockType.list, listLines.join('\n')));
+        continue;
+      }
+
+      // 表格：| col1 | col2 |
+      if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+        final tableLines = <String>[line];
+        i++;
+        while (i < lines.length &&
+            lines[i].trim().startsWith('|') &&
+            lines[i].trim().endsWith('|')) {
+          tableLines.add(lines[i]);
+          i++;
+        }
+        blocks.add(_ParsedBlock(BlockType.tableBlock, tableLines.join('\n')));
+        continue;
+      }
+
+      // 图片：![alt](path)
+      if (imageRegex.hasMatch(line)) {
+        blocks.add(_ParsedBlock(BlockType.image, line.trim()));
+        i++;
+        continue;
+      }
+
+      // 空行：跳过
+      if (line.trim().isEmpty) {
+        i++;
+        continue;
+      }
+
+      // 段落：连续非空行（直到遇到特殊语法）
+      final paragraphLines = <String>[line];
+      i++;
+      while (i < lines.length &&
+          lines[i].trim().isNotEmpty &&
+          !lines[i].startsWith('#') &&
+          !lines[i].startsWith('```') &&
+          !lines[i].startsWith('> ') &&
+          !lines[i].startsWith('- ') &&
+          !lines[i].startsWith('* ') &&
+          !orderedRegex.hasMatch(lines[i]) &&
+          !taskRegex.hasMatch(lines[i]) &&
+          !dividerRegex.hasMatch(lines[i]) &&
+          !imageRegex.hasMatch(lines[i]) &&
+          !(lines[i].trim().startsWith('|') &&
+              lines[i].trim().endsWith('|'))) {
+        paragraphLines.add(lines[i]);
+        i++;
+      }
+      blocks.add(_ParsedBlock(
+        BlockType.paragraph,
+        paragraphLines.join('\n'),
+      ));
+    }
+
+    return blocks;
+  }
+
   void dispose() {
     _progressController.close();
   }
@@ -572,4 +821,13 @@ class ParsedMarkdown {
     required this.createdAt,
     required this.updatedAt,
   });
+}
+
+/// Markdown 解析为块的中间结果（仅供 ImportService 内部使用）
+class _ParsedBlock {
+  final BlockType blockType;
+  final String content;
+  final String? language;
+
+  const _ParsedBlock(this.blockType, this.content, {this.language});
 }

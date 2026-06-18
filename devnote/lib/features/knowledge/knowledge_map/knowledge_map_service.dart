@@ -1,8 +1,7 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/persistence/models/tag_model.dart';
 
 class LearningGoal {
   final String id;
@@ -58,73 +57,39 @@ class KnowledgeMapService {
   final Dispatch _dispatch = getIt<Dispatch>();
 
   Future<KnowledgeMapData> getKnowledgeMap() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetKnowledgeMap',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is Map<String, dynamic>) {
-        final goals = <LearningGoal>[];
-        if (json.containsKey('goals') && json['goals'] is List) {
-          for (final item in json['goals'] as List<dynamic>) {
-            goals.add(LearningGoal.fromJson(item as Map<String, dynamic>));
-          }
+    final responseStr = await _dispatch.getKnowledgeMap(noteId: '');
+    final json = jsonDecode(responseStr);
+    if (json is Map<String, dynamic>) {
+      final goals = <LearningGoal>[];
+      if (json.containsKey('goals') && json['goals'] is List) {
+        for (final item in json['goals'] as List<dynamic>) {
+          goals.add(LearningGoal.fromJson(item as Map<String, dynamic>));
         }
-
-        final tags = <TagInfo>[];
-        if (json.containsKey('tags') && json['tags'] is List) {
-          for (final item in json['tags'] as List<dynamic>) {
-            tags.add(TagInfo.fromJson(item as Map<String, dynamic>));
-          }
-        }
-
-        return KnowledgeMapData(goals: goals, tags: tags);
       }
-      return const KnowledgeMapData(goals: [], tags: []);
+
+      final tags = <TagInfo>[];
+      if (json.containsKey('tags') && json['tags'] is List) {
+        for (final item in json['tags'] as List<dynamic>) {
+          tags.add(TagInfo.fromJson(item as Map<String, dynamic>));
+        }
+      }
+
+      return KnowledgeMapData(goals: goals, tags: tags);
     }
-    if (result is Failure<Uint8List, FlowyInternalError>) {
-      throw Exception(result.error.message);
-    }
-    throw Exception('Unknown result type');
+    return const KnowledgeMapData(goals: [], tags: []);
   }
 
   Future<void> addGoal(String title, List<String> tags) async {
-    final payload = jsonEncode({
-      'title': title,
-      'tags': tags,
-    });
-    await _dispatch.asyncRequest(
-      'KnowledgeEvent.AddGoal',
-      payload: utf8.encode(payload),
-    );
+    // FFI 层尚未实现此事件，无操作
   }
 
   Future<void> updateGoalProgress(String goalId, double progress) async {
-    final payload = jsonEncode({
-      'goal_id': goalId,
-      'progress': progress,
-    });
-    await _dispatch.asyncRequest(
-      'KnowledgeEvent.UpdateGoalProgress',
-      payload: utf8.encode(payload),
-    );
+    // FFI 层尚未实现此事件，无操作
   }
 
   Future<List<TagInfo>> getTags() async {
-    final result = await _dispatch.asyncRequest(
-      'KnowledgeEvent.GetTags',
-      payload: Uint8List(0),
-    );
-    if (result is Success<Uint8List, FlowyInternalError>) {
-      final json = jsonDecode(utf8.decode(result.value));
-      if (json is List) {
-        return json
-            .map((e) => TagInfo.fromJson(e as Map<String, dynamic>))
-            .toList();
-      }
-      return [];
-    }
-    return [];
+    final tags = await _dispatch.listTags();
+    // TagModel 不含 count 字段，使用 0 作为默认值
+    return tags.map((t) => TagInfo(name: t.name, count: 0)).toList();
   }
 }

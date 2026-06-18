@@ -7,17 +7,11 @@
 /// ## 核心变更
 /// 1. 消除 Event-Dispatch 字符串路由（"NoteEvent.CreateNote" → createNote()）
 /// 2. 消除 JSON 序列化/反序列化（FRB 使用 SSE 编解码器）
-/// 3. 消除 FlowyResult 包装（FRB 直接使用 Result 类型）
-/// 4. 消除 asyncRequest 的回调模式（FRB 直接返回 Future）
+/// 3. 消除 asyncRequest 的回调模式（FRB 直接返回 Future）
 ///
 /// 来源: https://pub.dev/packages/flutter_rust_bridge
 /// 借鉴 AppFlowy 的 Dispatch 模式（已升级为 FRB 直接调用）
 
-import 'dart:convert';
-import 'dart:developer';
-import 'dart:typed_data';
-
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 // 修复: 不要在本文件定义 getIt,直接使用 injection.dart 中的实例
 // 旧代码在 dispatch.dart 顶层声明 getIt,与 injection.dart 的 getIt 冲突,导致
@@ -226,6 +220,124 @@ class Dispatch {
   }) => _bridge.crdtMerge(docId: docId, deviceId: deviceId, remoteOpsJson: remoteOpsJson);
 
   // ============================================================
+  // Canvas 扩展操作 —— 替代原 CanvasEvent.* 事件路由
+  // ============================================================
+
+  Future<String> canvasCreateCanvas() => _bridge.canvasCreateCanvas();
+
+  Future<Map<String, dynamic>> canvasGetCanvas({required String canvasId}) =>
+      _bridge.canvasGetCanvas(canvasId: canvasId);
+
+  Future<void> canvasMoveNode({required String canvasId, required String nodeId, required double x, required double y}) =>
+      _bridge.canvasMoveNode(canvasId: canvasId, nodeId: nodeId, x: x, y: y);
+
+  Future<void> canvasResizeNode({required String canvasId, required String nodeId, required double width, required double height}) =>
+      _bridge.canvasResizeNode(canvasId: canvasId, nodeId: nodeId, width: width, height: height);
+
+  Future<void> canvasAddEdge({required String canvasId, required String edgeJson}) =>
+      _bridge.canvasAddEdge(canvasId: canvasId, edgeJson: edgeJson);
+
+  Future<void> canvasRemoveEdge({required String canvasId, required String edgeId}) =>
+      _bridge.canvasRemoveEdge(canvasId: canvasId, edgeId: edgeId);
+
+  Future<void> canvasSaveCanvas({required String canvasId, required String path}) =>
+      _bridge.canvasSaveCanvas(canvasId: canvasId, path: path);
+
+  Future<String> canvasLoadCanvas({required String path}) =>
+      _bridge.canvasLoadCanvas(path: path);
+
+  Future<void> canvasStartCollaboration({required String canvasId, required String sessionId}) =>
+      _bridge.canvasStartCollaboration(canvasId: canvasId, sessionId: sessionId);
+
+  Future<Map<String, dynamic>> canvasJoinCollaboration({required String sessionId}) =>
+      _bridge.canvasJoinCollaboration(sessionId: sessionId);
+
+  Future<void> canvasBroadcastChange({required String changeJson}) =>
+      _bridge.canvasBroadcastChange(changeJson: changeJson);
+
+  Future<void> canvasEndCollaboration({required String sessionId}) =>
+      _bridge.canvasEndCollaboration(sessionId: sessionId);
+
+  // ============================================================
+  // 闪卡扩展操作 —— 替代原 FlashcardEvent.* 事件路由
+  // ============================================================
+
+  Future<void> deleteDeck({required String deckId}) =>
+      _bridge.deleteDeck(deckId: deckId);
+
+  Future<List<Map<String, dynamic>>> listDecks() => _bridge.listDecks();
+
+  Future<Map<String, dynamic>> createFlashcard({
+    required String deckId,
+    required String cardType,
+    required String front,
+    required String back,
+    String? noteId,
+  }) => _bridge.createFlashcard(deckId: deckId, cardType: cardType, front: front, back: back, noteId: noteId);
+
+  Future<Map<String, dynamic>> updateFlashcard({required String id, required String front, required String back}) =>
+      _bridge.updateFlashcard(id: id, front: front, back: back);
+
+  Future<void> deleteFlashcard({required String flashcardId}) =>
+      _bridge.deleteFlashcard(flashcardId: flashcardId);
+
+  Future<Map<String, dynamic>> getReviewStats({required String deckId}) =>
+      _bridge.getReviewStats(deckId: deckId);
+
+  Future<List<Map<String, dynamic>>> batchGenerateFromNote({required String noteId}) =>
+      _bridge.batchGenerateFromNote(noteId: noteId);
+
+  // ============================================================
+  // 图谱扩展操作 —— 替代原 GraphEvent.* 事件路由
+  // ============================================================
+
+  Future<String> getGraph() => _bridge.getGraph();
+  Future<String> getNodeDetails({required String nodeId}) => _bridge.getNodeDetails(nodeId: nodeId);
+  Future<String> getRelatedNodes({required String nodeId}) => _bridge.getRelatedNodes(nodeId: nodeId);
+  Future<String> searchNodes({required String query}) => _bridge.searchNodes(query: query);
+  Future<String> getGraphStats() => _bridge.getGraphStats();
+  Future<String> getShortestPath({required String fromId, required String toId}) =>
+      _bridge.getShortestPath(fromId: fromId, toId: toId);
+  Future<String> getNeighbors({required String nodeId, required int depth}) =>
+      _bridge.getNeighbors(nodeId: nodeId, depth: depth);
+
+  // ============================================================
+  // Git 操作 —— 替代原 GitEvent.* 事件路由
+  // ============================================================
+
+  Future<String> gitInit({required String repoPath}) => _bridge.gitInit(repoPath: repoPath);
+  Future<String> gitStatus({required String repoPath}) => _bridge.gitStatus(repoPath: repoPath);
+  Future<String> gitCommit({required String repoPath, required String message}) =>
+      _bridge.gitCommit(repoPath: repoPath, message: message);
+  Future<String> gitLog({required String repoPath, required int limit}) =>
+      _bridge.gitLog(repoPath: repoPath, limit: limit);
+  Future<String> gitBranch({required String repoPath}) => _bridge.gitBranch(repoPath: repoPath);
+  Future<String> gitCheckout({required String repoPath, required String branch}) =>
+      _bridge.gitCheckout(repoPath: repoPath, branch: branch);
+  Future<String> gitDiff({required String repoPath}) => _bridge.gitDiff(repoPath: repoPath);
+
+  // ============================================================
+  // P2P 操作 —— 替代原 P2PEvent.* 事件路由
+  // ============================================================
+
+  Future<void> p2pStart({required String peerId}) => _bridge.p2pStart(peerId: peerId);
+  Future<void> p2pStop() => _bridge.p2pStop();
+  Future<String> p2pGetPeers() => _bridge.p2pGetPeers();
+  Future<void> p2pConnectPeer({required String peerId, required String multiaddr}) =>
+      _bridge.p2pConnectPeer(peerId: peerId, multiaddr: multiaddr);
+  Future<void> p2pDisconnectPeer({required String peerId}) =>
+      _bridge.p2pDisconnectPeer(peerId: peerId);
+  Future<String> p2pGetStatus() => _bridge.p2pGetStatus();
+
+  // ============================================================
+  // Knowledge 操作 —— 替代原 KnowledgeEvent.* 事件路由
+  // ============================================================
+
+  Future<String> getKnowledgeMap({required String noteId}) => _bridge.getKnowledgeMap(noteId: noteId);
+  Future<String> getLearningStats({required String noteId}) => _bridge.getLearningStats(noteId: noteId);
+  Future<String> getDashboard() => _bridge.getDashboard();
+
+  // ============================================================
   // 格式操作 —— 替代原 FormatEvent.* 事件路由
   // ============================================================
 
@@ -233,156 +345,9 @@ class Dispatch {
   Future<void> exportMarkdown({required String notesJson, required String path}) =>
       _bridge.exportMarkdown(notesJson: notesJson, path: path);
 
-  // ============================================================
-  // 兼容接口 —— 保持原有 asyncRequest 签名，内部转换为 FRB 调用
-  // 用于尚未迁移到新 API 的调用方
-  // ============================================================
-
-  /// 兼容旧 Event-Dispatch 调用方式
-  /// 新代码应直接使用上面的类型安全方法
-  ///
-  /// TODO(R10-06): 迁移迁移指南
-  /// 以下文件仍在使用 asyncRequest，需逐步迁移到类型安全方法：
-  /// - lib/features/knowledge_graph/graph_service.dart (9 处调用)
-  /// - lib/features/canvas/canvas_service.dart (13 处调用)
-  /// - lib/features/flashcard/flashcard_service.dart (11 处调用)
-  /// - lib/features/sync/p2p/p2p_service.dart (6 处调用)
-  /// - lib/features/workflow/git_service.dart (7 处调用)
-  /// - lib/features/workflow/file_watcher_service.dart (1 处调用)
-  /// - lib/features/workflow/external_editor_sync.dart (3 处调用)
-  /// - lib/features/search/search_service.dart (2 处调用)
-  /// - lib/features/knowledge/knowledge_service.dart (2 处调用)
-  /// - lib/features/knowledge/knowledge_map/knowledge_map_service.dart (4 处调用)
-  /// - lib/features/knowledge/learning_stats/learning_stats_service.dart (4 处调用)
-  /// - lib/features/knowledge/dashboard/dashboard_service.dart (3 处调用)
-  /// 迁移方法：将 asyncRequest('XxxEvent.Yyy', payload: ...) 替换为
-  /// 对应的类型安全方法如 dispatch.createNote(title: ..., content: ..., folderId: ...)
-  @Deprecated('Use type-safe methods instead of Event-Dispatch strings')
-  Future<LegacyFlowyResult> asyncRequest(String event, {Uint8List? payload}) async {
-    try {
-      final result = await _dispatchLegacy(event, payload);
-      return Success<Uint8List, FlowyInternalError>(result);
-    } catch (e) {
-      return Failure<Uint8List, FlowyInternalError>(
-        FlowyInternalError(message: e.toString(), code: 0),
-      );
-    }
-  }
-
-  /// 旧事件路由兼容层 —— 将字符串事件名映射到 FRB 函数调用
-  /// TODO(R10-06): 迁移所有 asyncRequest 调用方到类型安全方法后移除此方法
-  Future<Uint8List> _dispatchLegacy(String event, Uint8List? payload) async {
-    log('Warning: asyncRequest legacy path used for event: $event. Migrate to type-safe method.', name: 'Dispatch');
-    final payloadMap = payload != null
-        ? jsonDecode(utf8.decode(payload)) as Map<String, dynamic>
-        : <String, dynamic>{};
-
-    // 笔记事件
-    if (event == 'NoteEvent.CreateNote') {
-      final result = await createNote(
-        title: payloadMap['title'] as String,
-        content: payloadMap['content'] as String,
-        folderId: payloadMap['folder_id'] as String,
-      );
-      return utf8.encode(jsonEncode(result.toJson()));
-    }
-    if (event == 'NoteEvent.GetNote') {
-      final result = await getNote(payloadMap['id'] as String);
-      return utf8.encode(jsonEncode(result?.toJson()));
-    }
-    if (event == 'NoteEvent.UpdateNote') {
-      final result = await updateNote(
-        id: payloadMap['id'] as String,
-        title: payloadMap['title'] as String,
-        content: payloadMap['content'] as String,
-      );
-      return utf8.encode(jsonEncode(result.toJson()));
-    }
-    if (event == 'NoteEvent.DeleteNote') {
-      await deleteNote(payloadMap['id'] as String);
-      return Uint8List(0);
-    }
-    if (event == 'NoteEvent.ListNotes') {
-      // 修复：folder_id 缺少时默认使用空字符串（根目录），避免 null as String 崩溃
-      final result = await listNotes((payloadMap['folder_id'] as String?) ?? '');
-      return utf8.encode(jsonEncode(result.map((n) => n.toJson()).toList()));
-    }
-
-    // 文件夹事件
-    if (event == 'FolderEvent.CreateFolder') {
-      final result = await createFolder(
-        name: payloadMap['name'] as String,
-        parentId: payloadMap['parent_id'] as String?,
-      );
-      return utf8.encode(jsonEncode(result.toJson()));
-    }
-    if (event == 'FolderEvent.ListFolders') {
-      final result = await listFolders(parentId: payloadMap['parent_id'] as String?);
-      return utf8.encode(jsonEncode(result.map((f) => f.toJson()).toList()));
-    }
-    if (event == 'FolderEvent.DeleteFolder') {
-      await deleteFolder(payloadMap['id'] as String);
-      return Uint8List(0);
-    }
-
-    // 标签事件
-    if (event == 'TagEvent.CreateTag') {
-      final result = await createTag(payloadMap['name'] as String);
-      return utf8.encode(jsonEncode(result.toJson()));
-    }
-    if (event == 'TagEvent.ListTags') {
-      final result = await listTags();
-      return utf8.encode(jsonEncode(result.map((t) => t.toJson()).toList()));
-    }
-    if (event == 'TagEvent.DeleteTag') {
-      await deleteTag(payloadMap['id'] as String);
-      return Uint8List(0);
-    }
-
-    // 搜索事件
-    if (event == 'SearchEvent.Search') {
-      final result = await searchNotes(
-        query: payloadMap['query'] as String,
-        limit: payloadMap['limit'] as int?,
-        offset: payloadMap['offset'] as int?,
-      );
-      return utf8.encode(jsonEncode(result));
-    }
-
-    // 系统事件
-    if (event == 'SystemEvent.GetVersion') {
-      final version = await _bridge.negotiateVersion();
-      return utf8.encode(jsonEncode({
-        'api_version': version?.apiVersion ?? 0,
-        'rust_version': version?.rustVersion ?? 'unknown',
-        'compatible_min': version?.compatibleMin ?? 1,
-        'features': version?.features ?? [],
-      }));
-    }
-    if (event == 'SystemEvent.HealthCheck') {
-      final health = await _bridge.healthCheck();
-      return utf8.encode(jsonEncode({
-        'status': 'ok',
-        'engines': health ?? {},
-      }));
-    }
-
-    throw UnimplementedError('Event not mapped to FRB: $event');
-  }
-
   /// 释放 Dispatch 层持有的资源
   void dispose() {
     // FRB 模式下 Dispatch 不持有需要显式释放的资源
     // 保留此方法供 DI 容器 disposeAll() 统一调用
   }
 }
-
-// 修复: 移除 dispatch.dart 内部重复定义的 FlowyResult / FlowyInternalError
-// 旧代码在 dispatch.dart 顶层声明非泛型 FlowyResult,与 error.dart 中
-// 密封类 FlowyResult<S, F> 冲突,导致所有 import dispatch.dart 的文件
-// 都出现 ambiguous_import 错误。
-// 兼容方案: 在本文件中以别名方式提供旧版非泛型 FlowyResult,
-// 避免改动所有使用方 (canvas_service.dart 等)。
-// 新代码请直接使用 error.dart 中的 FlowyResult<S, F>。
-typedef LegacyFlowyResult = FlowyResult<Uint8List, FlowyInternalError>;
-typedef LegacyFlowyInternalError = FlowyInternalError;

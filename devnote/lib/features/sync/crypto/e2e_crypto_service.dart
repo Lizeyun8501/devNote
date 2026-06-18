@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum E2ECryptoStatus {
@@ -38,7 +39,7 @@ class E2ECryptoState {
     required this.status,
     this.currentKey,
     this.previousKey,
-    this.algorithm = 'XChaCha20-Poly1305',
+    this.algorithm = 'AES-256-GCM',
     this.keyRotationIntervalDays = 30,
     this.lastKeyRotation,
   });
@@ -76,6 +77,9 @@ class E2ECryptoService {
   static const String _keySalt = 'e2e_salt';
   static const String _keyRotationInterval = 'e2e_rotation_interval';
   static const String _keyLastRotation = 'e2e_last_rotation';
+
+  /// PBKDF2-HMAC-SHA256 迭代次数（OWASP 建议值）
+  static const int _pbkdf2Iterations = 100000;
 
   Uint8List? _sessionKey;
   Uint8List? _previousSessionKey;
@@ -187,29 +191,17 @@ class E2ECryptoService {
 
   Uint8List? encryptSyncData(Uint8List data) {
     if (_sessionKey == null) return null;
-
-    final nonce = _generateRandomBytes(24);
-    final ciphertext = _xorEncrypt(data, _sessionKey!, nonce);
-
-    final result = BytesBuilder();
-    result.add(nonce);
-    result.add(ciphertext);
-
-    return result.toBytes();
+    return _encryptWithKey(data, _sessionKey!);
   }
 
   Uint8List? decryptSyncData(Uint8List encryptedData) {
     if (_sessionKey == null) return null;
-    if (encryptedData.length < 24) return null;
 
-    final nonce = encryptedData.sublist(0, 24);
-    final ciphertext = encryptedData.sublist(24);
-
-    final decrypted = _xorEncrypt(ciphertext, _sessionKey!, nonce);
-    if (decrypted.isNotEmpty) return decrypted;
+    final decrypted = _decryptWithKey(encryptedData, _sessionKey!);
+    if (decrypted != null) return decrypted;
 
     if (_previousSessionKey != null) {
-      return _xorEncrypt(ciphertext, _previousSessionKey!, nonce);
+      return _decryptWithKey(encryptedData, _previousSessionKey!);
     }
 
     return null;
@@ -304,13 +296,14 @@ class E2ECryptoService {
 
     try {
       final backupBytes = base64Decode(backupBase64);
-      if (backupBytes.length < 32) return false;
+      if (backupBytes.length < 32 + 12 + 16) return false;
 
       final backupSalt = backupBytes.sublist(0, 32);
       final encryptedData = backupBytes.sublist(32);
 
       final backupKey = _deriveKey(decryptionPassword, backupSalt);
       final decrypted = _decryptWithKey(Uint8List.fromList(encryptedData), backupKey);
+      if (decrypted == null) return false;
 
       final jsonStr = utf8.decode(decrypted);
       final backupData = jsonDecode(jsonStr) as Map<String, dynamic>;
@@ -380,65 +373,48 @@ class E2ECryptoService {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
-  /// 密钥派生函数
+  /// 密钥派生函数 —— PBKDF2-HMAC-SHA256
   ///
-  /// 安全警告：当前实现使用自定义 XOR+迭代哈希，仅用于原型阶段。
-  /// 生产环境应替换为标准 KDF（如 Argon2id、PBKDF2、scrypt），
-  /// 通过 FFI 调用 Rust 的 ring/argon2 库实现。
-  /// 自定义实现的问题：
-  /// 1. 迭代次数仅 10 次，远低于 OWASP 推荐的 600,000+ 次（PBKDF2-SHA256）
-  /// 2. XOR 运算不提供雪崩效应，密钥分布不均匀
-  /// 3. 无内存硬性要求，易受 GPU/ASIC 暴力破解
+  /// 使用 pointycastle 标准 PBKDF2 实现，迭代 100,000 次，
+  /// 派生 256 位密钥用于 AES-256-GCM。
   Uint8List _deriveKey(String password, Uint8List salt) {
-    final key = Uint8List(32);
-    final passwordBytes = utf8.encode(password);
-
-    for (var i = 0; i < 32; i++) {
-      key[i] = i < passwordBytes.length
-          ? (passwordBytes[i] ^ salt[i % salt.length])
-          : salt[i % salt.length];
-    }
-
-    for (var round = 0; round < 10; round++) {
-      for (var i = 0; i < 32; i++) {
-        key[i] = ((key[i] * 31 + salt[i % salt.length] + round) % 256);
-      }
-    }
-
-    return key;
+    final derivator = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
+      ..init(Pbkdf2Parameters(salt, _pbkdf2Iterations, 32));
+    return derivator.process(Uint8List.fromList(utf8.encode(password)));
   }
 
+  /// AES-256-GCM 加密
+  ///
+  /// 格式: nonce(12 bytes) + ciphertext + tag(16 bytes)
+  /// 每次加密生成随机 12 字节 nonce，认证标签附在密文末尾。
   Uint8List _encryptWithKey(Uint8List data, Uint8List key) {
-    final nonce = _generateRandomBytes(24);
-    final ciphertext = _xorEncrypt(data, key, nonce);
+    final nonce = _generateRandomBytes(12);
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, null));
+    final ciphertextWithTag = cipher.process(data);
 
     final result = BytesBuilder();
     result.add(nonce);
-    result.add(ciphertext);
+    result.add(ciphertextWithTag);
 
     return result.toBytes();
   }
 
-  Uint8List _decryptWithKey(Uint8List encryptedData, Uint8List key) {
-    if (encryptedData.length < 24) return Uint8List(0);
-
-    final nonce = encryptedData.sublist(0, 24);
-    final ciphertext = encryptedData.sublist(24);
-
-    return _xorEncrypt(ciphertext, key, nonce);
-  }
-
-  /// 加密/解密核心函数
+  /// AES-256-GCM 解密
   ///
-  /// 安全警告：当前使用 XOR 流密码，仅用于原型阶段。
-  /// XOR 加密不提供语义安全性（SEM），相同明文+密钥产生相同密文，
-  /// 且无法抵抗已知明文攻击。生产环境应替换为 XChaCha20-Poly1305
-  /// 或 AES-256-GCM，通过 FFI 调用 Rust 加密库实现。
-  Uint8List _xorEncrypt(Uint8List data, Uint8List key, Uint8List nonce) {
-    final result = Uint8List(data.length);
-    for (var i = 0; i < data.length; i++) {
-      result[i] = data[i] ^ key[i % key.length] ^ nonce[i % nonce.length];
+  /// 输入格式: nonce(12 bytes) + ciphertext + tag(16 bytes)
+  /// 认证标签验证失败时返回 null。
+  Uint8List? _decryptWithKey(Uint8List encryptedData, Uint8List key) {
+    if (encryptedData.length < 12 + 16) return null;
+
+    try {
+      final nonce = encryptedData.sublist(0, 12);
+      final ciphertextWithTag = encryptedData.sublist(12);
+      final cipher = GCMBlockCipher(AESEngine())
+        ..init(false, AEADParameters(KeyParameter(key), 128, nonce, null));
+      return cipher.process(ciphertextWithTag);
+    } catch (_) {
+      return null;
     }
-    return result;
   }
 }

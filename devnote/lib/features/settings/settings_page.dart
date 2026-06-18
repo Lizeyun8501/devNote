@@ -1,13 +1,9 @@
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
 import 'package:devnote/features/sync/p2p/p2p_settings_page.dart';
 
@@ -51,69 +47,24 @@ class _SettingsPageState extends State<SettingsPage> {
       });
       return;
     }
-    try {
-      final dispatch = Dispatch();
-      final result = await dispatch.asyncRequest('FeatureFlagEvent.ListFlags');
-      if (result is Success<Uint8List, FlowyInternalError>) {
-        if (!mounted) return;
-        final decoded = String.fromCharCodes(result.value);
-        // Parse the JSON response
-        try {
-          final parsed = _parseJsonList(decoded);
-          if (mounted) {
-            setState(() {
-              _featureFlags = parsed;
-              _featureFlagsLoading = false;
-              _featureFlagsError = null;
-            });
-          }
-        } catch (_) {
-          if (mounted) {
-            setState(() {
-              _featureFlags = [];
-              _featureFlagsLoading = false;
-              _featureFlagsError = null;
-            });
-          }
-        }
-      } else {
-        if (!mounted) return;
-        setState(() {
-          _featureFlagsLoading = false;
-          _featureFlagsError = (result as Failure<Uint8List, FlowyInternalError>).error.message;
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _featureFlagsLoading = false;
-        _featureFlagsError = e.toString();
-      });
-    }
-  }
-
-  List<Map<String, dynamic>> _parseJsonList(String json) {
-    final decoded = const JsonDecoder().convert(json);
-    if (decoded is List) {
-      return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
-    return [];
+    // FFI 层尚未实现 FeatureFlagEvent.ListFlags，返回空列表
+    if (!mounted) return;
+    setState(() {
+      _featureFlags = [];
+      _featureFlagsLoading = false;
+      _featureFlagsError = 'Feature Flags 暂不可用';
+    });
   }
 
   Future<void> _toggleFeatureFlag(String key, bool value) async {
-    final dispatch = Dispatch();
-    try {
-      await dispatch.asyncRequest('FeatureFlagEvent.SetFlag');
-      if (!mounted) return;
-      setState(() {
-        final idx = _featureFlags.indexWhere((f) => f['key'] == key);
-        if (idx >= 0) {
-          _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
-        }
-      });
-    } catch (_) {
-      // Silently fail - flag state remains unchanged
-    }
+    // FFI 层尚未实现 FeatureFlagEvent.SetFlag，仅更新本地状态
+    if (!mounted) return;
+    setState(() {
+      final idx = _featureFlags.indexWhere((f) => f['key'] == key);
+      if (idx >= 0) {
+        _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
+      }
+    });
   }
 
   Future<void> _loadDefaultEditMode() async {

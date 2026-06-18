@@ -13,6 +13,7 @@ import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/features/plugins/plugin_service.dart';
 import 'package:devnote/features/settings/crypto/crypto_service.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
+import 'package:devnote/features/sync/incremental_sync_service.dart';
 import 'package:devnote/features/sync/p2p/p2p_service.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/workflow/external_editor_sync.dart';
@@ -50,6 +51,9 @@ Future<void> setupDependencies() async {
   getIt.registerLazySingleton<E2ECryptoService>(() => E2ECryptoService());
   getIt.registerLazySingleton<P2PService>(() => P2PService());
   getIt.registerLazySingleton<SyncService>(() => SyncService());
+  getIt.registerLazySingleton<IncrementalSyncService>(
+    () => IncrementalSyncService(),
+  );
   getIt.registerLazySingleton<FileWatcherService>(() => FileWatcherService());
   getIt.registerLazySingleton<ExternalEditorSyncService>(
     () => ExternalEditorSyncService(),
@@ -69,6 +73,9 @@ void disposeAll() {
   // 先释放有 dispose/close 方法的高级服务
   if (getIt.isRegistered<SyncService>()) {
     getIt<SyncService>().dispose();
+  }
+  if (getIt.isRegistered<IncrementalSyncService>()) {
+    getIt<IncrementalSyncService>().dispose();
   }
   if (getIt.isRegistered<P2PService>()) {
     getIt<P2PService>().dispose();

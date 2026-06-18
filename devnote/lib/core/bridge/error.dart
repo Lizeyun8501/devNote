@@ -10,11 +10,7 @@
 ///
 /// ## 使用示例
 /// ```dart
-/// final result = await dispatch.asyncRequest('NoteEvent.CreateNote', payload: bytes);
-/// result.when(
-///   success: (data) => print('Success: $data'),
-///   failure: (error) => print('Error: $error'),
-/// );
+/// final note = await dispatch.createNote(title: 'xxx', content: 'xxx', folderId: 'xxx');
 /// ```
 
 /// FFI 通信标准状态码

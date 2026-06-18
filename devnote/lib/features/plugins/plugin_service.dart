@@ -1,13 +1,97 @@
 import 'dart:convert';
 
+/// 插件权限枚举
 enum PluginPermission {
-  readNotes,
-  writeNotes,
-  accessNetwork,
-  accessFileSystem,
-  accessUI,
-  accessCanvas,
-  accessDatabase,
+  readNotes,      // 读取笔记
+  writeNotes,     // 写入笔记
+  readFolders,    // 读取文件夹
+  writeFolders,   // 写入文件夹
+  networkAccess,  // 网络访问
+  fileSystem,     // 文件系统访问
+  executeCode,    // 执行代码
+  uiExtension,    // UI 扩展
+}
+
+/// 插件权限检查器 —— 强制权限控制
+/// 借鉴 Obsidian 的插件权限模型
+class PluginPermissionChecker {
+  final Map<String, Set<PluginPermission>> _pluginPermissions = {};
+
+  /// 注册插件的权限声明
+  void registerPermissions(String pluginId, Set<PluginPermission> permissions) {
+    _pluginPermissions[pluginId] = permissions;
+  }
+
+  /// 检查插件是否拥有指定权限
+  bool hasPermission(String pluginId, PluginPermission permission) {
+    final permissions = _pluginPermissions[pluginId];
+    if (permissions == null) return false;
+    return permissions.contains(permission);
+  }
+
+  /// 强制权限检查 —— 无权限时抛出异常
+  void enforcePermission(String pluginId, PluginPermission permission) {
+    if (!hasPermission(pluginId, permission)) {
+      throw StateError(
+        '插件 $pluginId 缺少权限: ${permission.name}. '
+        '请在插件设置中授予此权限。',
+      );
+    }
+  }
+
+  /// 获取插件的所有权限
+  Set<PluginPermission> getPermissions(String pluginId) =>
+      _pluginPermissions[pluginId] ?? {};
+
+  /// 撤销插件的所有权限
+  void revokePermissions(String pluginId) {
+    _pluginPermissions.remove(pluginId);
+  }
+}
+
+/// 插件沙箱 —— 隔离插件执行环境
+/// 借鉴 Obsidian 的插件隔离机制
+class PluginSandbox {
+  final PluginPermissionChecker _permissionChecker;
+  final Map<String, bool> _enabledPlugins = {};
+
+  PluginSandbox(this._permissionChecker);
+
+  /// 在沙箱中执行插件操作
+  /// 自动进行权限检查
+  Future<T> executeSandboxed<T>({
+    required String pluginId,
+    required PluginPermission requiredPermission,
+    required Future<T> Function() operation,
+  }) async {
+    // 1. 检查插件是否启用
+    if (!(_enabledPlugins[pluginId] ?? false)) {
+      throw StateError('插件 $pluginId 未启用');
+    }
+
+    // 2. 强制权限检查
+    _permissionChecker.enforcePermission(pluginId, requiredPermission);
+
+    // 3. 执行操作（所有异常都被捕获并包装）
+    try {
+      return await operation();
+    } catch (e) {
+      throw Exception('插件 $pluginId 执行失败: $e');
+    }
+  }
+
+  /// 启用插件
+  void enablePlugin(String pluginId) {
+    _enabledPlugins[pluginId] = true;
+  }
+
+  /// 禁用插件
+  void disablePlugin(String pluginId) {
+    _enabledPlugins[pluginId] = false;
+  }
+
+  /// 检查插件是否启用
+  bool isEnabled(String pluginId) => _enabledPlugins[pluginId] ?? false;
 }
 
 enum PluginLifecycleState {
@@ -150,6 +234,54 @@ class PluginService {
 
   final Map<String, PluginEntry> _plugins = {};
   final Map<String, List<int>> _wasmBytes = {};
+  final PluginPermissionChecker _permissionChecker = PluginPermissionChecker();
+  late final PluginSandbox _sandbox = PluginSandbox(_permissionChecker);
+
+  /// 根据插件方法名推断所需的权限
+  PluginPermission _inferPermissionFromMethod(String method) {
+    final lower = method.toLowerCase();
+    if (lower.contains('folder')) {
+      if (lower.contains('write') ||
+          lower.contains('create') ||
+          lower.contains('update') ||
+          lower.contains('delete') ||
+          lower.contains('remove')) {
+        return PluginPermission.writeFolders;
+      }
+      return PluginPermission.readFolders;
+    }
+    if (lower.contains('write') ||
+        lower.contains('create') ||
+        lower.contains('update') ||
+        lower.contains('delete') ||
+        lower.contains('remove') ||
+        lower.contains('save')) {
+      return PluginPermission.writeNotes;
+    }
+    if (lower.contains('network') ||
+        lower.contains('http') ||
+        lower.contains('fetch') ||
+        lower.contains('request') ||
+        lower.contains('sync')) {
+      return PluginPermission.networkAccess;
+    }
+    if (lower.contains('file')) {
+      return PluginPermission.fileSystem;
+    }
+    if (lower.contains('exec') ||
+        lower.contains('run') ||
+        lower.contains('eval')) {
+      return PluginPermission.executeCode;
+    }
+    if (lower.contains('ui') ||
+        lower.contains('render') ||
+        lower.contains('view') ||
+        lower.contains('draw') ||
+        lower.contains('canvas')) {
+      return PluginPermission.uiExtension;
+    }
+    return PluginPermission.readNotes;
+  }
 
   Future<void> loadPlugin(String id, List<int> wasmBytes, PluginManifest manifest) async {
     if (_plugins.containsKey(id)) {
@@ -171,12 +303,35 @@ class PluginService {
     _wasmBytes.remove(id);
   }
 
+  /// 安装插件 —— 加载插件并注册其声明的权限
+  Future<void> installPlugin(String id, List<int> wasmBytes, PluginManifest manifest) async {
+    await loadPlugin(id, wasmBytes, manifest);
+    // 解析插件清单的权限声明并注册到权限检查器
+    _permissionChecker.registerPermissions(id, manifest.permissions.toSet());
+    // 同步更新 PluginEntry 的已授权权限列表
+    final entry = _plugins[id];
+    if (entry != null) {
+      _plugins[id] = entry.copyWith(grantedPermissions: manifest.permissions);
+    }
+  }
+
+  /// 卸载插件 —— 撤销权限并移除插件
+  Future<void> uninstallPlugin(String id) async {
+    // 撤销插件的所有权限
+    _permissionChecker.revokePermissions(id);
+    // 在沙箱中禁用插件
+    _sandbox.disablePlugin(id);
+    await unloadPlugin(id);
+  }
+
   Future<void> enablePlugin(String id) async {
     final entry = _plugins[id];
     if (entry == null) {
       throw Exception('Plugin not found: $id');
     }
     _plugins[id] = entry.copyWith(state: PluginLifecycleState.enabled);
+    // 同步沙箱的启用状态
+    _sandbox.enablePlugin(id);
   }
 
   Future<void> disablePlugin(String id) async {
@@ -185,6 +340,8 @@ class PluginService {
       throw Exception('Plugin not found: $id');
     }
     _plugins[id] = entry.copyWith(state: PluginLifecycleState.disabled);
+    // 同步沙箱的禁用状态
+    _sandbox.disablePlugin(id);
   }
 
   Future<PluginMethodResult> executePlugin(
@@ -202,9 +359,21 @@ class PluginService {
         error: 'Plugin $id is not enabled',
       );
     }
-    final payload = jsonEncode({'method': method, 'params': params});
-    final _ = payload;
-    return PluginMethodResult(success: true, data: params);
+    // 根据方法名推断所需权限，并在沙箱中执行
+    final requiredPermission = _inferPermissionFromMethod(method);
+    try {
+      return await _sandbox.executeSandboxed(
+        pluginId: id,
+        requiredPermission: requiredPermission,
+        operation: () async {
+          final payload = jsonEncode({'method': method, 'params': params});
+          final _ = payload;
+          return PluginMethodResult(success: true, data: params);
+        },
+      );
+    } catch (e) {
+      return PluginMethodResult(success: false, error: e.toString());
+    }
   }
 
   Future<void> grantPermission(String id, PluginPermission permission) async {
@@ -216,6 +385,9 @@ class PluginService {
       _plugins[id] = entry.copyWith(
         grantedPermissions: [...entry.grantedPermissions, permission],
       );
+      // 同步权限到权限检查器
+      final current = _permissionChecker.getPermissions(id);
+      _permissionChecker.registerPermissions(id, {...current, permission});
     }
   }
 
@@ -228,12 +400,17 @@ class PluginService {
       grantedPermissions:
           entry.grantedPermissions.where((p) => p != permission).toList(),
     );
+    // 同步权限到权限检查器
+    final current = _permissionChecker.getPermissions(id);
+    _permissionChecker.registerPermissions(id, current..remove(permission));
   }
 
   bool checkPermission(String id, PluginPermission permission) {
     final entry = _plugins[id];
     if (entry == null) return false;
-    return entry.grantedPermissions.contains(permission);
+    // 以权限检查器为权威来源，同时兼容旧的 grantedPermissions 字段
+    return _permissionChecker.hasPermission(id, permission) ||
+        entry.grantedPermissions.contains(permission);
   }
 
   PluginEntry? getPlugin(String id) => _plugins[id];
@@ -274,7 +451,7 @@ class PluginService {
           version: '2.0.1',
           description: '经典 Solarized 配色方案，为编辑器与代码块提供护眼主题。',
           author: 'Ethan Schoonover',
-          permissions: [PluginPermission.accessUI],
+          permissions: [PluginPermission.uiExtension],
           apiVersion: '1.0.0',
         ),
         category: 'theme',
@@ -290,8 +467,9 @@ class PluginService {
           author: 'DevNote Labs',
           permissions: [
             PluginPermission.readNotes,
-            PluginPermission.accessUI,
-            PluginPermission.accessFileSystem,
+            PluginPermission.uiExtension,
+            PluginPermission.fileSystem,
+            PluginPermission.executeCode,
           ],
           apiVersion: '1.0.0',
         ),
@@ -309,8 +487,8 @@ class PluginService {
           permissions: [
             PluginPermission.readNotes,
             PluginPermission.writeNotes,
-            PluginPermission.accessNetwork,
-            PluginPermission.accessFileSystem,
+            PluginPermission.networkAccess,
+            PluginPermission.fileSystem,
           ],
           apiVersion: '1.0.0',
         ),
@@ -327,7 +505,7 @@ class PluginService {
           author: 'Export Studio',
           permissions: [
             PluginPermission.readNotes,
-            PluginPermission.accessFileSystem,
+            PluginPermission.fileSystem,
           ],
           apiVersion: '1.0.0',
         ),
@@ -344,8 +522,8 @@ class PluginService {
           author: 'Visualization Community',
           permissions: [
             PluginPermission.readNotes,
-            PluginPermission.accessUI,
-            PluginPermission.accessCanvas,
+            PluginPermission.uiExtension,
+            PluginPermission.executeCode,
           ],
           apiVersion: '1.0.0',
         ),

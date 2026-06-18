@@ -45,7 +45,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
     Emitter<PluginsState> emit,
   ) async {
     try {
-      await _pluginService.loadPlugin(
+      await _pluginService.installPlugin(
         event.id,
         event.wasmBytes,
         event.manifest,
@@ -69,7 +69,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
     Emitter<PluginsState> emit,
   ) async {
     try {
-      await _pluginService.unloadPlugin(event.id);
+      await _pluginService.uninstallPlugin(event.id);
       final plugins = _pluginService.listPlugins();
       final currentState = state;
       final marketplacePlugins = currentState is PluginsLoaded

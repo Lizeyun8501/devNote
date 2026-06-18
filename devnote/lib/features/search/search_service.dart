@@ -1,7 +1,4 @@
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:devnote/core/bridge/dispatch.dart';
-import 'package:devnote/core/bridge/error.dart';
 import 'package:devnote/core/di/injection.dart';
 
 class HighlightModel {
@@ -52,47 +49,20 @@ class SearchResultModel {
   }
 }
 
-List<SearchResultModel> _parseSearchResults(FlowyResult<Uint8List, FlowyInternalError> result) {
-  if (result is Success<Uint8List, FlowyInternalError>) {
-    final json = jsonDecode(utf8.decode(result.value));
-    if (json is Map<String, dynamic> && json.containsKey('data')) {
-      final dataStr = json['data'];
-      if (dataStr is String) {
-        final items = jsonDecode(dataStr) as List<dynamic>;
-        return items
-            .map((item) => SearchResultModel.fromJson(item as Map<String, dynamic>))
-            .toList();
-      }
-    }
-    if (json is List) {
-      return json
-          .map((item) => SearchResultModel.fromJson(item as Map<String, dynamic>))
-          .toList();
-    }
-    return <SearchResultModel>[];
-  }
-  if (result is Failure<Uint8List, FlowyInternalError>) {
-    throw Exception(result.error.message);
-  }
-  throw Exception('Unknown result type');
-}
-
 class SearchService {
   final Dispatch _dispatch = getIt<Dispatch>();
   final List<String> _searchHistory = [];
   static const int _maxHistory = 20;
 
   Future<List<SearchResultModel>> search(String query, {int limit = 20, int offset = 0}) async {
-    final payload = jsonEncode({
-      'query': query,
-      'limit': limit,
-      'offset': offset,
-    });
-    final result = await _dispatch.asyncRequest(
-      'SearchEvent.SearchNotes',
-      payload: utf8.encode(payload),
+    final results = await _dispatch.searchNotes(
+      query: query,
+      limit: limit,
+      offset: offset,
     );
-    return _parseSearchResults(result);
+    return results
+        .map((item) => SearchResultModel.fromJson(item))
+        .toList();
   }
 
   Future<List<SearchResultModel>> searchWithFilter({
@@ -104,20 +74,53 @@ class SearchService {
     int limit = 20,
     int offset = 0,
   }) async {
-    final payload = jsonEncode({
-      'query': query,
-      'limit': limit,
-      'offset': offset,
-      'folder_id': folderId,
-      'tags': tags,
-      'start_date': startDate?.toUtc().toIso8601String(),
-      'end_date': endDate?.toUtc().toIso8601String(),
-    });
-    final result = await _dispatch.asyncRequest(
-      'SearchEvent.SearchContent',
-      payload: utf8.encode(payload),
+    final results = await _dispatch.searchNotes(
+      query: query,
+      limit: limit,
+      offset: offset,
     );
-    return _parseSearchResults(result);
+    // FFI 层尚未支持服务端过滤，在 Dart 侧应用额外的过滤条件（best-effort）：
+    // 若返回结果不包含对应字段则保留该条目。
+    final filtered = results.where((item) {
+      // 文件夹过滤
+      if (folderId != null) {
+        final itemFolderId = item['folder_id'];
+        if (itemFolderId != null && itemFolderId != folderId) {
+          return false;
+        }
+      }
+      // 标签过滤（存在交集即保留）
+      if (tags.isNotEmpty) {
+        final itemTags = item['tags'];
+        if (itemTags is List) {
+          final itemTagsSet = itemTags.map((e) => e.toString()).toSet();
+          if (!tags.any((t) => itemTagsSet.contains(t))) {
+            return false;
+          }
+        }
+      }
+      // 日期过滤（优先 updated_at，其次 created_at）
+      if (startDate != null || endDate != null) {
+        final dateField = item['updated_at'] ?? item['created_at'];
+        if (dateField is String) {
+          try {
+            final dt = DateTime.parse(dateField);
+            if (startDate != null && dt.isBefore(startDate)) {
+              return false;
+            }
+            if (endDate != null && dt.isAfter(endDate)) {
+              return false;
+            }
+          } catch (_) {
+            // 日期解析失败则保留该条目
+          }
+        }
+      }
+      return true;
+    }).toList();
+    return filtered
+        .map((item) => SearchResultModel.fromJson(item))
+        .toList();
   }
 
   Future<List<String>> getSearchHistory() async {

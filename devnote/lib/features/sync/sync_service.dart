@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
+import 'package:devnote/features/sync/incremental_sync_service.dart';
 import 'crypto/e2e_crypto_service.dart';
 
 enum SyncServiceStatus {
@@ -64,6 +65,7 @@ class SyncService {
   static const String _keyPendingChanges = 'sync_pending_changes';
 
   final E2ECryptoService _cryptoService = getIt<E2ECryptoService>();
+  final IncrementalSyncService _incrementalSync = getIt<IncrementalSyncService>();
 
   SyncServiceState _state = const SyncServiceState(
     status: SyncServiceStatus.idle,
@@ -83,6 +85,7 @@ class SyncService {
 
   Future<void> initialize() async {
     await _cryptoService.initialize();
+    await _incrementalSync.initialize();
 
     final prefs = await SharedPreferences.getInstance();
     final lastSyncMs = prefs.getInt(_keyLastSyncTime);
@@ -227,6 +230,104 @@ class SyncService {
       pendingChanges: _state.pendingChanges + 1,
     );
   }
+
+  /// 增量推送 —— 使用 RdiffService 仅传输差异部分，支持断点续传
+  ///
+  /// 适用于大文档的小范围修改场景，可大幅减少网络带宽消耗。
+  /// 网络中断后可调用 [resumeIncrementalPush] 从断点恢复。
+  Future<IncrementalSyncResult> pushIncremental(
+    Map<String, dynamic> data, {
+    bool encrypt = true,
+  }) async {
+    _state = _state.copyWith(status: SyncServiceStatus.syncing);
+    _notifyListeners();
+
+    final payloadBytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+    final result = await _incrementalSync.pushIncremental(
+      payloadBytes,
+      encrypt: encrypt,
+    );
+
+    if (result.success) {
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      await prefs.setInt(_keyLastSyncTime, now.millisecondsSinceEpoch);
+      await prefs.setInt(_keyPendingChanges, 0);
+
+      _state = _state.copyWith(
+        status: SyncServiceStatus.synced,
+        lastSyncedAt: now,
+        pendingChanges: 0,
+      );
+    } else {
+      _state = _state.copyWith(
+        status: SyncServiceStatus.error,
+        lastError: result.error ?? '增量推送失败',
+      );
+    }
+
+    _notifyListeners();
+    return result;
+  }
+
+  /// 恢复未完成的增量推送（断点续传）
+  ///
+  /// 若有未完成的同步会话，重新传入最新数据继续上传。
+  /// 已上传的块会被跳过，仅传输剩余部分。
+  Future<IncrementalSyncResult> resumeIncrementalPush(
+    Map<String, dynamic> data, {
+    bool encrypt = true,
+  }) async {
+    if (!_incrementalSync.hasResumableSession) {
+      return const IncrementalSyncResult(
+        success: false,
+        error: '无可恢复的同步会话',
+      );
+    }
+
+    _state = _state.copyWith(status: SyncServiceStatus.syncing);
+    _notifyListeners();
+
+    final payloadBytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+    final result = await _incrementalSync.pushIncremental(
+      payloadBytes,
+      encrypt: encrypt,
+    );
+
+    if (result.success) {
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      await prefs.setInt(_keyLastSyncTime, now.millisecondsSinceEpoch);
+      await prefs.setInt(_keyPendingChanges, 0);
+
+      _state = _state.copyWith(
+        status: SyncServiceStatus.synced,
+        lastSyncedAt: now,
+        pendingChanges: 0,
+      );
+    } else {
+      _state = _state.copyWith(
+        status: SyncServiceStatus.error,
+        lastError: result.error ?? '断点续传失败',
+      );
+    }
+
+    _notifyListeners();
+    return result;
+  }
+
+  /// 放弃当前增量同步会话
+  Future<void> abortIncrementalSession() async {
+    await _incrementalSync.abortSession();
+    _state = _state.copyWith(status: SyncServiceStatus.idle);
+    _notifyListeners();
+  }
+
+  /// 获取增量同步进度（0.0-1.0）
+  double get incrementalSyncProgress => _incrementalSync.currentProgress;
+
+  /// 是否有可恢复的增量同步会话
+  bool get hasResumableSession => _incrementalSync.hasResumableSession;
 
   /// 获取配置的服务器地址，优先从 SharedPreferences 读取，否则使用默认值
   Future<String> _getServerUrl() async {

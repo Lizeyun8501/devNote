@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum CryptoStrength {
@@ -49,14 +50,17 @@ class CryptoService {
   static const String _keySalt = 'crypto_salt';
   static const String _keyHash = 'crypto_hash';
 
+  /// PBKDF2-HMAC-SHA256 迭代次数（OWASP 建议值）
+  static const int _pbkdf2Iterations = 100000;
+
   Uint8List? _currentKey;
 
   CryptoState _state = const CryptoState(
     isEnabled: false,
     isUnlocked: false,
     strength: CryptoStrength.standard,
-    algorithm: 'XChaCha20-Poly1305',
-    keyDerivation: 'Argon2id',
+    algorithm: 'AES-256-GCM',
+    keyDerivation: 'PBKDF2-SHA256',
   );
 
   CryptoState get state => _state;
@@ -173,30 +177,31 @@ class CryptoService {
   Uint8List? encryptData(Uint8List plaintext) {
     if (_currentKey == null) return null;
 
-    final iterations = _state.strength == CryptoStrength.highStrength ? 6 : 3;
-    final key = _deriveKeyFromKey(_currentKey!, iterations);
-
     final nonce = _generateNonce();
-    final ciphertext = _xorEncrypt(plaintext, key, nonce);
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(true, AEADParameters(KeyParameter(_currentKey!), 128, nonce, null));
+    final ciphertextWithTag = cipher.process(plaintext);
 
     final result = BytesBuilder();
     result.add(nonce);
-    result.add(ciphertext);
+    result.add(ciphertextWithTag);
 
     return result.toBytes();
   }
 
   Uint8List? decryptData(Uint8List encryptedData) {
     if (_currentKey == null) return null;
-    if (encryptedData.length < 24) return null;
+    if (encryptedData.length < 12 + 16) return null;
 
-    final nonce = encryptedData.sublist(0, 24);
-    final ciphertext = encryptedData.sublist(24);
-
-    final iterations = _state.strength == CryptoStrength.highStrength ? 6 : 3;
-    final key = _deriveKeyFromKey(_currentKey!, iterations);
-
-    return _xorEncrypt(ciphertext, key, nonce);
+    try {
+      final nonce = encryptedData.sublist(0, 12);
+      final ciphertextWithTag = encryptedData.sublist(12);
+      final cipher = GCMBlockCipher(AESEngine())
+        ..init(false, AEADParameters(KeyParameter(_currentKey!), 128, nonce, null));
+      return cipher.process(ciphertextWithTag);
+    } catch (_) {
+      return null;
+    }
   }
 
   Uint8List _generateSalt() {
@@ -212,51 +217,24 @@ class CryptoService {
   }
 
   Uint8List _generateNonce() {
-    // 修复：同 _generateSalt，原代码使用时间戳取模生成 nonce，完全可预测。
-    // 改为使用 Random.secure() 生成密码学安全的随机 nonce
+    // AES-256-GCM 标准 nonce 长度为 12 字节
+    // 使用 Random.secure() 生成密码学安全的随机 nonce
     final random = Random.secure();
-    final nonce = Uint8List(24);
-    for (var i = 0; i < 24; i++) {
+    final nonce = Uint8List(12);
+    for (var i = 0; i < 12; i++) {
       nonce[i] = random.nextInt(256);
     }
     return nonce;
   }
 
+  /// 密钥派生函数 —— PBKDF2-HMAC-SHA256
+  ///
+  /// 使用 pointycastle 标准 PBKDF2 实现，迭代 100,000 次，
+  /// 派生 256 位密钥用于 AES-256-GCM。
   Uint8List _deriveKey(String password, Uint8List salt) {
-    final key = Uint8List(32);
-    final passwordBytes = utf8.encode(password);
-
-    for (var i = 0; i < 32; i++) {
-      key[i] = i < passwordBytes.length
-          ? (passwordBytes[i] ^ salt[i % salt.length])
-          : salt[i % salt.length];
-    }
-
-    for (var round = 0; round < 10; round++) {
-      for (var i = 0; i < 32; i++) {
-        key[i] = ((key[i] * 31 + salt[i % salt.length] + round) % 256);
-      }
-    }
-
-    return key;
-  }
-
-  Uint8List _deriveKeyFromKey(Uint8List baseKey, int iterations) {
-    final key = Uint8List.fromList(baseKey);
-    for (var round = 0; round < iterations; round++) {
-      for (var i = 0; i < key.length; i++) {
-        key[i] = ((key[i] * 17 + round + i) % 256);
-      }
-    }
-    return key;
-  }
-
-  Uint8List _xorEncrypt(Uint8List data, Uint8List key, Uint8List nonce) {
-    final result = Uint8List(data.length);
-    for (var i = 0; i < data.length; i++) {
-      result[i] = data[i] ^ key[i % key.length] ^ nonce[i % nonce.length];
-    }
-    return result;
+    final derivator = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
+      ..init(Pbkdf2Parameters(salt, _pbkdf2Iterations, 32));
+    return derivator.process(Uint8List.fromList(utf8.encode(password)));
   }
 
   bool _constantTimeEquals(Uint8List a, Uint8List b) {

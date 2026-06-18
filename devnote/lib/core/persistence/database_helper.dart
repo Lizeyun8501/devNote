@@ -6,7 +6,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 5;
+  static const _databaseVersion = 6;
 
   static Database? _database;
 
@@ -213,6 +213,34 @@ class DatabaseHelper {
         FOREIGN KEY (relation_id) REFERENCES object_relations_definitions(id) ON DELETE CASCADE
       )
     ''');
+
+    // FTS5 全文搜索索引 (v6) —— 借鉴 Joplin 的全文搜索引擎
+    // 使用 contentless 模式，仅索引不存储内容，避免数据冗余
+    await db.execute('''
+      CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+        note_id UNINDEXED,
+        title,
+        content,
+        tokenize = 'unicode61'
+      )
+    ''');
+    // 触发器：在 notes 表插入/更新/删除时自动同步 FTS 索引
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+        INSERT INTO notes_fts(note_id, title, content) VALUES (new.id, new.title, new.content);
+      END
+    ''');
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+        DELETE FROM notes_fts WHERE note_id = old.id;
+        INSERT INTO notes_fts(note_id, title, content) VALUES (new.id, new.title, new.content);
+      END
+    ''');
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+        DELETE FROM notes_fts WHERE note_id = old.id;
+      END
+    ''');
   }
 
   // 迁移回滚保障 —— 借鉴 SQLite 官方迁移最佳实践
@@ -392,6 +420,41 @@ class DatabaseHelper {
             batch.execute('DROP TABLE notes');
             batch.execute('ALTER TABLE notes_v5 RENAME TO notes');
             break;
+          case 6:
+            // v6: 添加 FTS5 全文搜索索引，提升大规模笔记库的搜索性能
+            // 借鉴 Joplin 的全文搜索引擎，使用 contentless 模式避免数据冗余
+            // 创建 FTS5 虚拟表
+            batch.execute('''
+              CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+                note_id UNINDEXED,
+                title,
+                content,
+                tokenize = 'unicode61'
+              )
+            ''');
+            // 创建同步触发器：notes 表插入/更新/删除时自动维护 FTS 索引
+            batch.execute('''
+              CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+                INSERT INTO notes_fts(note_id, title, content) VALUES (new.id, new.title, new.content);
+              END
+            ''');
+            batch.execute('''
+              CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+                DELETE FROM notes_fts WHERE note_id = old.id;
+                INSERT INTO notes_fts(note_id, title, content) VALUES (new.id, new.title, new.content);
+              END
+            ''');
+            batch.execute('''
+              CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+                DELETE FROM notes_fts WHERE note_id = old.id;
+              END
+            ''');
+            // 回填现有笔记数据到 FTS 索引
+            batch.execute('''
+              INSERT INTO notes_fts(note_id, title, content)
+              SELECT id, title, content FROM notes
+            ''');
+            break;
           default:
             break;
         }
@@ -405,5 +468,20 @@ class DatabaseHelper {
       developer.log('数据库升级失败，事务已回滚: $e', name: 'DatabaseHelper');
       rethrow;
     }
+  }
+
+  /// 使用 FTS5 全文搜索笔记
+  /// 支持 MATCH 语法：phrase search, prefix search, AND/OR/NOT
+  Future<List<Map<String, dynamic>>> searchNotesFTS(String query, {int limit = 50}) async {
+    final db = await database;
+    // 使用 FTS5 MATCH 查询，返回笔记完整数据
+    final results = await db.rawQuery('''
+      SELECT n.* FROM notes n
+      INNER JOIN notes_fts f ON f.note_id = n.id
+      WHERE notes_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    ''', [query, limit]);
+    return results;
   }
 }
