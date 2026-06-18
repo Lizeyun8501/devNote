@@ -1,19 +1,28 @@
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/features/ai/semantic_search_service.dart';
 import 'package:devnote/features/search/bloc/search_event.dart';
 import 'package:devnote/features/search/bloc/search_state.dart';
 import 'package:devnote/features/search/search_service.dart';
 
 class SearchBloc extends Bloc<SearchEvent, SearchState> {
   final SearchService _searchService;
+  final SemanticSearchService _semanticSearchService;
   Timer? _debounceTimer;
   static const _debounceDuration = Duration(milliseconds: 300);
 
-  SearchBloc(this._searchService) : super(const SearchInitial()) {
+  /// 语义搜索开关状态（内存态，由 UI 切换）
+  bool _semanticEnabled = false;
+
+  SearchBloc(this._searchService)
+      : _semanticSearchService = getIt<SemanticSearchService>(),
+        super(const SearchInitial()) {
     on<SearchQueryChanged>(_onQueryChanged);
     on<SearchSubmitted>(_onSubmitted);
     on<SearchFilterChanged>(_onFilterChanged);
     on<SearchHistoryRequested>(_onHistoryRequested);
+    on<SearchSemanticToggled>(_onSemanticToggled);
   }
 
   Future<void> _onQueryChanged(SearchQueryChanged event, Emitter<SearchState> emit) async {
@@ -34,14 +43,34 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     }
     emit(const SearchLoading());
     try {
-      final results = await _searchService.search(event.query);
       final history = await _searchService.getSearchHistory();
       await _searchService.addToSearchHistory(event.query);
-      emit(SearchResults(
-        query: event.query,
-        results: results,
-        searchHistory: history,
-      ));
+
+      // 当语义搜索开启且向量索引就绪时，使用 Hybrid Retrieval
+      // 否则回退到原有 FTS5 关键词检索，不破坏现有搜索功能
+      if (_semanticEnabled && await _semanticSearchService.isSemanticReady()) {
+        final semanticResults = await _semanticSearchService.search(
+          query: event.query,
+          hybrid: true,
+        );
+        final results = semanticResults
+            .map((r) => r.toSearchResultModel())
+            .toList();
+        emit(SearchResults(
+          query: event.query,
+          results: results,
+          searchHistory: history,
+          semanticEnabled: true,
+        ));
+      } else {
+        final results = await _searchService.search(event.query);
+        emit(SearchResults(
+          query: event.query,
+          results: results,
+          searchHistory: history,
+          semanticEnabled: _semanticEnabled,
+        ));
+      }
     } catch (e) {
       emit(SearchError(e.toString()));
     }
@@ -73,6 +102,7 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
         tags: event.tags,
         startDate: event.startDate,
         endDate: event.endDate,
+        semanticEnabled: _semanticEnabled,
       ));
     } catch (e) {
       emit(SearchError(e.toString()));
@@ -90,10 +120,28 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
           query: '',
           results: const [],
           searchHistory: history,
+          semanticEnabled: _semanticEnabled,
         ));
       }
     } catch (e) {
       emit(SearchError(e.toString()));
+    }
+  }
+
+  /// 语义搜索开关切换
+  ///
+  /// 切换后若当前已有查询，自动重新搜索以应用新模式。
+  Future<void> _onSemanticToggled(
+    SearchSemanticToggled event,
+    Emitter<SearchState> emit,
+  ) async {
+    _semanticEnabled = event.enabled;
+    final currentState = state;
+    if (currentState is SearchResults && currentState.query.isNotEmpty) {
+      // 重新搜索以应用新的检索模式
+      await _onSubmitted(SearchSubmitted(currentState.query), emit);
+    } else if (currentState is SearchResults) {
+      emit(currentState.copyWith(semanticEnabled: _semanticEnabled));
     }
   }
 

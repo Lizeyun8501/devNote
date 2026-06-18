@@ -45,3 +45,16 @@ class SearchFilterChanged extends SearchEvent {
 class SearchHistoryRequested extends SearchEvent {
   const SearchHistoryRequested();
 }
+
+/// 语义搜索开关切换
+///
+/// 开启后使用 Hybrid Retrieval（BM25 + 向量 + RRF 融合），
+/// 关闭后回退到纯 FTS5 关键词检索，不破坏现有搜索功能。
+class SearchSemanticToggled extends SearchEvent {
+  final bool enabled;
+
+  const SearchSemanticToggled(this.enabled);
+
+  @override
+  List<Object?> get props => [enabled];
+}

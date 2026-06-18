@@ -259,7 +259,8 @@ impl IpfsClient {
     pub fn compute_cid(data: &[u8]) -> String {
         let hash = Sha256::digest(data);
         // CIDv1 with raw codec and sha2-256
-        let mh = multihash::Multihash::wrap(0x12, &hash).unwrap();
+        let mh = multihash::Multihash::wrap(0x12, &hash)
+            .expect("Multihash::wrap for sha2-256 (32 bytes) never fails");
         let cid = Cid::new_v1(0x55, mh); // 0x55 = raw codec
         cid.to_string()
     }

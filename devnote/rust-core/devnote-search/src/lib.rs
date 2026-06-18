@@ -178,7 +178,7 @@ impl SqliteSearchEngine {
     }
 
     fn init_schema(&self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         conn.execute_batch(FTS_SCHEMA)?;
         Ok(())
     }
@@ -192,7 +192,7 @@ impl SqliteSearchEngine {
         tags: &[String],
         updated_at: &DateTime<Utc>,
     ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let note_id_str = note_id.to_string();
         let folder_id_str = folder_id.to_string();
         let tags_str = tags.join(",");
@@ -265,7 +265,7 @@ impl SqliteSearchEngine {
 
 impl SearchEngine for SqliteSearchEngine {
     fn index_note(&mut self, note_id: &Uuid, title: &str, content: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let note_id_str = note_id.to_string();
 
         conn.execute(
@@ -282,7 +282,7 @@ impl SearchEngine for SqliteSearchEngine {
     }
 
     fn remove_note(&mut self, note_id: &Uuid) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let note_id_str = note_id.to_string();
         conn.execute(
             "DELETE FROM notes_search_content WHERE note_id = ?1",
@@ -293,7 +293,7 @@ impl SearchEngine for SqliteSearchEngine {
 
     #[instrument]
     fn search(&self, query: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let fts_query = format!("{{title content}} : {}", query);
         let sql = format!(
             "SELECT c.note_id, c.title, snippet(notes_fts, 1, '\\x01', '\\x02', '...', 32) as snippet, rank as score \
@@ -322,7 +322,7 @@ impl SearchEngine for SqliteSearchEngine {
 
     #[instrument]
     fn search_with_filter(&self, query: &str, filter: &SearchFilter, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let fts_query = format!("{{title content}} : {}", query);
 
         let mut where_clauses = Vec::new();
@@ -393,7 +393,7 @@ impl SearchEngine for SqliteSearchEngine {
     }
 
     fn rebuild_index(&mut self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         conn.execute_batch("INSERT INTO notes_fts(notes_fts) VALUES ('rebuild');")?;
         Ok(())
     }
@@ -424,6 +424,496 @@ impl SqliteSearchEngine {
         }
 
         self.search_with_filter(&text, &filter, limit, offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== parse_filter 测试 ====================
+
+    #[test]
+    fn test_parse_filter_single_tag() {
+        // 单字符标签过滤器: t:work
+        let (filters, text) = parse_filter("t:work");
+        assert_eq!(filters, vec![("t".to_string(), "work".to_string())]);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn test_parse_filter_quoted_value() {
+        // 带引号的标签值: t:"work project"
+        let (filters, text) = parse_filter("t:\"work project\"");
+        assert_eq!(filters, vec![("t".to_string(), "work project".to_string())]);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn test_parse_filter_single_quoted_value() {
+        // 单引号标签值: t:'work project'
+        let (filters, text) = parse_filter("t:'work project'");
+        assert_eq!(filters, vec![("t".to_string(), "work project".to_string())]);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn test_parse_filter_text_only() {
+        // 纯文本搜索，无过滤器
+        let (filters, text) = parse_filter("hello world");
+        assert!(filters.is_empty());
+        assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn test_parse_filter_tag_and_text() {
+        // 标签过滤器 + 文本: t:work hello
+        let (filters, text) = parse_filter("t:work hello");
+        assert_eq!(filters, vec![("t".to_string(), "work".to_string())]);
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn test_parse_filter_folder_and_text() {
+        // 文件夹过滤器 + 文本: f:folder-id search
+        let (filters, text) = parse_filter("f:folder-id search");
+        assert_eq!(filters, vec![("f".to_string(), "folder-id".to_string())]);
+        assert_eq!(text, "search");
+    }
+
+    #[test]
+    fn test_parse_filter_empty_input() {
+        let (filters, text) = parse_filter("");
+        assert!(filters.is_empty());
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn test_parse_filter_multiple_tags() {
+        // 多个标签过滤器: t:work t:project
+        let (filters, text) = parse_filter("t:work t:project");
+        assert_eq!(filters.len(), 2);
+        assert_eq!(filters[0], ("t".to_string(), "work".to_string()));
+        assert_eq!(filters[1], ("t".to_string(), "project".to_string()));
+        assert_eq!(text, "");
+    }
+
+    // ==================== SqliteSearchEngine 初始化测试 ====================
+
+    #[test]
+    fn test_in_memory_initialization() {
+        let engine = SqliteSearchEngine::in_memory();
+        assert!(engine.is_ok());
+    }
+
+    // ==================== 索引测试 ====================
+
+    #[test]
+    fn test_index_note_basic() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        let result = engine.index_note(&note_id, "Rust Programming", "Rust is a systems programming language");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_index_note_with_meta() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        let folder_id = Uuid::new_v4();
+        let tags = vec!["rust".to_string(), "programming".to_string()];
+        let updated_at = Utc::now();
+
+        let result = engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &tags,
+            &updated_at,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_index_note_replaces_existing() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+
+        // 首次索引
+        engine.index_note(&note_id, "First Title", "First content").unwrap();
+        // 重新索引（更新）
+        engine.index_note(&note_id, "Updated Title", "Updated content").unwrap();
+
+        // 验证不会产生重复条目（通过搜索结果数量）
+        let results = engine.search("Updated", 10, 0).unwrap();
+        let matching: Vec<_> = results.iter().filter(|r| r.note_id == note_id).collect();
+        assert_eq!(matching.len(), 1);
+    }
+
+    #[test]
+    fn test_index_multiple_notes() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        engine.index_note(&Uuid::new_v4(), "Rust Basics", "Learn Rust fundamentals").unwrap();
+        engine.index_note(&Uuid::new_v4(), "Python Guide", "Python is a scripting language").unwrap();
+        engine.index_note(&Uuid::new_v4(), "Rust Advanced", "Advanced Rust patterns").unwrap();
+    }
+
+    // ==================== 搜索测试 ====================
+
+    #[test]
+    fn test_search_returns_indexed_note() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        engine.index_note(&note_id, "Rust Programming", "Rust is a systems programming language").unwrap();
+
+        let results = engine.search("rust", 10, 0);
+        // 搜索应成功执行（不返回错误）
+        assert!(results.is_ok());
+        let results = results.unwrap();
+        // 应找到包含 "rust" 的笔记
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].note_id, note_id);
+        assert_eq!(results[0].title, "Rust Programming");
+    }
+
+    #[test]
+    fn test_search_no_results() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        engine.index_note(&Uuid::new_v4(), "Rust Programming", "Rust is a systems programming language").unwrap();
+
+        let results = engine.search("nonexistentterm", 10, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_multiple_results() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        engine.index_note(&id1, "Rust Basics", "Learn Rust fundamentals").unwrap();
+        engine.index_note(&id2, "Rust Advanced", "Advanced Rust patterns").unwrap();
+
+        let results = engine.search("rust", 10, 0).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_with_limit() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        for i in 0..5 {
+            engine.index_note(&Uuid::new_v4(), &format!("Rust Note {}", i), "Rust content").unwrap();
+        }
+
+        let results = engine.search("rust", 2, 0).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_with_offset() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        for i in 0..5 {
+            engine.index_note(&Uuid::new_v4(), &format!("Rust Note {}", i), "Rust content").unwrap();
+        }
+
+        let results = engine.search("rust", 10, 2).unwrap();
+        // 偏移 2 后应返回 3 条结果
+        assert_eq!(results.len(), 3);
+    }
+
+    // ==================== 删除测试 ====================
+
+    #[test]
+    fn test_remove_note() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        engine.index_note(&note_id, "Rust Programming", "Rust is a systems programming language").unwrap();
+
+        // 删除前能搜索到
+        let results = engine.search("rust", 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // 删除笔记
+        engine.remove_note(&note_id).unwrap();
+
+        // 删除后搜索不到
+        let results = engine.search("rust", 10, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_note() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        // 删除不存在的笔记不应报错
+        let result = engine.remove_note(&Uuid::new_v4());
+        assert!(result.is_ok());
+    }
+
+    // ==================== 重建索引测试 ====================
+
+    #[test]
+    fn test_rebuild_index() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        engine.index_note(&Uuid::new_v4(), "Rust Programming", "Rust is a systems programming language").unwrap();
+
+        // 重建索引不应报错
+        let result = engine.rebuild_index();
+        assert!(result.is_ok());
+    }
+
+    // ==================== 带过滤器的搜索测试 ====================
+
+    #[test]
+    fn test_search_with_folder_filter() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &[],
+            &updated_at,
+        ).unwrap();
+
+        let filter = SearchFilter {
+            folder_id: Some(folder_id),
+            tags: vec![],
+            date_range: None,
+        };
+
+        let results = engine.search_with_filter("rust", &filter, 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].note_id, note_id);
+    }
+
+    #[test]
+    fn test_search_with_folder_filter_no_match() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let other_folder = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &[],
+            &updated_at,
+        ).unwrap();
+
+        // 使用不同的文件夹 ID 过滤，应无结果
+        let filter = SearchFilter {
+            folder_id: Some(other_folder),
+            tags: vec![],
+            date_range: None,
+        };
+
+        let results = engine.search_with_filter("rust", &filter, 10, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_tag_filter() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &["rust".to_string(), "systems".to_string()],
+            &updated_at,
+        ).unwrap();
+
+        let filter = SearchFilter {
+            folder_id: None,
+            tags: vec!["rust".to_string()],
+            date_range: None,
+        };
+
+        let results = engine.search_with_filter("rust", &filter, 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_with_tag_filter_no_match() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &["rust".to_string()],
+            &updated_at,
+        ).unwrap();
+
+        // 搜索不存在的标签，应无结果
+        let filter = SearchFilter {
+            folder_id: None,
+            tags: vec!["python".to_string()],
+            date_range: None,
+        };
+
+        let results = engine.search_with_filter("rust", &filter, 10, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_date_range_filter() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &[],
+            &updated_at,
+        ).unwrap();
+
+        // 日期范围包含更新时间
+        let filter = SearchFilter {
+            folder_id: None,
+            tags: vec![],
+            date_range: Some(DateRange {
+                start: updated_at - chrono::Duration::hours(1),
+                end: updated_at + chrono::Duration::hours(1),
+            }),
+        };
+
+        let results = engine.search_with_filter("rust", &filter, 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_with_date_range_no_match() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &[],
+            &updated_at,
+        ).unwrap();
+
+        // 日期范围不包含更新时间（未来范围已过）
+        let filter = SearchFilter {
+            folder_id: None,
+            tags: vec![],
+            date_range: Some(DateRange {
+                start: updated_at + chrono::Duration::hours(1),
+                end: updated_at + chrono::Duration::hours(2),
+            }),
+        };
+
+        let results = engine.search_with_filter("rust", &filter, 10, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ==================== search_parsed 测试 ====================
+
+    #[test]
+    fn test_search_parsed_with_tag() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &["rust".to_string()],
+            &updated_at,
+        ).unwrap();
+
+        // 使用 t:rust 过滤器搜索
+        let results = engine.search_parsed("t:rust rust", 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].note_id, note_id);
+    }
+
+    #[test]
+    fn test_search_parsed_text_only() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &[],
+            &updated_at,
+        ).unwrap();
+
+        // 纯文本搜索
+        let results = engine.search_parsed("rust", 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_parsed_with_folder() {
+        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let folder_id = Uuid::new_v4();
+        let note_id = Uuid::new_v4();
+        let updated_at = Utc::now();
+
+        engine.index_note_with_meta(
+            &note_id,
+            "Rust Programming",
+            "Rust is a systems programming language",
+            &folder_id,
+            &[],
+            &updated_at,
+        ).unwrap();
+
+        // 使用 f:<folder_id> 过滤器搜索
+        let query = format!("f:{} rust", folder_id);
+        let results = engine.search_parsed(&query, 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    // ==================== 搜索结果结构测试 ====================
+
+    #[test]
+    fn test_search_result_fields() {
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
+        let note_id = Uuid::new_v4();
+        engine.index_note(&note_id, "Rust Programming", "Rust is a systems programming language").unwrap();
+
+        let results = engine.search("rust", 10, 0).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let result = &results[0];
+        assert_eq!(result.note_id, note_id);
+        assert_eq!(result.title, "Rust Programming");
+        // score 应为一个有限浮点数
+        assert!(result.score.is_finite());
     }
 }
 

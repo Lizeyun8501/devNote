@@ -53,13 +53,16 @@ impl<T> ObjectPool<T> {
     pub fn acquire(&self) -> T {
         self.pool
             .lock()
-            .unwrap()
+            .expect("object pool mutex poisoned")
             .pop()
             .unwrap_or_else(|| (self.factory)())
     }
 
     pub fn release(&self, obj: T) {
-        self.pool.lock().unwrap().push(obj);
+        self.pool
+            .lock()
+            .expect("object pool mutex poisoned")
+            .push(obj);
     }
 }
 
@@ -93,7 +96,8 @@ impl<K: std::hash::Hash + Eq, V> LruCache<K, V> {
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Mutex::new(LruCacheImpl::new(
-                NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap()),
+                NonZeroUsize::new(capacity)
+                    .unwrap_or(NonZeroUsize::new(1).expect("1 is always a valid NonZeroUsize")),
             )),
         }
     }
@@ -102,23 +106,39 @@ impl<K: std::hash::Hash + Eq, V> LruCache<K, V> {
     where
         V: Clone,
     {
-        self.inner.lock().unwrap().get(key).cloned()
+        self.inner
+            .lock()
+            .expect("lru cache mutex poisoned")
+            .get(key)
+            .cloned()
     }
 
     pub fn put(&self, key: K, value: V) {
-        self.inner.lock().unwrap().put(key, value);
+        self.inner
+            .lock()
+            .expect("lru cache mutex poisoned")
+            .put(key, value);
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
-        self.inner.lock().unwrap().pop(key)
+        self.inner
+            .lock()
+            .expect("lru cache mutex poisoned")
+            .pop(key)
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.inner
+            .lock()
+            .expect("lru cache mutex poisoned")
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().unwrap().is_empty()
+        self.inner
+            .lock()
+            .expect("lru cache mutex poisoned")
+            .is_empty()
     }
 }
 
@@ -278,12 +298,17 @@ impl SqliteConnectionPool {
 
     pub fn get_read_connection(&self) -> Result<std::sync::MutexGuard<'_, Option<rusqlite::Connection>>> {
         let idx = {
-            let mut current = self.current_read.lock().unwrap();
+            let mut current = self
+                .current_read
+                .lock()
+                .expect("current_read mutex poisoned");
             let idx = *current % self.read_count;
             *current = (*current + 1) % self.read_count;
             idx
         };
-        let mut guard = self.read_connections[idx].lock().unwrap();
+        let mut guard = self.read_connections[idx]
+            .lock()
+            .expect("read connection slot mutex poisoned");
         if guard.is_none() {
             let conn = rusqlite::Connection::open_with_flags(
                 &self.database_path,
@@ -295,7 +320,10 @@ impl SqliteConnectionPool {
     }
 
     pub fn get_write_connection(&self) -> Result<std::sync::MutexGuard<'_, Option<rusqlite::Connection>>> {
-        let mut guard = self.write_connection.lock().unwrap();
+        let mut guard = self
+            .write_connection
+            .lock()
+            .expect("write connection mutex poisoned");
         if guard.is_none() {
             let conn = rusqlite::Connection::open(&self.database_path)?;
             conn.execute_batch("PRAGMA journal_mode=WAL;")?;
@@ -349,7 +377,9 @@ impl TaskScheduler {
     }
 
     pub fn recv(&self) -> ScheduledTask {
-        self.receiver.recv().unwrap()
+        self.receiver
+            .recv()
+            .expect("task scheduler channel disconnected")
     }
 }
 
@@ -367,7 +397,10 @@ impl BackgroundWorker {
     }
 
     pub fn start(&self, handler: impl Fn(ScheduledTask) + Send + 'static) {
-        let mut running = self.running.lock().unwrap();
+        let mut running = self
+            .running
+            .lock()
+            .expect("background worker running flag mutex poisoned");
         *running = true;
         let scheduler = Arc::clone(&self.scheduler);
         let running_flag = Arc::clone(&self.running);
@@ -376,7 +409,9 @@ impl BackgroundWorker {
                 if let Some(task) = scheduler.try_recv() {
                     handler(task);
                 } else {
-                    let is_running = *running_flag.lock().unwrap();
+                    let is_running = *running_flag
+                        .lock()
+                        .expect("background worker running flag mutex poisoned");
                     if !is_running {
                         break;
                     }
@@ -387,7 +422,10 @@ impl BackgroundWorker {
     }
 
     pub fn stop(&self) {
-        let mut running = self.running.lock().unwrap();
+        let mut running = self
+            .running
+            .lock()
+            .expect("background worker running flag mutex poisoned");
         *running = false;
     }
 }
@@ -499,7 +537,10 @@ impl IncrementalProcessor {
     }
 
     pub fn process(&self, current_state: &HashMap<String, String>) -> Vec<IncrementalChange> {
-        let mut last = self.last_state.lock().unwrap();
+        let mut last = self
+            .last_state
+            .lock()
+            .expect("incremental processor last_state mutex poisoned");
         let mut changes = Vec::new();
 
         for (block_id, content) in current_state {
@@ -540,6 +581,9 @@ impl IncrementalProcessor {
     }
 
     pub fn reset(&self) {
-        self.last_state.lock().unwrap().clear();
+        self.last_state
+            .lock()
+            .expect("incremental processor last_state mutex poisoned")
+            .clear();
     }
 }

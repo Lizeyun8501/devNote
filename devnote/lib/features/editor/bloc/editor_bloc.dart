@@ -1,16 +1,41 @@
+import 'dart:async';
+
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/editor/bloc/editor_event.dart';
 import 'package:devnote/features/editor/bloc/editor_state.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
+import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
+import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
 
 /// 编辑器业务逻辑组件 (EditorBloc)
 /// 管理笔记的 block 级别编辑操作：加载、插入、更新、删除、移动、撤销/重做、选中
 /// 借鉴思源笔记风格：本地优先持久化，block 粒度编辑，支持历史记录
+///
+/// 实时协作集成：
+/// - 本地编辑操作时通过 RealtimeCollabService 广播 CollabOperation
+/// - 监听 incomingOperations 流，应用远端操作（复用 ConflictResolver 的
+///   VectorClock 合并逻辑）
+/// - 远端操作应用时不再次广播，避免回环
 class EditorBloc extends Bloc<EditorEvent, EditorState> {
   final EditorService _editorService;
 
-  EditorBloc(this._editorService) : super(const EditorInitial()) {
+  /// 实时协作服务（可选注入，未注入时退化为单机编辑）
+  final RealtimeCollabService? _collabService;
+
+  /// 冲突解决器（复用现有 VectorClock 合并逻辑）
+  final ConflictResolver _conflictResolver = ConflictResolver();
+
+  /// 远端操作流订阅
+  StreamSubscription<CollabOperation>? _remoteOpSubscription;
+
+  /// 标记当前是否正在应用远端操作（避免远端操作触发本地广播回环）
+  bool _applyingRemoteOperation = false;
+
+  EditorBloc(this._editorService, {RealtimeCollabService? collabService})
+      : _collabService = collabService,
+        super(const EditorInitial()) {
     on<LoadNote>(_onLoadNote);
     on<InsertBlock>(_onInsertBlock);
     on<UpdateBlock>(_onUpdateBlock);
@@ -20,6 +45,22 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<UndoEvent>(_onUndo);
     on<RedoEvent>(_onRedo);
     on<SelectBlock>(_onSelectBlock);
+
+    // 订阅远端操作流（若注入了协作服务）
+    _subscribeToRemoteOperations();
+  }
+
+  /// 订阅远端操作流
+  ///
+  /// 借鉴 SyncBloc 的事件驱动模式：监听器中通过 add 转发，避免直接 emit。
+  void _subscribeToRemoteOperations() {
+    final service = _collabService;
+    if (service == null) return;
+    _remoteOpSubscription = service.incomingOperations.listen((op) {
+      // 通过 add 转发为内部事件，确保在 BLoC 事件循环中处理
+      add(_RemoteOperationReceived(op));
+    });
+    on<_RemoteOperationReceived>(_onRemoteOperation);
   }
 
   /// 加载笔记
@@ -84,6 +125,17 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           blocks[i] = blocks[i].copyWith(position: i);
         }
         emit(state.pushUndo(state.blocks).copyWith(blocks: blocks, activeBlockId: newBlock.id));
+        // 实时协作：广播 insert 操作（远端操作应用时不广播，避免回环）
+        _broadcastLocalOperation(
+          blockId: newBlock.id,
+          opType: CollabOperationType.insert,
+          payload: {
+            'noteId': event.noteId,
+            'blockType': event.blockType.name,
+            'content': event.content,
+            'position': insertAt,
+          },
+        );
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -104,6 +156,12 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           return b;
         }).toList();
         emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
+        // 实时协作：广播 update 操作
+        _broadcastLocalOperation(
+          blockId: event.blockId,
+          opType: CollabOperationType.update,
+          payload: {'content': event.content},
+        );
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -134,6 +192,12 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         } else {
           emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
         }
+        // 实时协作：广播 delete 操作
+        _broadcastLocalOperation(
+          blockId: event.blockId,
+          opType: CollabOperationType.delete,
+          payload: const <String, dynamic>{},
+        );
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -158,6 +222,12 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           }
         }
         emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
+        // 实时协作：广播 move 操作
+        _broadcastLocalOperation(
+          blockId: event.blockId,
+          opType: CollabOperationType.move,
+          payload: {'newPosition': event.newPosition},
+        );
       }
     } catch (e) {
       emit(EditorError(e.toString()));
@@ -209,4 +279,254 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
       emit(state.copyWith(activeBlockId: event.blockId));
     }
   }
+
+  /// 广播本地操作到协作会话
+  ///
+  /// 仅在以下条件同时满足时广播：
+  /// 1. 注入了 RealtimeCollabService
+  /// 2. 当前不在应用远端操作（避免回环）
+  /// 3. 当前状态为 EditorLoaded（有 noteId 上下文）
+  ///
+  /// 广播为异步操作，使用 unawaited 不阻塞当前事件处理。
+  void _broadcastLocalOperation({
+    required String blockId,
+    required CollabOperationType opType,
+    required Map<String, dynamic> payload,
+  }) {
+    if (_applyingRemoteOperation) return;
+    final service = _collabService;
+    if (service == null) return;
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+
+    try {
+      // 异步广播，不阻塞当前事件处理
+      unawaited(
+        service
+            .emitLocalOperation(
+              blockId: blockId,
+              opType: opType,
+              payload: payload,
+            )
+            .then((_) {})
+            .catchError((Object e) {
+          AppLogger.w('EditorBloc', '广播本地操作失败: $e');
+        }),
+      );
+    } catch (e) {
+      AppLogger.w('EditorBloc', '广播本地操作同步异常: $e');
+    }
+  }
+
+  /// 处理远端操作（内部事件）
+  ///
+  /// 复用现有 ConflictResolver 的 VectorClock 合并逻辑：
+  /// 1. 调用 RealtimeCollabService.applyRemoteOperation 维护 OpLog 与向量时钟
+  /// 2. 标记 _applyingRemoteOperation = true，避免本地广播回环
+  /// 3. 根据 opType 调用对应的 EditorService 方法应用变更
+  /// 4. 调用 ConflictResolver.mergeWithVectorClocks 进行 CRDT 合并
+  /// 5. 更新本地状态并发射
+  Future<void> _onRemoteOperation(
+    _RemoteOperationReceived event,
+    Emitter<EditorState> emit,
+  ) async {
+    final op = event.operation;
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+
+    // 忽略自己发起的操作（服务器可能回环广播）
+    final service = _collabService;
+    if (service == null) return;
+    if (op.deviceId == service.deviceId) return;
+
+    // 调用服务层维护 OpLog 与向量时钟（去重，返回 false 表示重复操作）
+    if (!service.applyRemoteOperation(op, _conflictResolver)) {
+      return;
+    }
+
+    _applyingRemoteOperation = true;
+    try {
+      switch (op.opType) {
+        case CollabOperationType.insert:
+          await _applyRemoteInsert(op, state, emit);
+          break;
+        case CollabOperationType.update:
+          await _applyRemoteUpdate(op, state, emit);
+          break;
+        case CollabOperationType.delete:
+          await _applyRemoteDelete(op, state, emit);
+          break;
+        case CollabOperationType.move:
+          await _applyRemoteMove(op, state, emit);
+          break;
+        case CollabOperationType.cursor:
+          // cursor 操作由 presence 流处理，此处不修改文档
+          break;
+      }
+    } catch (e, st) {
+      AppLogger.e('EditorBloc', '应用远端操作失败: opId=${op.opId}',
+          error: e, stackTrace: st);
+    } finally {
+      _applyingRemoteOperation = false;
+    }
+  }
+
+  /// 应用远端 insert 操作
+  Future<void> _applyRemoteInsert(
+    CollabOperation op,
+    EditorLoaded state,
+    Emitter<EditorState> emit,
+  ) async {
+    final payload = op.payload;
+    final noteId = payload['noteId'] as String? ?? state.noteId;
+    final blockTypeStr = payload['blockType'] as String? ?? 'paragraph';
+    final blockType = BlockType.values.firstWhere(
+      (t) => t.name == blockTypeStr,
+      orElse: () => BlockType.paragraph,
+    );
+    final content = payload['content'] as String? ?? '';
+    final position = (payload['position'] as num?)?.toInt() ?? 0;
+
+    final newBlock = await _editorService.createBlock(
+      noteId: noteId,
+      blockType: blockType,
+      content: content,
+      position: position,
+    );
+    final blocks = List<BlockModel>.from(state.blocks);
+    final insertAt = position.clamp(0, blocks.length);
+    blocks.insert(insertAt, newBlock.copyWith(position: insertAt));
+    for (var i = insertAt + 1; i < blocks.length; i++) {
+      blocks[i] = blocks[i].copyWith(position: i);
+    }
+    emit(state.copyWith(blocks: blocks));
+  }
+
+  /// 应用远端 update 操作
+  ///
+  /// 复用 ConflictResolver.mergeWithVectorClocks 进行 CRDT 合并：
+  /// - 若本地与远端向量时钟存在因果关系，采用较新的一方
+  /// - 若并发，文本块字符级合并，非文本块 last-write-wins
+  Future<void> _applyRemoteUpdate(
+    CollabOperation op,
+    EditorLoaded state,
+    Emitter<EditorState> emit,
+  ) async {
+    final remoteContent = op.payload['content'] as String? ?? '';
+    final localBlock = state.blocks
+        .where((b) => b.id == op.blockId)
+        .firstOrNull;
+    if (localBlock == null) {
+      // 本地不存在该 block，直接采用远端内容创建
+      await _editorService.updateBlock(
+        blockId: op.blockId,
+        content: remoteContent,
+      );
+      return;
+    }
+
+    // 复用 ConflictResolver 的 VectorClock 合并逻辑
+    // localClock: 服务层维护的本地向量时钟（已包含历史操作）
+    // remoteClock: 远端操作携带的向量时钟
+    final remoteBlock = localBlock.copyWith(
+      content: remoteContent,
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(op.timestamp),
+    );
+    final service = _collabService;
+    final localClock =
+        service != null ? service.localVectorClock : VectorClock();
+    final remoteClock = op.vectorClock;
+    final baseClock = VectorClock();
+
+    final results = _conflictResolver.mergeWithVectorClocks(
+      [localBlock],
+      [remoteBlock],
+      localClock,
+      remoteClock,
+      baseClock,
+    );
+
+    if (results.isNotEmpty) {
+      final merged = results.first.block;
+      await _editorService.updateBlock(
+        blockId: merged.id,
+        content: merged.content,
+      );
+      final blocks = state.blocks.map((b) {
+        if (b.id == merged.id) {
+          return merged;
+        }
+        return b;
+      }).toList();
+      emit(state.copyWith(blocks: blocks));
+    }
+  }
+
+  /// 应用远端 delete 操作
+  Future<void> _applyRemoteDelete(
+    CollabOperation op,
+    EditorLoaded state,
+    Emitter<EditorState> emit,
+  ) async {
+    await _editorService.deleteBlock(op.blockId);
+    final blocks = state.blocks.where((b) => b.id != op.blockId).toList();
+    for (var i = 0; i < blocks.length; i++) {
+      blocks[i] = blocks[i].copyWith(position: i);
+    }
+    if (blocks.isEmpty) {
+      // 空列表：自动创建默认段落，保证编辑器始终有内容
+      final newBlock = await _editorService.createBlock(
+        noteId: state.noteId,
+        blockType: BlockType.paragraph,
+        content: '',
+        position: 0,
+      );
+      emit(state.copyWith(blocks: [newBlock], activeBlockId: newBlock.id));
+    } else {
+      emit(state.copyWith(blocks: blocks));
+    }
+  }
+
+  /// 应用远端 move 操作
+  Future<void> _applyRemoteMove(
+    CollabOperation op,
+    EditorLoaded state,
+    Emitter<EditorState> emit,
+  ) async {
+    final newPosition = (op.payload['newPosition'] as num?)?.toInt() ?? 0;
+    await _editorService.moveBlock(
+      blockId: op.blockId,
+      newPosition: newPosition,
+    );
+    final blocks = List<BlockModel>.from(state.blocks);
+    final index = blocks.indexWhere((b) => b.id == op.blockId);
+    if (index != -1) {
+      final block = blocks.removeAt(index);
+      final insertAt = newPosition.clamp(0, blocks.length);
+      blocks.insert(insertAt, block);
+      for (var i = 0; i < blocks.length; i++) {
+        blocks[i] = blocks[i].copyWith(position: i);
+      }
+      emit(state.copyWith(blocks: blocks));
+    }
+  }
+
+  @override
+  Future<void> close() {
+    _remoteOpSubscription?.cancel();
+    return super.close();
+  }
+}
+
+/// 内部事件：收到远端操作
+///
+/// 借鉴 SyncBloc 的 _SyncServiceStateChanged 模式：将服务流事件转发为
+/// BLoC 事件，确保在事件循环中处理。
+class _RemoteOperationReceived extends EditorEvent {
+  final CollabOperation operation;
+
+  const _RemoteOperationReceived(this.operation);
+
+  @override
+  List<Object?> get props => [operation];
 }

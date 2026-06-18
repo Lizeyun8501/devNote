@@ -69,15 +69,21 @@ impl FFIResponse {
     pub fn success(data: &str) -> Self {
         Self {
             code: FFIErrorCode::Success as i32,
-            message: CString::new("ok").unwrap().into_raw(),
-            data: CString::new(data).unwrap().into_raw(),
+            message: CString::new("ok")
+                .expect("static string 'ok' has no nul bytes")
+                .into_raw(),
+            data: CString::new(data)
+                .unwrap_or_default()
+                .into_raw(),
         }
     }
 
     pub fn error(code: i32, message: &str) -> Self {
         Self {
             code,
-            message: CString::new(message).unwrap().into_raw(),
+            message: CString::new(message)
+                .unwrap_or_default()
+                .into_raw(),
             data: ptr::null_mut(),
         }
     }
@@ -203,12 +209,16 @@ pub extern "C" fn devnote_free_string(s: *mut c_char) {
 pub extern "C" fn devnote_ping() -> *mut c_char {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         debug!("FFI: devnote_ping called");
-        CString::new("pong").unwrap().into_raw()
+        CString::new("pong")
+            .expect("static string 'pong' has no nul bytes")
+            .into_raw()
     }));
     match result {
         Ok(ptr) => ptr,
         Err(_) => {
-            CString::new("panic").unwrap().into_raw()
+            CString::new("panic")
+                .expect("static string 'panic' has no nul bytes")
+                .into_raw()
         }
     }
 }
@@ -221,7 +231,9 @@ pub extern "C" fn devnote_dispatch(request: *const c_char) -> *mut c_char {
         if request.is_null() {
             let error = DispatchResponse::error(FFIErrorCode::InvalidArgument, "Null request");
             let json = serde_json::to_string(&error).unwrap_or_default();
-            return CString::new(json).unwrap().into_raw();
+            return CString::new(json)
+                .expect("json output from serde_json contains no nul bytes")
+                .into_raw();
         }
 
         // SAFETY: request was checked for null above, and CStr::from_ptr reads
@@ -234,7 +246,9 @@ pub extern "C" fn devnote_dispatch(request: *const c_char) -> *mut c_char {
             Err(_) => {
                 let error = DispatchResponse::error(FFIErrorCode::InvalidArgument, "Invalid UTF-8 in request");
                 let json = serde_json::to_string(&error).unwrap_or_default();
-                return CString::new(json).unwrap().into_raw();
+                return CString::new(json)
+                    .expect("json output from serde_json contains no nul bytes")
+                    .into_raw();
             }
         };
 
@@ -243,14 +257,18 @@ pub extern "C" fn devnote_dispatch(request: *const c_char) -> *mut c_char {
             Err(e) => {
                 let error = DispatchResponse::error(FFIErrorCode::InvalidArgument, &format!("Failed to parse request: {}", e));
                 let json = serde_json::to_string(&error).unwrap_or_default();
-                return CString::new(json).unwrap().into_raw();
+                return CString::new(json)
+                    .expect("json output from serde_json contains no nul bytes")
+                    .into_raw();
             }
         };
 
         let response = handlers::handle_dispatch(&dispatch_req.event, dispatch_req.payload.as_deref());
         debug!("FFI: dispatch event={} result_code={}", &dispatch_req.event, response.code);
         let json = serde_json::to_string(&response).unwrap_or_default();
-        CString::new(json).unwrap().into_raw()
+        CString::new(json)
+            .expect("json output from serde_json contains no nul bytes")
+            .into_raw()
     }));
     match result {
         Ok(ptr) => ptr,
@@ -261,7 +279,9 @@ pub extern "C" fn devnote_dispatch(request: *const c_char) -> *mut c_char {
                 data: None,
             };
             let json = serde_json::to_string(&error).unwrap_or_default();
-            CString::new(json).unwrap().into_raw()
+            CString::new(json)
+                .expect("json output from serde_json contains no nul bytes")
+                .into_raw()
         }
     }
 }

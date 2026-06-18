@@ -158,7 +158,11 @@ impl BlockEditor for DefaultBlockEditor {
             }
         }
 
-        let block = self.blocks.iter_mut().find(|b| &b.id == id).unwrap();
+        let block = self
+            .blocks
+            .iter_mut()
+            .find(|b| &b.id == id)
+            .expect("block existence verified earlier in move_block");
         block.position = new_position;
         block.updated_at = Utc::now();
         Ok(())
@@ -813,7 +817,12 @@ impl MarkdownParser {
                 let mut quote_lines = vec![line[2..].to_string()];
                 while let Some(next) = lines.peek() {
                     if next.starts_with("> ") {
-                        quote_lines.push(lines.next().unwrap()[2..].to_string());
+                        quote_lines.push(
+                            lines
+                                .next()
+                                .expect("peek confirmed element exists")[2..]
+                                .to_string(),
+                        );
                     } else {
                         break;
                     }
@@ -828,7 +837,12 @@ impl MarkdownParser {
                 while let Some(next) = lines.peek() {
                     let next_trimmed = next.trim_start();
                     if next_trimmed.starts_with("- [") || next_trimmed.starts_with("* [") {
-                        task_lines.push(lines.next().unwrap().to_string());
+                        task_lines.push(
+                            lines
+                                .next()
+                                .expect("peek confirmed element exists")
+                                .to_string(),
+                        );
                     } else {
                         break;
                     }
@@ -842,7 +856,12 @@ impl MarkdownParser {
                 let mut table_lines = vec![line.to_string()];
                 while let Some(next) = lines.peek() {
                     if next.trim().starts_with('|') {
-                        table_lines.push(lines.next().unwrap().to_string());
+                        table_lines.push(
+                            lines
+                                .next()
+                                .expect("peek confirmed element exists")
+                                .to_string(),
+                        );
                     } else {
                         break;
                     }
@@ -878,7 +897,12 @@ impl MarkdownParser {
                 let mut list_lines = vec![line[2..].to_string()];
                 while let Some(next) = lines.peek() {
                     if next.starts_with("- ") || next.starts_with("* ") {
-                        list_lines.push(lines.next().unwrap()[2..].to_string());
+                        list_lines.push(
+                            lines
+                                .next()
+                                .expect("peek confirmed element exists")[2..]
+                                .to_string(),
+                        );
                     } else {
                         break;
                     }

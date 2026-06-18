@@ -538,7 +538,7 @@ class ImportService {
     }
 
     // 先检查数据库中是否已存在同名标签
-    final allTags = await _tagRepository.listTags();
+    final allTags = await _tagRepository.getAllTags();
     final existing = allTags.where((t) => t.name == tagName).toList();
     if (existing.isNotEmpty) {
       _tagCache[tagName] = existing.first.id;

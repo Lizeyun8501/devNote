@@ -2,7 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let crate_dir = env::var("CARGO_MANIFEST_DIR")
+        .expect("CARGO_MANIFEST_DIR must be set by cargo during build");
     let config = cbindgen::Config::from_root_or_default(PathBuf::from(&crate_dir).as_path());
     cbindgen::Builder::new()
         .with_crate(crate_dir)

@@ -31,6 +31,7 @@ import 'package:devnote/features/flashcard/deck_list_page.dart';
 import 'package:devnote/features/flashcard/review_page.dart';
 import 'package:devnote/features/flashcard/create_card_page.dart';
 import 'package:devnote/features/flashcard/review_stats_page.dart';
+import 'package:devnote/features/ai/pages/ai_settings_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -98,6 +99,12 @@ final appRouter = GoRouter(
           path: '/settings/import-export',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: ImportExportPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/settings/ai',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: AISettingsPage(),
           ),
         ),
         GoRoute(

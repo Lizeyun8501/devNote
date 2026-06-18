@@ -259,3 +259,390 @@ impl CryptoEngine for DefaultCryptoEngine {
         salt
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试用极低参数配置，加速 Argon2id 计算（仅用于单元测试，不可用于生产）
+    fn test_config() -> CryptoConfig {
+        CryptoConfig {
+            algorithm: "XChaCha20-Poly1305".to_string(),
+            key_derivation: "Argon2id".to_string(),
+            iterations: 1,
+            memory_kib: 8,
+            parallelism: 1,
+        }
+    }
+
+    // ==================== EncryptedData 序列化测试 ====================
+
+    #[test]
+    fn test_encrypted_data_round_trip() {
+        let data = EncryptedData {
+            nonce: vec![0u8; 24],
+            ciphertext: vec![1u8, 2, 3, 4, 5],
+            tag: vec![0u8; 16],
+        };
+        let bytes = data.to_bytes();
+        let restored = EncryptedData::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.nonce, data.nonce);
+        assert_eq!(restored.ciphertext, data.ciphertext);
+        assert_eq!(restored.tag, data.tag);
+    }
+
+    #[test]
+    fn test_encrypted_data_from_bytes_too_short() {
+        // 数据长度不足 nonce(24) + tag(16) = 40 字节，应返回错误
+        let short_data = vec![0u8; 10];
+        let result = EncryptedData::from_bytes(&short_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_data_from_bytes_empty_ciphertext() {
+        // ciphertext 长度为 0，仅包含 nonce 和 tag
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0u8; 24]); // nonce
+        bytes.extend_from_slice(&[0u8; 16]); // tag
+        let result = EncryptedData::from_bytes(&bytes).unwrap();
+        assert_eq!(result.nonce.len(), 24);
+        assert!(result.ciphertext.is_empty());
+        assert_eq!(result.tag.len(), 16);
+    }
+
+    // ==================== CryptoConfig 预设测试 ====================
+
+    #[test]
+    fn test_config_standard() {
+        let cfg = CryptoConfig::standard();
+        assert_eq!(cfg.algorithm, "XChaCha20-Poly1305");
+        assert_eq!(cfg.key_derivation, "Argon2id");
+        assert_eq!(cfg.iterations, 3);
+        assert_eq!(cfg.memory_kib, 65536);
+        assert_eq!(cfg.parallelism, 4);
+    }
+
+    #[test]
+    fn test_config_high_strength() {
+        let cfg = CryptoConfig::high_strength();
+        assert_eq!(cfg.iterations, 6);
+        assert_eq!(cfg.memory_kib, 131072);
+        assert_eq!(cfg.parallelism, 8);
+        // 高安全等级参数应大于等于标准参数
+        assert!(cfg.iterations >= CryptoConfig::standard().iterations);
+        assert!(cfg.memory_kib >= CryptoConfig::standard().memory_kib);
+    }
+
+    #[test]
+    fn test_config_low_resource() {
+        let cfg = CryptoConfig::low_resource();
+        assert_eq!(cfg.iterations, 2);
+        assert_eq!(cfg.memory_kib, 19456);
+        assert_eq!(cfg.parallelism, 1);
+        // 低资源模式参数应小于等于标准参数
+        assert!(cfg.iterations <= CryptoConfig::standard().iterations);
+        assert!(cfg.memory_kib <= CryptoConfig::standard().memory_kib);
+    }
+
+    #[test]
+    fn test_config_default_matches_standard() {
+        // default 与 standard 应返回相同参数
+        let default_cfg = CryptoConfig::default();
+        let standard_cfg = CryptoConfig::standard();
+        assert_eq!(default_cfg.iterations, standard_cfg.iterations);
+        assert_eq!(default_cfg.memory_kib, standard_cfg.memory_kib);
+        assert_eq!(default_cfg.parallelism, standard_cfg.parallelism);
+    }
+
+    // ==================== 密钥派生测试 ====================
+
+    #[test]
+    fn test_derive_key_deterministic() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = vec![0xAAu8; 32];
+        let key1 = engine.derive_key("password123", &salt).unwrap();
+        let key2 = engine.derive_key("password123", &salt).unwrap();
+        // 相同密码和盐值应派生出相同密钥
+        assert_eq!(key1, key2);
+        assert_eq!(key1.len(), 32);
+    }
+
+    #[test]
+    fn test_derive_key_different_passwords() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = vec![0xBBu8; 32];
+        let key1 = engine.derive_key("password1", &salt).unwrap();
+        let key2 = engine.derive_key("password2", &salt).unwrap();
+        // 不同密码应派生出不同密钥
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_derive_key_different_salts() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt1 = vec![0xCCu8; 32];
+        let salt2 = vec![0xDDu8; 32];
+        let key1 = engine.derive_key("password", &salt1).unwrap();
+        let key2 = engine.derive_key("password", &salt2).unwrap();
+        // 不同盐值应派生出不同密钥
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_derive_key_with_custom_output_len() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = vec![0u8; 32];
+        let key = engine.derive_key_with_params("password", &salt, 64).unwrap();
+        assert_eq!(key.len(), 64);
+    }
+
+    #[test]
+    fn test_generate_salt_length() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        assert_eq!(salt.len(), 32);
+    }
+
+    #[test]
+    fn test_generate_salt_randomness() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt1 = engine.generate_salt();
+        let salt2 = engine.generate_salt();
+        // 两次生成的盐值应不同（概率上）
+        assert_ne!(salt1, salt2);
+    }
+
+    // ==================== 密码哈希与验证测试 ====================
+
+    #[test]
+    fn test_hash_and_verify_password() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = vec![0u8; 32];
+        let hash = engine.hash_password("my_secret", &salt).unwrap();
+        assert_eq!(hash.len(), 64);
+        // 正确密码应验证通过
+        assert!(engine.verify_password("my_secret", &salt, &hash).unwrap());
+    }
+
+    #[test]
+    fn test_verify_password_wrong_password() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = vec![0u8; 32];
+        let hash = engine.hash_password("correct", &salt).unwrap();
+        // 错误密码应验证失败
+        assert!(!engine.verify_password("wrong", &salt, &hash).unwrap());
+    }
+
+    #[test]
+    fn test_verify_password_wrong_salt() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt1 = vec![0u8; 32];
+        let salt2 = vec![1u8; 32];
+        let hash = engine.hash_password("password", &salt1).unwrap();
+        // 不同盐值应验证失败
+        assert!(!engine.verify_password("password", &salt2, &hash).unwrap());
+    }
+
+    // ==================== 加密/解密测试 ====================
+
+    #[test]
+    fn test_encrypt_decrypt_round_trip() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("test_password", &salt).unwrap();
+
+        let plaintext = b"Hello, DevNote!";
+        let ciphertext = engine.encrypt(plaintext, &key).unwrap();
+        let decrypted = engine.decrypt(&ciphertext, &key).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_empty_data() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("test_password", &salt).unwrap();
+
+        let plaintext = b"";
+        let ciphertext = engine.encrypt(plaintext, &key).unwrap();
+        let decrypted = engine.decrypt(&ciphertext, &key).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_large_data() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("test_password", &salt).unwrap();
+
+        let plaintext = vec![0x42u8; 100_000]; // 100 KB
+        let ciphertext = engine.encrypt(&plaintext, &key).unwrap();
+        let decrypted = engine.decrypt(&ciphertext, &key).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_produces_different_ciphertexts() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("test_password", &salt).unwrap();
+
+        let plaintext = b"Same plaintext";
+        let ct1 = engine.encrypt(plaintext, &key).unwrap();
+        let ct2 = engine.encrypt(plaintext, &key).unwrap();
+
+        // 由于随机 nonce，相同明文应产生不同密文
+        assert_ne!(ct1, ct2);
+    }
+
+    #[test]
+    fn test_decrypt_with_wrong_key_fails() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key1 = engine.derive_key("password1", &salt).unwrap();
+        let key2 = engine.derive_key("password2", &salt).unwrap();
+
+        let ciphertext = engine.encrypt(b"secret data", &key1).unwrap();
+        // 使用错误密钥解密应失败
+        let result = engine.decrypt(&ciphertext, &key2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_tampered_ciphertext_fails() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("test_password", &salt).unwrap();
+
+        let ciphertext = engine.encrypt(b"secret data", &key).unwrap();
+        // 篡改密文
+        let mut tampered = ciphertext.clone();
+        let tamper_pos = tampered.len() / 2;
+        tampered[tamper_pos] ^= 0xFF;
+
+        let result = engine.decrypt(&tampered, &key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_invalid_data_fails() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("test_password", &salt).unwrap();
+
+        // 数据长度不足，应返回错误
+        let short_data = vec![0u8; 10];
+        let result = engine.decrypt(&short_data, &key);
+        assert!(result.is_err());
+    }
+
+    // ==================== 结构化加密/解密测试 ====================
+
+    #[test]
+    fn test_encrypt_structured_decrypt_structured_round_trip() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let key = vec![0x42u8; 32];
+        let plaintext = b"structured data test";
+
+        let encrypted = engine.encrypt_structured(plaintext, &key).unwrap();
+        assert_eq!(encrypted.nonce.len(), 24);
+        assert_eq!(encrypted.tag.len(), 16);
+
+        let decrypted = engine.decrypt_structured(&encrypted, &key).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_structured_via_trait_decrypt() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let key = vec![0x42u8; 32];
+        let plaintext = b"trait round trip";
+
+        // 通过 trait 方法加密（返回 to_bytes 格式）
+        let ciphertext = engine.encrypt(plaintext, &key).unwrap();
+        // 通过 trait 方法解密
+        let decrypted = engine.decrypt(&ciphertext, &key).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    // ==================== 恢复短语测试 ====================
+
+    #[test]
+    fn test_generate_recovery_phrase() {
+        let phrase = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        // BIP-39 24 个单词短语
+        let words: Vec<&str> = phrase.split_whitespace().collect();
+        assert_eq!(words.len(), 24);
+    }
+
+    #[test]
+    fn test_generate_recovery_phrase_uniqueness() {
+        let phrase1 = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        let phrase2 = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        // 两次生成的短语应不同
+        assert_ne!(phrase1, phrase2);
+    }
+
+    #[test]
+    fn test_key_from_recovery_phrase_deterministic() {
+        let salt = vec![0u8; 32];
+        let phrase = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        let key1 = DefaultCryptoEngine::key_from_recovery_phrase(&phrase, &salt).unwrap();
+        let key2 = DefaultCryptoEngine::key_from_recovery_phrase(&phrase, &salt).unwrap();
+        // 相同短语和盐值应派生出相同密钥
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn test_verify_recovery_phrase_valid() {
+        let salt = vec![0u8; 32];
+        let phrase = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        let key = DefaultCryptoEngine::key_from_recovery_phrase(&phrase, &salt).unwrap();
+        // 正确短语应验证通过
+        assert!(DefaultCryptoEngine::verify_recovery_phrase(&phrase, &salt, &key).unwrap());
+    }
+
+    #[test]
+    fn test_verify_recovery_phrase_invalid() {
+        let salt = vec![0u8; 32];
+        let phrase1 = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        let phrase2 = DefaultCryptoEngine::generate_recovery_phrase().unwrap();
+        let key = DefaultCryptoEngine::key_from_recovery_phrase(&phrase1, &salt).unwrap();
+        // 不同短语应验证失败
+        assert!(!DefaultCryptoEngine::verify_recovery_phrase(&phrase2, &salt, &key).unwrap());
+    }
+
+    #[test]
+    fn test_key_from_recovery_phrase_invalid_phrase() {
+        let salt = vec![0u8; 32];
+        let result = DefaultCryptoEngine::key_from_recovery_phrase("invalid phrase not bip39", &salt);
+        assert!(result.is_err());
+    }
+
+    // ==================== CryptoEngine trait 测试 ====================
+
+    #[test]
+    fn test_crypto_engine_trait_implementation() {
+        let engine = DefaultCryptoEngine::new(test_config());
+        let salt = engine.generate_salt();
+        let key = engine.derive_key("password", &salt).unwrap();
+
+        // 验证 trait 方法完整可用
+        let plaintext = b"trait test";
+        let ciphertext = engine.encrypt(plaintext, &key).unwrap();
+        let decrypted = engine.decrypt(&ciphertext, &key).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_default_crypto_engine_default() {
+        // Default trait 应使用标准配置
+        let engine = DefaultCryptoEngine::default();
+        assert_eq!(engine.config.iterations, 3);
+        assert_eq!(engine.config.memory_kib, 65536);
+    }
+}

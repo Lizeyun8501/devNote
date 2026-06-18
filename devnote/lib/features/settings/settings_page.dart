@@ -221,6 +221,18 @@ class _SettingsPageState extends State<SettingsPage> {
           _SettingsSection(title: '数据', children: [
             ListTile(
               leading: Semantics(
+                label: 'AI 设置',
+                child: const Icon(Icons.smart_toy_outlined),
+              ),
+              title: const Text('AI 设置'),
+              subtitle: const Text('配置本地 Ollama 与 AI 写作辅助'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/settings/ai');
+              },
+            ),
+            ListTile(
+              leading: Semantics(
                 label: '同步设置',
                 child: const Icon(Icons.sync),
               ),

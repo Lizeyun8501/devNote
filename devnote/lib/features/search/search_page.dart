@@ -31,6 +31,7 @@ class _SearchView extends StatefulWidget {
 class _SearchViewState extends State<_SearchView> {
   late final TextEditingController _searchController;
   bool _showFilter = false;
+  bool _semanticEnabled = false;
   String? _selectedFolderId;
   List<String> _selectedTags = [];
   DateTime? _startDate;
@@ -121,6 +122,26 @@ class _SearchViewState extends State<_SearchView> {
             ),
           ),
           const SizedBox(width: 8),
+          Semantics(
+            label: _semanticEnabled ? '关闭语义搜索' : '开启语义搜索',
+            hint: '切换 Hybrid Retrieval 混合检索',
+            child: IconButton(
+              icon: Icon(
+                Icons.psychology,
+                color: _semanticEnabled
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              onPressed: () {
+                setState(() {
+                  _semanticEnabled = !_semanticEnabled;
+                });
+                context
+                    .read<SearchBloc>()
+                    .add(SearchSemanticToggled(_semanticEnabled));
+              },
+            ),
+          ),
           Semantics(
             label: _showFilter ? '隐藏筛选条件' : '显示筛选条件',
             hint: '切换搜索筛选面板',
