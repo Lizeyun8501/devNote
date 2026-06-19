@@ -3,7 +3,7 @@
 | 属性 | 值 |
 |------|------|
 | **标题** | 使用 Dart FFI + C ABI 桥接 Flutter 与 Rust 核心 |
-| **状态** | Accepted |
+| **状态** | Superseded（已被 flutter_rust_bridge v2 取代，见下方"变更记录"） |
 | **日期** | 2025-01-20 |
 | **决策者** | DevNote 核心架构团队 |
 
@@ -102,3 +102,27 @@ pub struct FFIResponse {
 | panic 跨越 FFI | 所有 FFI 入口函数包裹 `catch_unwind`，panic 转换为 `code: -99` |
 | 构建复杂 | 编写自动化构建脚本（`build_rust.sh`），CI 中自动为所有目标平台编译 |
 | 版本不兼容 | `devnote_init` 时交换版本号，不匹配返回错误码 |
+
+## 变更记录
+
+### Superseded — 迁移至 flutter_rust_bridge v2
+
+**状态变更日期**：2026-06-19
+**新方案**：[flutter_rust_bridge v2](https://pub.dev/packages/flutter_rust_bridge)（类型安全 FFI 绑定）
+
+本 ADR 记录的"手写 C ABI + JSON 序列化"方案已被 `flutter_rust_bridge v2`（FRB v2）取代。代码实际状态如下：
+
+- `rust-core/devnote-ffi/Cargo.toml` 依赖 `flutter_rust_bridge = "2.12"`。
+- `rust-core/devnote-ffi/src/frb_api.rs` 提供 FRB v2 类型安全绑定，替代手写的 `extern "C"` + `FFIResponse` 结构。
+- 原 C ABI 通道（`devnote_init` / `devnote_dispatch` / `devnote_free_response`）作为兼容层保留，但新增功能应通过 FRB v2 API 开发。
+
+**迁移原因**：
+
+1. **类型安全**：FRB v2 自动生成 Dart ↔ Rust 类型映射，消除手写 JSON 编解码易错的 `FFIResponseC` 字段顺序/内存布局问题（曾导致 P0 级三端内存布局不一致 Bug）。
+2. **开发效率**：新增 Rust 函数只需 `flutter_rust_bridge_codegen generate`，无需手写 `extern "C"` 包装和 Dart 端 `lookupFunction`。
+3. **内存管理自动化**：FRB v2 自动处理跨语言内存分配/释放，减少手动 `Box::into_raw` / `devnote_free_response` 带来的泄漏风险。
+4. **异步原生支持**：FRB v2 原生支持 `Future`，无需手写回调或轮询机制。
+
+**保留的 C ABI 部分**：`ffi_bridge.dart` / `grpc_bridge.dart` / `websocket_bridge.dart` 仍通过 `DynamicLibrary` 加载原生库，Dispatch 通道暂保留 C ABI 兼容层，待后续完全迁移至 FRB v2 后移除。
+
+本 ADR 的"决策"与"接口定义"部分仅作为历史记录保留，不再反映当前架构。

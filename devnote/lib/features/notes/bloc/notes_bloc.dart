@@ -5,12 +5,15 @@ import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
+import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/core/di/injection.dart';
 
 class NotesBloc extends Bloc<NotesEvent, NotesState> {
   final NoteRepository _noteRepository;
+  final DatabaseHelper _dbHelper;
   final _uuid = const Uuid();
 
-  NotesBloc(this._noteRepository) : super(const NotesInitial()) {
+  NotesBloc(this._noteRepository) : _dbHelper = getIt<DatabaseHelper>(), super(const NotesInitial()) {
     on<LoadNotes>(_onLoadNotes);
     on<CreateNote>(_onCreateNote);
     on<DeleteNote>(_onDeleteNote);
@@ -108,20 +111,30 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
         }
         return;
       }
-      // 搜索时始终从数据库查询，避免在过滤后的子集上重复搜索
+      // 修复(P2): 原实现用内存 contains 过滤，性能差且不支持中文分词。
+      // DatabaseHelper 已实现 FTS5 全文搜索（searchNotesFTS），现改用 FTS5。
+      // FTS5 支持 MATCH 语法、unicode61 分词、按相关性排序（rank）。
       try {
-        final folderId = currentState.filterFolderId;
-        final allNotes = folderId != null
-            ? await _noteRepository.listNotes(folderId)
-            : await _noteRepository.listNotes('');
-        final filtered = allNotes
-            .where((n) =>
-                n.title.toLowerCase().contains(event.query.toLowerCase()) ||
-                n.content.toLowerCase().contains(event.query.toLowerCase()))
-            .toList();
-        emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(filtered, currentState.sortBy)));
+        final ftsResults = await _dbHelper.searchNotesFTS(event.query);
+        final notes = ftsResults.map((json) => NoteModel.fromJson(json)).toList();
+        emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(notes, currentState.sortBy)));
       } catch (e) {
-        emit(NotesError(e.toString()));
+        // FTS5 不可用时回退到内存过滤（兼容旧数据库未迁移到 v6 的场景）
+        developer.log('FTS5 search failed, falling back to in-memory filter: $e', level: 900);
+        try {
+          final folderId = currentState.filterFolderId;
+          final allNotes = folderId != null
+              ? await _noteRepository.listNotes(folderId)
+              : await _noteRepository.listNotes('');
+          final filtered = allNotes
+              .where((n) =>
+                  n.title.toLowerCase().contains(event.query.toLowerCase()) ||
+                  n.content.toLowerCase().contains(event.query.toLowerCase()))
+              .toList();
+          emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(filtered, currentState.sortBy)));
+        } catch (e2) {
+          emit(NotesError(e2.toString()));
+        }
       }
     }
   }

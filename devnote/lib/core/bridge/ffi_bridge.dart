@@ -19,6 +19,7 @@
 
 import 'dart:developer';
 import 'dart:ffi';
+import 'dart:io';
 
 // ============================================================
 // FRB 生成的绑定导入
@@ -124,9 +125,27 @@ class FFIBridge {
   /// 子类可重写此方法提供自定义的 DynamicLibrary 加载策略
   // ignore: avoid_dynamic_calls
   DynamicLibrary? _openNativeLibrary() {
+    // 修复(P2): 原实现仅尝试 'libdevnote_ffi.so'，不区分 macOS（.dylib）、
+    // Windows（.dll）、iOS（DynamicLibrary.process()），跨平台运行时 FFI 必然失败。
+    // 现按平台加载正确的动态库文件名。
     try {
-      // 默认实现：尝试加载 libdevnote_ffi.so
-      return DynamicLibrary.open('libdevnote_ffi.so');
+      if (Platform.isAndroid) {
+        return DynamicLibrary.open('libdevnote_ffi.so');
+      }
+      if (Platform.isIOS) {
+        // iOS: 静态链接，通过 process 查找符号
+        return DynamicLibrary.process();
+      }
+      if (Platform.isMacOS) {
+        return DynamicLibrary.open('libdevnote_ffi.dylib');
+      }
+      if (Platform.isLinux) {
+        return DynamicLibrary.open('libdevnote_ffi.so');
+      }
+      if (Platform.isWindows) {
+        return DynamicLibrary.open('devnote_ffi.dll');
+      }
+      throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
     } catch (_) {
       return null;
     }

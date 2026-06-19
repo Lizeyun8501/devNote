@@ -157,14 +157,9 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
         ));
-      } else if (serviceState.status == SyncServiceStatus.error) {
-        emit(SyncError(
-          message: serviceState.lastError ?? '同步失败',
-          autoSyncEnabled: state.autoSyncEnabled,
-          syncInterval: state.syncInterval,
-          serverAddress: state.serverAddress,
-        ));
       } else {
+        // 修复(P2): 删除原 160-166 行的 else if (error) 死代码分支——
+        // 上方 141 行已检查 error 并 return，此分支永远不可达。
         emit(SyncCompleted(
           lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
           autoSyncEnabled: state.autoSyncEnabled,
@@ -310,10 +305,47 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   /// 处理同步状态变更通知
-  /// 修复：根据当前状态决定如何转换，而非始终 emit SyncIdle
+  /// 修复(P2): 原实现 emit(_copyWithBase(state)) 仅复制当前状态，注释说"切换到空闲状态"
+  /// 但实际不切换到 SyncIdle，是 no-op。现根据 statusInfo.label 正确映射到对应 BLoC 状态。
   void _onStatusChanged(SyncStatusChanged event, Emitter<SyncState> emit) {
-    // 保留当前配置，切换到空闲状态
-    emit(_copyWithBase(state));
+    final label = event.statusInfo.label;
+    // SyncStatusInfo.label 来自 SyncService 的状态字符串映射
+    if (label == 'idle') {
+      emit(SyncIdle(
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    } else if (label == 'syncing') {
+      emit(SyncInProgress(
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    } else if (label == 'synced') {
+      emit(SyncCompleted(
+        lastSyncTime: DateTime.now(),
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    } else if (label == 'conflict') {
+      final resolver = _syncService.conflictResolver;
+      emit(SyncConflict(
+        conflicts: resolver.conflicts,
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    } else if (label == 'error') {
+      emit(SyncError(
+        message: _syncService.state.lastError ?? '同步错误',
+        autoSyncEnabled: state.autoSyncEnabled,
+        syncInterval: state.syncInterval,
+        serverAddress: state.serverAddress,
+      ));
+    }
+    // 未知 label 不改变状态
   }
 
   /// 解决冲突

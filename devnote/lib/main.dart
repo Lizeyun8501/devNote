@@ -107,6 +107,9 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // dispose() 是同步 void，无法 await 异步清理。
+    // 使用 fire-and-forget 模式：正常退出路径走 didRequestAppExit()（会 await），
+    // 此处主要覆盖 hot-reload 场景。
     _disposeAll();
     super.dispose();
   }
@@ -114,16 +117,19 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   @override
   Future<AppExitResponse> didRequestAppExit() async {
     // 应用退出前释放所有单例资源
-    _disposeAll();
+    await _disposeAll();
     return AppExitResponse.exit;
   }
 
   /// 统一释放所有模块资源：先释放 features 层（逆序），再释放 core 层。
-  void _disposeAll() {
+  ///
+  /// 修复(P2-16): 改为 async 以 await disposeCore() 中的 DatabaseHelper.close()，
+  /// 确保数据库句柄在 getIt.reset() 之前被正确关闭。
+  Future<void> _disposeAll() async {
     disposeAIModule();
     disposeWorkflowModule();
     disposeSyncModule();
-    disposeCore();
+    await disposeCore();
     getIt.reset();
   }
 

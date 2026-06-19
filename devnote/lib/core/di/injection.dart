@@ -51,12 +51,20 @@ Future<void> setupDependencies() async {
 /// 调用时机：
 /// - 应用退出前（通过 WidgetsBindingObserver.didRequestAppExit）
 /// - 测试 tearDown 中清理全局状态
-void disposeCore() {
+///
+/// 修复(P2-16): 改为 async 以 await DatabaseHelper.close()，确保数据库句柄
+/// 在 getIt.reset() 之前被正确关闭，避免 "database is locked" 或文件句柄泄漏。
+Future<void> disposeCore() async {
   if (!getIt.isRegistered<FFIBridge>()) return;
 
   // 释放 core 层缓存
   if (getIt.isRegistered<CacheManager>()) {
     getIt<CacheManager>().clearAll();
+  }
+
+  // 关闭数据库连接（必须在 getIt.reset() 之前完成）
+  if (getIt.isRegistered<DatabaseHelper>()) {
+    await getIt<DatabaseHelper>().close();
   }
 
   // 释放核心桥接层（逆序）

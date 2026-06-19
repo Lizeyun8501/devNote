@@ -207,24 +207,14 @@ class EditorService {
   }
 
   Future<List<BlockModel>> parseMarkdown({required String content, required String noteId}) async {
-    // 优先通过 Rust 端 devnote-editor 引擎执行（9 种块类型 + 表格/任务列表子解析器）
-    final ffiBlocks = await _tryParseViaFfi(content, noteId);
-    if (ffiBlocks != null) {
-      await _persistBlocks(noteId, ffiBlocks);
-      _noteBlocks[noteId] = List<BlockModel>.from(ffiBlocks);
-      return ffiBlocks;
-    }
-    // FFI 不可用时回退到 Dart 侧实现（5 种基础块类型）
+    // 修复(P2): 删除 _tryParseViaFfi 死代码（原方法永远返回 null，FFIBridge 尚未实现 parseMarkdown）。
+    // 直接使用 Dart 侧实现（5 种基础块类型）。
+    // TODO: FFIBridge 实现 parseMarkdown 后，优先通过 Rust 端 devnote-editor 引擎执行
+    // （9 种块类型 + 表格/任务列表子解析器），Dart 实现作为 FFI 不可用时的兜底。
     return await _parseMarkdownDart(content: content, noteId: noteId);
   }
 
-  /// 尝试通过 FFI 调 Rust 解析器；不可用或失败时返回 null
-  Future<List<BlockModel>?> _tryParseViaFfi(String content, String noteId) async {
-    // FFIBridge 尚未实现 parseMarkdown 方法，直接回退到 Dart 解析器
-    return null;
-  }
 
-  
 
   /// 将块列表持久化到 SQLite（思源笔记风格：先清空再批量插入）
   /// 修复：将 DELETE + INSERT 包装在事务中，确保原子性
