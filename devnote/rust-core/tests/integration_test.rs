@@ -2,6 +2,8 @@
 // 集成测试：覆盖 FFI 生命周期、CRDT HLC 排序、持久化 Schema CRUD
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod integration_tests {
     use std::ffi::CStr;
     use serde_json::json;

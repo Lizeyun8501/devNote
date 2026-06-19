@@ -909,6 +909,8 @@ pub fn detect_conflicts(local: &CRDTDocument, remote_ops: &[Operation]) -> Vec<C
 }
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod tests {
     use super::*;
 
