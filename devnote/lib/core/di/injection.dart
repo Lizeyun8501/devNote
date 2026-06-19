@@ -10,22 +10,16 @@ import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
-import 'package:devnote/features/ai/ai_service.dart';
-import 'package:devnote/features/ai/embedding_service.dart';
-import 'package:devnote/features/ai/ollama_client.dart';
-import 'package:devnote/features/ai/semantic_search_service.dart';
-import 'package:devnote/features/plugins/plugin_service.dart';
-import 'package:devnote/features/settings/crypto/crypto_service.dart';
-import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
-import 'package:devnote/features/sync/incremental_sync_service.dart';
-import 'package:devnote/features/sync/p2p/p2p_service.dart';
-import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
-import 'package:devnote/features/sync/sync_service.dart';
-import 'package:devnote/features/workflow/external_editor_sync.dart';
-import 'package:devnote/features/workflow/file_watcher_service.dart';
+
+/// 修复(P1): 移除所有 features/* 导入，消除 core → features 的反向依赖。
+/// 原实现导入了 13 个 features 模块，违反依赖倒置原则。
+/// features 层各自提供 register<Module>Dependencies() 和 dispose<Module>() 函数
+/// （如 ai_module.dart），由 main.dart 在 setupDependencies() 之后顺序调用。
 
 final GetIt getIt = GetIt.instance;
 
+/// 注册 core 层依赖（bridges / dispatch / performance / database / config / logger）。
+/// features 层依赖由各自的 *_module.dart register 函数注册，由 main.dart 调用。
 Future<void> setupDependencies() async {
   // Core bridges (eager singletons)
   getIt.registerSingleton<FFIBridge>(FFIBridge());
@@ -49,87 +43,18 @@ Future<void> setupDependencies() async {
 
   // 统一日志模块 —— 借鉴 log4j 的日志级别设计
   getIt.registerSingleton<AppLogger>(AppLogger.instance);
-
-  // Services
-  getIt.registerLazySingleton<PluginService>(() => PluginService());
-  getIt.registerLazySingleton<CryptoService>(() => CryptoService());
-  getIt.registerLazySingleton<E2ECryptoService>(() => E2ECryptoService());
-  getIt.registerLazySingleton<P2PService>(() => P2PService());
-  getIt.registerLazySingleton<SyncService>(() => SyncService());
-  getIt.registerLazySingleton<IncrementalSyncService>(
-    () => IncrementalSyncService(),
-  );
-  getIt.registerLazySingleton<FileWatcherService>(() => FileWatcherService());
-  getIt.registerLazySingleton<ExternalEditorSyncService>(
-    () => ExternalEditorSyncService(),
-  );
-
-  // ============================================================
-  // AI 服务层 —— 借鉴 AppFlowy Vault 的本地 Ollama 集成
-  // 注册顺序：OllamaClient → EmbeddingService → AIService → SemanticSearchService
-  // 所有 AI 功能默认关闭，需用户在 AI 设置页配置 Ollama 后显式启用
-  // ============================================================
-  getIt.registerLazySingleton<OllamaClient>(
-    () => OllamaClient(baseUrl: 'http://localhost:11434', model: 'llama3'),
-  );
-  getIt.registerLazySingleton<EmbeddingService>(
-    () => EmbeddingService(ollamaClient: getIt<OllamaClient>()),
-  );
-  getIt.registerLazySingleton<AIService>(
-    () => AIService(ollamaClient: getIt<OllamaClient>()),
-  );
-  getIt.registerLazySingleton<SemanticSearchService>(
-    () => SemanticSearchService(
-      databaseHelper: getIt<DatabaseHelper>(),
-      embeddingService: getIt<EmbeddingService>(),
-    ),
-  );
-
-  // 实时协作服务 —— 借鉴 Anytype any-sync 与 Logseq RTC 的实时协作架构
-  // 注册为单例，全局共享一个 WebSocket 连接与操作日志缓冲区
-  final realtimeCollabService = RealtimeCollabService();
-  await realtimeCollabService.initialize();
-  getIt.registerSingleton<RealtimeCollabService>(realtimeCollabService);
 }
 
-/// 统一释放所有已注册单例的资源
+/// 释放 core 层已注册单例的资源。
+/// features 层服务的释放由各自的 dispose<Module>() 函数负责，由 main.dart 调用。
 ///
 /// 调用时机：
 /// - 应用退出前（通过 WidgetsBindingObserver.didRequestAppExit）
 /// - 测试 tearDown 中清理全局状态
-///
-/// 借鉴 Flutter 官方 dispose 模式：按注册顺序逆序释放，避免依赖倒置
-void disposeAll() {
+void disposeCore() {
   if (!getIt.isRegistered<FFIBridge>()) return;
 
-  // 先释放有 dispose/close 方法的高级服务
-  if (getIt.isRegistered<SyncService>()) {
-    getIt<SyncService>().dispose();
-  }
-  if (getIt.isRegistered<IncrementalSyncService>()) {
-    getIt<IncrementalSyncService>().dispose();
-  }
-  if (getIt.isRegistered<P2PService>()) {
-    getIt<P2PService>().dispose();
-  }
-  if (getIt.isRegistered<ExternalEditorSyncService>()) {
-    getIt<ExternalEditorSyncService>().dispose();
-  }
-  if (getIt.isRegistered<FileWatcherService>()) {
-    getIt<FileWatcherService>().dispose();
-  }
-  // 释放实时协作服务（关闭 WebSocket 连接、持久化操作缓冲区）
-  if (getIt.isRegistered<RealtimeCollabService>()) {
-    getIt<RealtimeCollabService>().dispose();
-  }
-  // 释放 AI 服务层资源（关闭 Ollama HTTP 客户端、状态流）
-  if (getIt.isRegistered<AIService>()) {
-    getIt<AIService>().dispose();
-  }
-  if (getIt.isRegistered<OllamaClient>()) {
-    getIt<OllamaClient>().dispose();
-  }
-  // 修复：释放 CacheManager 缓存资源
+  // 释放 core 层缓存
   if (getIt.isRegistered<CacheManager>()) {
     getIt<CacheManager>().clearAll();
   }
@@ -144,7 +69,4 @@ void disposeAll() {
   if (getIt.isRegistered<FFIBridge>()) {
     getIt<FFIBridge>().dispose();
   }
-
-  // 清空 GetIt 容器
-  getIt.reset();
 }

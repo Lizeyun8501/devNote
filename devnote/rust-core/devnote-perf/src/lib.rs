@@ -237,99 +237,43 @@ impl BlockCache {
     }
 }
 
-mod rusqlite {
-    pub struct Connection;
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct OpenFlags(u32);
-
-    impl OpenFlags {
-        pub const SQLITE_OPEN_READ_ONLY: OpenFlags = OpenFlags(0x00000001);
-        pub const SQLITE_OPEN_NO_MUTEX: OpenFlags = OpenFlags(0x00008000);
-    }
-
-    impl std::ops::BitOr for OpenFlags {
-        type Output = Self;
-        fn bitor(self, rhs: Self) -> Self {
-            OpenFlags(self.0 | rhs.0)
-        }
-    }
-
-    impl Connection {
-        pub fn open(_path: &str) -> anyhow::Result<Self> {
-            Ok(Connection)
-        }
-
-        pub fn open_with_flags(
-            _path: &str,
-            _flags: OpenFlags,
-        ) -> anyhow::Result<Self> {
-            Ok(Connection)
-        }
-
-        pub fn execute_batch(&self, _sql: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-}
-
+/// 修复(P1): 原实现包含一个伪造的 `mod rusqlite` 模块，其中 `Connection::open` 永远返回
+/// 空 Connection，`execute_batch` 永远返回 `Ok(())` 但什么都不做。这会导致
+/// `SqliteConnectionPool` 的调用方获得"静默成功"，实际数据丢失。
+///
+/// 修复方案：删除伪造模块，`SqliteConnectionPool` 的所有方法改为返回
+/// `anyhow::Error`，明确告知调用方此实现不可用。
+/// 真实 SQLite 连接池应由 `devnote-persistence`（已依赖 rusqlite）提供。
 pub struct SqliteConnectionPool {
-    read_connections: Vec<Mutex<Option<rusqlite::Connection>>>,
-    write_connection: Mutex<Option<rusqlite::Connection>>,
     database_path: String,
     read_count: usize,
-    current_read: Mutex<usize>,
 }
 
 impl SqliteConnectionPool {
     pub fn new(database_path: &str, read_pool_size: usize) -> Self {
-        let mut read_connections = Vec::with_capacity(read_pool_size);
-        for _ in 0..read_pool_size {
-            read_connections.push(Mutex::new(None));
-        }
         Self {
-            read_connections,
-            write_connection: Mutex::new(None),
             database_path: database_path.to_string(),
             read_count: read_pool_size,
-            current_read: Mutex::new(0),
         }
     }
 
-    pub fn get_read_connection(&self) -> Result<std::sync::MutexGuard<'_, Option<rusqlite::Connection>>> {
-        let idx = {
-            let mut current = self
-                .current_read
-                .lock()
-                .expect("current_read mutex poisoned");
-            let idx = *current % self.read_count;
-            *current = (*current + 1) % self.read_count;
-            idx
-        };
-        let mut guard = self.read_connections[idx]
-            .lock()
-            .expect("read connection slot mutex poisoned");
-        if guard.is_none() {
-            let conn = rusqlite::Connection::open_with_flags(
-                &self.database_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            *guard = Some(conn);
-        }
-        Ok(guard)
+    /// 修复(P1): 原实现使用伪造 rusqlite::Connection，静默成功。
+    /// 改为返回明确错误，引导调用方使用 devnote-persistence 的真实连接池。
+    pub fn get_read_connection(&self) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "SqliteConnectionPool.get_read_connection: not implemented. \
+             Use devnote-persistence's connection pool instead. (database_path={}, read_count={})",
+            self.database_path, self.read_count
+        ))
     }
 
-    pub fn get_write_connection(&self) -> Result<std::sync::MutexGuard<'_, Option<rusqlite::Connection>>> {
-        let mut guard = self
-            .write_connection
-            .lock()
-            .expect("write connection mutex poisoned");
-        if guard.is_none() {
-            let conn = rusqlite::Connection::open(&self.database_path)?;
-            conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-            *guard = Some(conn);
-        }
-        Ok(guard)
+    /// 修复(P1): 同上。
+    pub fn get_write_connection(&self) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "SqliteConnectionPool.get_write_connection: not implemented. \
+             Use devnote-persistence's connection pool instead. (database_path={})",
+            self.database_path
+        ))
     }
 }
 

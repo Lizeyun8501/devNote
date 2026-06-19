@@ -26,11 +26,26 @@ import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
 import 'package:devnote/core/platform/platform_channel.dart';
 
+// 修复(P1): features 层依赖注册从 core/di 迁移至各 feature 模块自注册，
+// 消除 core → features 的反向依赖。
+import 'package:devnote/features/ai/ai_module.dart';
+import 'package:devnote/features/plugins/plugins_module.dart';
+import 'package:devnote/features/settings/settings_module.dart';
+import 'package:devnote/features/sync/sync_module.dart';
+import 'package:devnote/features/workflow/workflow_module.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize dependency injection
+  // Initialize core dependency injection (core layer only)
   await setupDependencies();
+
+  // 修复(P1): features 层依赖由各自模块注册，消除 core → features 反向依赖
+  await registerPluginsDependencies();
+  await registerSettingsDependencies();
+  await registerSyncDependencies();
+  await registerWorkflowDependencies();
+  await registerAIDependencies();
 
   // 修复：Sentry 初始化提前到 FFI Bridge 之前，确保 FFI 初始化过程中的
   // 错误能被 Sentry 捕获上报，防止启动阶段异常丢失
@@ -79,6 +94,9 @@ class DevNoteApp extends StatefulWidget {
 /// 修复：添加 WidgetsBindingObserver 监听应用退出事件
 /// 原代码应用退出时不调用 disposeAll()，导致 SyncService/P2PService 等
 /// 单例资源未释放，可能造成数据丢失（如未完成的同步操作）
+///
+/// 修复(P1): disposeAll 拆分为各 feature 模块的 dispose 函数 + disposeCore()，
+/// 消除 core/di 对 features 的反向依赖。
 class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   @override
   void initState() {
@@ -89,15 +107,24 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    disposeAll();
+    _disposeAll();
     super.dispose();
   }
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
     // 应用退出前释放所有单例资源
-    disposeAll();
+    _disposeAll();
     return AppExitResponse.exit;
+  }
+
+  /// 统一释放所有模块资源：先释放 features 层（逆序），再释放 core 层。
+  void _disposeAll() {
+    disposeAIModule();
+    disposeWorkflowModule();
+    disposeSyncModule();
+    disposeCore();
+    getIt.reset();
   }
 
   @override
