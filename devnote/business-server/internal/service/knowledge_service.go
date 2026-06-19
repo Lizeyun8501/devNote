@@ -290,7 +290,11 @@ func (s *KnowledgeService) ComputeMetrics() (*model.GraphMetrics, error) {
 	clusters := s.findClusters(nodes, adj)
 
 	// Orphans
-	orphans := s.FindOrphanNotes()
+	// 修复(P0): 传播 FindOrphanNotes 的错误，而非忽略。
+	orphans, err := s.FindOrphanNotes()
+	if err != nil {
+		return nil, fmt.Errorf("find orphan notes: %w", err)
+	}
 
 	avgDegree := 0.0
 	if totalNodes > 0 {
@@ -474,7 +478,9 @@ func (s *KnowledgeService) findClusters(nodes []string, adj map[string]map[strin
 // ----------------------------------------------------------------
 
 // FindOrphanNotes returns note IDs that have no knowledge relations.
-func (s *KnowledgeService) FindOrphanNotes() []string {
+// 修复(P0): 原签名返回 []string 且出错时返回 nil，调用方无法区分"无孤儿"和"查询失败"。
+// 改为返回 ([]string, error) 以正确传播数据库错误。
+func (s *KnowledgeService) FindOrphanNotes() ([]string, error) {
 	rows, err := s.db.Query(`
 		SELECT nm.id FROM note_meta nm
 		WHERE NOT EXISTS (
@@ -482,7 +488,7 @@ func (s *KnowledgeService) FindOrphanNotes() []string {
 		)
 	`)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("query orphan notes: %w", err)
 	}
 	defer rows.Close()
 
@@ -490,14 +496,14 @@ func (s *KnowledgeService) FindOrphanNotes() []string {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			continue
+			return nil, fmt.Errorf("scan orphan note id: %w", err)
 		}
 		orphans = append(orphans, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("iterate orphan notes: %w", err)
 	}
-	return orphans
+	return orphans, nil
 }
 
 // ----------------------------------------------------------------
@@ -622,7 +628,10 @@ func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
 		return nil, fmt.Errorf("count notes: %w", err)
 	}
 
-	orphans := s.FindOrphanNotes()
+	orphans, err := s.FindOrphanNotes()
+	if err != nil {
+		return nil, fmt.Errorf("find orphan notes: %w", err)
+	}
 	orphanCount := len(orphans)
 
 	var totalLinks int

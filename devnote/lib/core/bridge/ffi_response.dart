@@ -4,17 +4,21 @@ import 'dart:typed_data';
 
 /// FFI C 结构体 —— 用于 native 库返回的响应
 ///
-/// 修复: 旧 grpc_bridge.dart / websocket_bridge.dart 引用了 FFIResponseC,
-/// 但实际从未定义,导致编译失败。添加最小的 C struct 兼容层,
-/// 仅用于满足 typedef 引用,不参与实际数据传输。
+/// 字段顺序与 Rust 端 `devnote-ffi/src/lib.rs` 的 `#[repr(C)] FFIResponse`
+/// 及 C 头文件 `devnote_ffi.h` 严格一致：
+///   Rust:  { code: i32, message: *mut c_char, data: *mut c_char }
+///   C:     { int32_t code, char *message, char *data }
+///   Dart:  { @Int32 code, Pointer<Utf8> message, Pointer<Utf8> data }
+///
+/// 修复(P0): 旧定义字段顺序为 data/data_len/code/message，与 Rust/C 不一致，
+/// 且多出 data_len 字段（Rust 从未写入），导致读取未初始化内存。
+/// 现统一为 code/message/data 三字段顺序，移除 data_len。
+/// data 为 CString（null-terminated），通过 toDartString() 读取长度。
 base class FFIResponseC extends Struct {
-  external Pointer<Uint8> data;
-  @Size()
-  external int data_len;
   @Int32()
   external int code;
-  // 兼容层: 旧代码通过 .ref.message (Pointer<Uint8>) 访问响应内容
-  external Pointer<Uint8> message;
+  external Pointer<Utf8> message;
+  external Pointer<Utf8> data;
 }
 
 class FFIResponse {

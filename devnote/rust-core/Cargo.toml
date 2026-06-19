@@ -35,6 +35,10 @@ members = [
     "devnote-events",
     "devnote-database",
     "devnote-object",
+    # 修复(P0): devnote-observe 此前遗漏为 workspace 成员，但其 Cargo.toml
+    # 使用了 version.workspace = true 等 workspace 继承字段，非成员无法解析，
+    # 导致依赖它的 crate（如 devnote-core）构建失败。
+    "devnote-observe",
 ]
 resolver = "2"
 

@@ -221,11 +221,15 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 // generateToken 签发 HS256 JWT
 //
 // 借鉴 1Password 的"短生命周期 access token"策略：有效期 72 小时。
+// 修复(P0): 在 RegisteredClaims 中设置 Subject = user.ID，
+// 使 business-server 通过标准 JWT "sub" 字段获取用户 ID 成为可能。
+// 同时保留自定义 user_id/username 字段以兼容 sync-server 内部使用。
 func (s *AuthService) generateToken(user *model.User) (string, error) {
 	claims := &model.Claims{
 		UserID:   user.ID,
 		Username: user.Username,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   user.ID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(72 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},

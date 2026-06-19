@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -116,19 +117,16 @@ class GrpcBridge {
 
   FFIResponse _readResponse(Pointer<FFIResponseC> ptr) {
     final code = ptr.ref.code;
-    // 修复: 原代码对 Pointer<Uint8> 调用 toDartString() 不存在,改为 cast 到 Pointer<Utf8>
-    final message = ptr.ref.message.cast<Utf8>().toDartString();
+    // message 为 CString（null-terminated），直接用 toDartString() 读取
+    final message = ptr.ref.message.toDartString();
     final dataPtr = ptr.ref.data;
 
     Uint8List? data;
     if (dataPtr != nullptr) {
-      // 修复: 原代码将字节流误用 toDartString 后取 codeUnits,
-      // 正确做法是按 data_len 长度复制字节
-      final length = ptr.ref.data_len;
-      data = Uint8List(length);
-      for (var i = 0; i < length; i++) {
-        data[i] = dataPtr.elementAt(i).value;
-      }
+      // 修复(P0): data 为 CString（null-terminated UTF-8），
+      // 用 toDartString() 取字符串后转字节，替代旧代码读取未初始化的 data_len
+      final dataStr = dataPtr.toDartString();
+      data = Uint8List.fromList(utf8.encode(dataStr));
     }
 
     return FFIResponse(code: code, message: message, data: data);

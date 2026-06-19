@@ -46,8 +46,11 @@ func (s *FolderService) Create(folder *model.FolderMeta) (*model.FolderMeta, err
 	}
 
 	// Update parent's child_count
+	// 修复(P0): 原代码忽略 child_count 更新错误，统计数据可能永久错误。
 	if folder.ParentID != "" {
-		s.db.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=?`, folder.ParentID)
+		if _, err := s.db.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=?`, folder.ParentID); err != nil {
+			return nil, fmt.Errorf("update parent child_count: %w", err)
+		}
 	}
 
 	return folder, nil
@@ -106,7 +109,10 @@ func (s *FolderService) Delete(id string, cascade bool) error {
 			return err
 		}
 		for _, childID := range children {
-			tx.Exec(`DELETE FROM folder_meta WHERE id=?`, childID)
+			// 修复(P0): 原代码忽略级联删除错误，可能导致子文件夹残留。
+			if _, err := tx.Exec(`DELETE FROM folder_meta WHERE id=?`, childID); err != nil {
+				return fmt.Errorf("delete descendant %s: %w", childID, err)
+			}
 		}
 	}
 
@@ -121,8 +127,11 @@ func (s *FolderService) Delete(id string, cascade bool) error {
 	}
 
 	// Update parent's child_count
+	// 修复(P0): 原代码忽略 child_count 更新错误。
 	if parentID != "" {
-		tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=?`, parentID)
+		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=?`, parentID); err != nil {
+			return fmt.Errorf("update parent child_count: %w", err)
+		}
 	}
 
 	return tx.Commit()
@@ -229,13 +238,18 @@ func (s *FolderService) MoveFolder(folderID, newParentID string) error {
 	}
 
 	// Update old parent child_count
+	// 修复(P0): 原代码忽略 child_count 更新错误，统计数据可能永久错误。
 	if oldParentID != "" {
-		tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=?`, oldParentID)
+		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=?`, oldParentID); err != nil {
+			return fmt.Errorf("update old parent child_count: %w", err)
+		}
 	}
 
 	// Update new parent child_count
 	if newParentID != "" {
-		tx.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=?`, newParentID)
+		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=?`, newParentID); err != nil {
+			return fmt.Errorf("update new parent child_count: %w", err)
+		}
 	}
 
 	return tx.Commit()

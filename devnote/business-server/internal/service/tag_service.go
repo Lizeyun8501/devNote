@@ -186,7 +186,11 @@ func (s *TagService) GetHierarchy(tagID string) ([]model.TagMeta, error) {
 func (s *TagService) LinkTagToNote(tagID, noteID string) (*model.TagRelation, error) {
 	// Check for existing link
 	var cnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=? AND note_id=?`, tagID, noteID).Scan(&cnt)
+	// 修复(P0): 原代码忽略 QueryRow.Scan 的错误，DB 异常时 cnt 为 0，
+	// 导致重复插入而非返回"already linked"错误。
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=? AND note_id=?`, tagID, noteID).Scan(&cnt); err != nil {
+		return nil, fmt.Errorf("check existing link: %w", err)
+	}
 	if cnt > 0 {
 		return nil, fmt.Errorf("tag %s already linked to note %s", tagID, noteID)
 	}
@@ -205,7 +209,10 @@ func (s *TagService) LinkTagToNote(tagID, noteID string) (*model.TagRelation, er
 	}
 
 	// Update use count
-	s.db.Exec(`UPDATE tag_meta SET use_count = use_count + 1 WHERE id=?`, tagID)
+	// 修复(P0): 原代码忽略 Exec 错误，use_count 更新失败时统计数据永久错误。
+	if _, err := s.db.Exec(`UPDATE tag_meta SET use_count = use_count + 1 WHERE id=?`, tagID); err != nil {
+		return nil, fmt.Errorf("update tag use_count: %w", err)
+	}
 
 	return rel, nil
 }
@@ -216,7 +223,10 @@ func (s *TagService) UnlinkTagFromNote(tagID, noteID string) error {
 	if err != nil {
 		return fmt.Errorf("unlink tag: %w", err)
 	}
-	s.db.Exec(`UPDATE tag_meta SET use_count = MAX(use_count - 1, 0) WHERE id=?`, tagID)
+	// 修复(P0): 原代码忽略 use_count 更新错误，统计数据可能永久错误。
+	if _, err := s.db.Exec(`UPDATE tag_meta SET use_count = MAX(use_count - 1, 0) WHERE id=?`, tagID); err != nil {
+		return fmt.Errorf("update tag use_count: %w", err)
+	}
 	return nil
 }
 
@@ -318,9 +328,15 @@ func (s *TagService) MergeTags(sourceTagID, targetTagID string) error {
 	}
 
 	// Update use count for target
+	// 修复(P0): 原代码忽略 tx.QueryRow 和 tx.Exec 错误，
+	// 事务提交后 use_count 可能与实际关联数不一致。
 	var cnt int
-	tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, targetTagID).Scan(&cnt)
-	tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, cnt, targetTagID)
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, targetTagID).Scan(&cnt); err != nil {
+		return fmt.Errorf("count target relations: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, cnt, targetTagID); err != nil {
+		return fmt.Errorf("update target use_count: %w", err)
+	}
 
 	// Delete source tag
 	if _, err := tx.Exec(`DELETE FROM tag_meta WHERE id=?`, sourceTagID); err != nil {
@@ -363,13 +379,23 @@ func (s *TagService) SplitTag(sourceTagID, newTagName string, noteIDs []string) 
 	}
 
 	// Update use counts
+	// 修复(P0): 原代码忽略 tx.QueryRow 和 tx.Exec 错误，
+	// 事务提交后 use_count 可能与实际关联数不一致。
 	var srcCount int
-	tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, sourceTagID).Scan(&srcCount)
-	tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, srcCount, sourceTagID)
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, sourceTagID).Scan(&srcCount); err != nil {
+		return nil, fmt.Errorf("count source relations: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, srcCount, sourceTagID); err != nil {
+		return nil, fmt.Errorf("update source use_count: %w", err)
+	}
 
 	var newCount int
-	tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, newTag.ID).Scan(&newCount)
-	tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, newCount, newTag.ID)
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM tag_relation WHERE tag_id=?`, newTag.ID).Scan(&newCount); err != nil {
+		return nil, fmt.Errorf("count new tag relations: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE tag_meta SET use_count=? WHERE id=?`, newCount, newTag.ID); err != nil {
+		return nil, fmt.Errorf("update new tag use_count: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit tx: %w", err)

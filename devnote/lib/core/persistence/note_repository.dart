@@ -49,9 +49,13 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<NoteModel?> getNote(String id) async {
     if (_useFFI) {
-      final items = await _dispatch.list(entity: 'note', filter: {'id': id});
-      if (items.isEmpty) return null;
-      return NoteModel.fromJson(items.first);
+      // 修复(P0): 原代码调用 _dispatch.list(filter: {'id': id})，
+      // 但 PersistenceDispatch.list 对 'note' 实体只读取 filter['folder_id']，
+      // 完全忽略 filter['id']，实际调用 listNotes('') 返回所有根目录笔记再取第一个，
+      // 返回的是错误的笔记。改用 _dispatch.get() 直接调用 Dispatch.getNote(id)。
+      final result = await _dispatch.get(entity: 'note', id: id);
+      if (result == null) return null;
+      return NoteModel.fromJson(result);
     }
     developer.log('FFI not available, falling back to sqflite for getNote', level: 900);
     final db = await _dbHelper.database;
@@ -118,12 +122,14 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0}) async {
     if (_useFFI) {
-      final items = await _dispatch.list(entity: 'note', filter: {
-        'folder_id': folderId,
-        'limit': limit,
-        'offset': offset,
-      });
-      return items.map((json) => NoteModel.fromJson(json)).toList();
+      // 修复(P0): 原代码将 limit/offset 放入 filter 传给 _dispatch.list，
+      // 但 PersistenceDispatch.list 对 'note' 实体只读取 filter['folder_id']，
+      // 完全忽略 limit/offset，每次"加载更多"都返回全量数据，分页失效。
+      // FFI listNotes 不支持原生分页，此处先取全量再客户端分页。
+      // TODO: Rust 端 listNotes 应增加 limit/offset 参数以支持服务端分页。
+      final items = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
+      final paged = items.skip(offset).take(limit).toList();
+      return paged.map((json) => NoteModel.fromJson(json)).toList();
     }
     developer.log('FFI not available, falling back to sqflite for listNotesPaged', level: 900);
     final db = await _dbHelper.database;

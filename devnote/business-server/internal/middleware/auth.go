@@ -55,7 +55,20 @@ func JWTAuth(secret string) gin.HandlerFunc {
 			return
 		}
 
+		// 修复(P0): 优先读取标准 JWT "sub" 字段（sync-server generateToken 已设置），
+		// 回退到自定义 "user_id" 字段以兼容旧 token。
+		// 原代码仅读 "sub"，但 sync-server 旧版未设置 Subject，导致 user_id 永远为空。
 		userID, _ := claims["sub"].(string)
+		if userID == "" {
+			userID, _ = claims["user_id"].(string)
+		}
+		if userID == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "token missing user identity",
+			})
+			return
+		}
 		c.Set("user_id", userID)
 		c.Next()
 	}

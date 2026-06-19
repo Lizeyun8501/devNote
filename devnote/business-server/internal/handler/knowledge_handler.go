@@ -100,7 +100,13 @@ func (h *KnowledgeHandler) ComputeMetrics(c *gin.Context) {
 
 // FindOrphans handles GET /api/v1/knowledge/graph/orphans
 func (h *KnowledgeHandler) FindOrphans(c *gin.Context) {
-	orphans := h.svc.FindOrphanNotes()
+	// 修复(P0): 传播 FindOrphanNotes 的错误，而非忽略。
+	orphans, err := h.svc.FindOrphanNotes()
+	if err != nil {
+		h.logger.Error("find orphan notes failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: orphans})
 }
 
