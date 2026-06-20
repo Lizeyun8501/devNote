@@ -1,4 +1,5 @@
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/models/timeline_marker.dart';
 
 sealed class EditorState {
   const EditorState();
@@ -20,6 +21,11 @@ final class EditorLoaded extends EditorState {
   final List<List<BlockModel>> redoStack;
   final int maxUndoLevels;
 
+  /// 时间轴录音相关状态
+  final bool isTimelineRecording;
+  final List<TimelineMarker> timelineMarkers;
+  final String? currentAudioBlockId;
+
   const EditorLoaded({
     required this.noteId,
     required this.blocks,
@@ -27,6 +33,9 @@ final class EditorLoaded extends EditorState {
     this.undoStack = const [],
     this.redoStack = const [],
     this.maxUndoLevels = 50,
+    this.isTimelineRecording = false,
+    this.timelineMarkers = const [],
+    this.currentAudioBlockId,
   });
 
   EditorLoaded pushUndo(List<BlockModel> previousBlocks) {
@@ -62,14 +71,24 @@ final class EditorLoaded extends EditorState {
     List<List<BlockModel>>? undoStack,
     List<List<BlockModel>>? redoStack,
     int? maxUndoLevels,
+    bool? isTimelineRecording,
+    List<TimelineMarker>? timelineMarkers,
+    Object? currentAudioBlockId = _sentinel,
   }) {
     return EditorLoaded(
       noteId: noteId ?? this.noteId,
       blocks: blocks ?? this.blocks,
-      activeBlockId: activeBlockId == _sentinel ? this.activeBlockId : activeBlockId as String?,
+      activeBlockId: activeBlockId == _sentinel
+          ? this.activeBlockId
+          : activeBlockId as String?,
       undoStack: undoStack ?? this.undoStack,
       redoStack: redoStack ?? this.redoStack,
       maxUndoLevels: maxUndoLevels ?? this.maxUndoLevels,
+      isTimelineRecording: isTimelineRecording ?? this.isTimelineRecording,
+      timelineMarkers: timelineMarkers ?? this.timelineMarkers,
+      currentAudioBlockId: currentAudioBlockId == _sentinel
+          ? this.currentAudioBlockId
+          : currentAudioBlockId as String?,
     );
   }
 }

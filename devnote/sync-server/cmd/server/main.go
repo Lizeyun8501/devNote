@@ -135,6 +135,10 @@ func main() {
 			sync.POST("/pull", syncHandler.Pull)
 			sync.GET("/status", syncHandler.Status)
 			sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
+
+			// 版本历史
+			sync.GET("/notes/:noteId/history", syncHandler.GetNoteHistory)
+			sync.GET("/notes/:noteId/versions/:version", syncHandler.GetNoteVersion)
 		}
 
 		// Clipper API (protected) —— 网页剪藏扩展入口

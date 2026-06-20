@@ -16,6 +16,7 @@ import 'package:devnote/features/notes/widgets/note_list.dart';
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/sync_status_widget.dart';
+import 'package:devnote/features/templates/template_picker_page.dart';
 
 class NotesPage extends StatelessWidget {
   const NotesPage({super.key, required this.child});
@@ -209,7 +210,21 @@ class NotesListPlaceholder extends StatelessWidget {
               if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
                 folderId = folderState.selectedFolderId!;
               }
-              context.read<NotesBloc>().add(CreateNote(title: '无标题', folderId: folderId));
+              // P1-3: 打开模板选择页，选择模板后从模板创建笔记
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => TemplatePickerPage(
+                    onTemplateSelected: (template) {
+                      context.read<NotesBloc>().add(
+                            CreateNoteFromTemplate(
+                              template: template,
+                              folderId: folderId,
+                            ),
+                          );
+                    },
+                  ),
+                ),
+              );
             },
             child: const Icon(Icons.add),
           ),

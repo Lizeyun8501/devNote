@@ -7,6 +7,8 @@ import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/services/editor_service.dart';
 
 class NotesBloc extends Bloc<NotesEvent, NotesState> {
   final NoteRepository _noteRepository;
@@ -16,6 +18,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
   NotesBloc(this._noteRepository) : _dbHelper = getIt<DatabaseHelper>(), super(const NotesInitial()) {
     on<LoadNotes>(_onLoadNotes);
     on<CreateNote>(_onCreateNote);
+    on<CreateNoteFromTemplate>(_onCreateNoteFromTemplate);
     on<DeleteNote>(_onDeleteNote);
     on<SelectNote>(_onSelectNote);
     on<SearchNotes>(_onSearchNotes);
@@ -65,6 +68,56 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     } catch (e) {
       emit(NotesError(e.toString()));
     }
+  }
+
+  /// P1-3: 从模板创建笔记 —— 先创建空笔记，再将模板块逐个持久化到 SQLite。
+  /// 块通过 EditorService.createBlock 写入，与编辑器共享同一持久化路径，
+  /// 用户打开笔记时 EditorBloc.loadBlocks 可正确回读。
+  Future<void> _onCreateNoteFromTemplate(
+      CreateNoteFromTemplate event, Emitter<NotesState> emit) async {
+    try {
+      final now = DateTime.now();
+      final note = NoteModel(
+        id: _uuid.v4(),
+        title: event.template.name,
+        content: '',
+        folderId: event.folderId,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final created = await _noteRepository.createNote(note);
+      // 应用模板块：按 position 顺序逐个创建（笔记为空，无需位置重排）
+      final editorService = getIt<EditorService>();
+      final blocks = event.template.blocks;
+      for (var i = 0; i < blocks.length; i++) {
+        await editorService.createBlock(
+          noteId: created.id,
+          blockType: _blockTypeFromName(blocks[i].type),
+          content: blocks[i].content,
+          position: i,
+        );
+      }
+      final currentState = state;
+      if (currentState is NotesLoaded) {
+        final notes = List<NoteModel>.from(currentState.notes)
+          ..insert(0, created);
+        emit(currentState.copyWith(notes: notes, selectedNoteId: created.id));
+      } else {
+        emit(NotesLoaded(notes: [created], selectedNoteId: created.id));
+      }
+    } catch (e) {
+      emit(NotesError(e.toString()));
+    }
+  }
+
+  /// 将模板的块类型字符串映射为编辑器 BlockType 枚举。
+  /// 模板类型名与 BlockType.name 一一对应（paragraph/heading1/codeBlock 等），
+  /// 未知类型回退为 paragraph。
+  BlockType _blockTypeFromName(String name) {
+    return BlockType.values.firstWhere(
+      (e) => e.name == name,
+      orElse: () => BlockType.paragraph,
+    );
   }
 
   Future<void> _onDeleteNote(DeleteNote event, Emitter<NotesState> emit) async {

@@ -1,18 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:uuid/uuid.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/bloc/editor_bloc.dart';
 import 'package:devnote/features/editor/bloc/editor_event.dart';
 import 'package:devnote/features/editor/bloc/editor_state.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
+import 'package:devnote/features/editor/services/timeline_recorder_service.dart';
 import 'package:devnote/features/editor/widgets/block_widget.dart';
 import 'package:devnote/features/editor/widgets/block_toolbar.dart';
 import 'package:devnote/features/editor/widgets/voice_recorder_widget.dart';
 import 'package:devnote/features/editor/widgets/editor_shortcuts.dart';
 import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
 import 'package:devnote/core/performance/virtual_scroll_controller.dart';
+import 'package:devnote/features/notes/version_history_page.dart';
 
 class EditorPage extends StatelessWidget {
   const EditorPage({super.key, required this.noteId});
@@ -25,6 +30,7 @@ class EditorPage extends StatelessWidget {
       create: (context) => EditorBloc(
         getIt<EditorService>(),
         collabService: getIt<RealtimeCollabService>(),
+        timelineRecorderService: getIt<TimelineRecorderService>(),
       )..add(LoadNote(noteId)),
       child: const _EditorView(),
     );
@@ -43,6 +49,13 @@ class _EditorViewState extends State<_EditorView> {
   final VirtualScrollController _virtualScrollController = VirtualScrollController();
   static const double _blockHeight = 80.0;
 
+  /// 时间轴录音计时器（每秒刷新已录时长显示）
+  Timer? _recordingTimer;
+  Duration _recordingElapsed = Duration.zero;
+
+  /// 各 block 的 GlobalKey，用于点击时间轴标记时滚动定位到对应文本块
+  final Map<String, GlobalKey> _blockKeys = {};
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +64,7 @@ class _EditorViewState extends State<_EditorView> {
 
   @override
   void dispose() {
+    _recordingTimer?.cancel();
     _titleController.dispose();
     _virtualScrollController.dispose();
     super.dispose();
@@ -58,17 +72,29 @@ class _EditorViewState extends State<_EditorView> {
 
   @override
   Widget build(BuildContext context) {
-    return EditorShortcuts(
-      onSave: () {
-        // Save is handled automatically by the bloc on each change
+    return BlocListener<EditorBloc, EditorState>(
+      listenWhen: (prev, curr) =>
+          prev is EditorLoaded &&
+          curr is EditorLoaded &&
+          prev.isTimelineRecording != curr.isTimelineRecording,
+      listener: (context, state) {
+        if (state is EditorLoaded && state.isTimelineRecording) {
+          _startRecordingTimer();
+        } else {
+          _stopRecordingTimer();
+        }
       },
-      onUndo: () => context.read<EditorBloc>().add(UndoEvent()),
-      onRedo: () => context.read<EditorBloc>().add(RedoEvent()),
-      onBold: _applyBold,
-      onItalic: _applyItalic,
-      onLink: _insertLink,
-      onSearch: _searchInNote,
-      child: Scaffold(
+      child: EditorShortcuts(
+        onSave: () {
+          // Save is handled automatically by the bloc on each change
+        },
+        onUndo: () => context.read<EditorBloc>().add(UndoEvent()),
+        onRedo: () => context.read<EditorBloc>().add(RedoEvent()),
+        onBold: _applyBold,
+        onItalic: _applyItalic,
+        onLink: _insertLink,
+        onSearch: _searchInNote,
+        child: Scaffold(
         appBar: AppBar(
           leading: Semantics(
             label: '返回',
@@ -85,6 +111,39 @@ class _EditorViewState extends State<_EditorView> {
             },
           ),
           actions: [
+            BlocBuilder<EditorBloc, EditorState>(
+              builder: (context, state) {
+                if (state is! EditorLoaded) {
+                  return const SizedBox.shrink();
+                }
+                return Semantics(
+                  label: '版本历史',
+                  hint: '查看笔记版本历史',
+                  child: IconButton(
+                    icon: const Icon(Icons.history),
+                    tooltip: '版本历史',
+                    onPressed: () {
+                      final currentContent =
+                          state.blocks.map((b) => b.content).join('\n\n');
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => VersionHistoryPage(
+                            noteId: state.noteId,
+                            currentContent: currentContent,
+                            onRestore: (content) {
+                              context
+                                  .read<EditorBloc>()
+                                  .add(RestoreContent(content));
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
             Semantics(
               label: '更多选项',
               hint: '显示更多操作',
@@ -111,6 +170,7 @@ class _EditorViewState extends State<_EditorView> {
 
               return Column(
                 children: [
+                  if (state.isTimelineRecording) _buildRecordingBanner(context),
                   Expanded(
                     child: useVirtualScroll
                         ? _buildVirtualScrollEditor(context, state)
@@ -123,6 +183,8 @@ class _EditorViewState extends State<_EditorView> {
                     onInsertList: () => _insertBlock(context, state, BlockType.list),
                     onInsertQuote: () => _insertBlock(context, state, BlockType.quote),
                     onInsertAudio: () => _showVoiceRecorder(context, state),
+                    onTimelineRecord: () => _toggleTimelineRecording(context, state),
+                    isTimelineRecording: state.isTimelineRecording,
                   ),
                 ],
               );
@@ -131,6 +193,7 @@ class _EditorViewState extends State<_EditorView> {
             return const SizedBox.shrink();
           },
         ),
+      ),
       ),
     );
   }
@@ -207,11 +270,48 @@ class _EditorViewState extends State<_EditorView> {
   }
 
   Widget _buildBlockWithKeyboard(BuildContext context, BlockModel block, EditorLoaded state) {
-    return KeyboardListener(
-      focusNode: FocusNode(),
-      onKeyEvent: (event) {
-        if (event is KeyDownEvent) {
-          if (event.logicalKey == LogicalKeyboardKey.enter) {
+    // 为每个 block 绑定 GlobalKey，用于点击时间轴标记时滚动定位
+    final key = _blockKeys.putIfAbsent(block.id, () => GlobalKey());
+    return KeyedSubtree(
+      key: key,
+      child: KeyboardListener(
+        focusNode: FocusNode(),
+        onKeyEvent: (event) {
+          if (event is KeyDownEvent) {
+            if (event.logicalKey == LogicalKeyboardKey.enter) {
+              final position = block.position + 1;
+              context.read<EditorBloc>().add(InsertBlock(
+                    noteId: state.noteId,
+                    blockType: BlockType.paragraph,
+                    content: '',
+                    position: position,
+                  ));
+            } else if (event.logicalKey == LogicalKeyboardKey.backspace) {
+              if (block.content.isEmpty && state.blocks.length > 1) {
+                context.read<EditorBloc>().add(DeleteBlock(block.id));
+              }
+            }
+          }
+        },
+        child: BlockWidget(
+          block: block,
+          isActive: state.activeBlockId == block.id,
+          onContentChanged: (content) {
+            context.read<EditorBloc>().add(UpdateBlock(
+                  blockId: block.id,
+                  content: content,
+                ));
+          },
+          onDelete: () {
+            context.read<EditorBloc>().add(DeleteBlock(block.id));
+          },
+          onTypeChanged: (type) {
+            context.read<EditorBloc>().add(ToggleBlockType(
+                  blockId: block.id,
+                  newType: type,
+                ));
+          },
+          onEnterPressed: () {
             final position = block.position + 1;
             context.read<EditorBloc>().add(InsertBlock(
                   noteId: state.noteId,
@@ -219,45 +319,14 @@ class _EditorViewState extends State<_EditorView> {
                   content: '',
                   position: position,
                 ));
-          } else if (event.logicalKey == LogicalKeyboardKey.backspace) {
+          },
+          onBackspaceAtStart: () {
             if (block.content.isEmpty && state.blocks.length > 1) {
               context.read<EditorBloc>().add(DeleteBlock(block.id));
             }
-          }
-        }
-      },
-      child: BlockWidget(
-        block: block,
-        isActive: state.activeBlockId == block.id,
-        onContentChanged: (content) {
-          context.read<EditorBloc>().add(UpdateBlock(
-                blockId: block.id,
-                content: content,
-              ));
-        },
-        onDelete: () {
-          context.read<EditorBloc>().add(DeleteBlock(block.id));
-        },
-        onTypeChanged: (type) {
-          context.read<EditorBloc>().add(ToggleBlockType(
-                blockId: block.id,
-                newType: type,
-              ));
-        },
-        onEnterPressed: () {
-          final position = block.position + 1;
-          context.read<EditorBloc>().add(InsertBlock(
-                noteId: state.noteId,
-                blockType: BlockType.paragraph,
-                content: '',
-                position: position,
-              ));
-        },
-        onBackspaceAtStart: () {
-          if (block.content.isEmpty && state.blocks.length > 1) {
-            context.read<EditorBloc>().add(DeleteBlock(block.id));
-          }
-        },
+          },
+          onTimelineMarkerTap: (blockId) => _seekToBlock(context, blockId),
+        ),
       ),
     );
   }
@@ -295,6 +364,92 @@ class _EditorViewState extends State<_EditorView> {
         ),
       ),
     );
+  }
+
+  // ============================================================
+  // 时间轴录音相关
+  // ============================================================
+
+  /// 切换时间轴录音状态（开始/停止）
+  void _toggleTimelineRecording(BuildContext context, EditorLoaded state) {
+    final bloc = context.read<EditorBloc>();
+    if (state.isTimelineRecording) {
+      bloc.add(const StopTimelineRecording());
+    } else {
+      final audioBlockId = const Uuid().v4();
+      bloc.add(StartTimelineRecording(audioBlockId));
+    }
+  }
+
+  /// 启动录音计时器，每秒刷新已录时长
+  void _startRecordingTimer() {
+    _recordingElapsed = Duration.zero;
+    _recordingTimer?.cancel();
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _recordingElapsed = Duration(
+          milliseconds: getIt<TimelineRecorderService>().currentDurationMs,
+        );
+      });
+    });
+  }
+
+  /// 停止录音计时器
+  void _stopRecordingTimer() {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+    if (mounted) {
+      setState(() => _recordingElapsed = Duration.zero);
+    }
+  }
+
+  /// 录音中顶部横幅：显示已录时长与停止按钮
+  Widget _buildRecordingBanner(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: Colors.red.withAlpha(30),
+      child: Row(
+        children: [
+          const Icon(Icons.fiber_manual_record, color: Colors.red, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '正在时间轴录音... ${_formatElapsed(_recordingElapsed)}',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+          TextButton(
+            onPressed: () =>
+                context.read<EditorBloc>().add(const StopTimelineRecording()),
+            child: const Text('停止'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatElapsed(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds.remainder(60);
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  /// 点击时间轴标记：设置该 block 为 active 并滚动定位到对应文本块
+  void _seekToBlock(BuildContext context, String blockId) {
+    context.read<EditorBloc>().add(SeekToTimelineMarker(blockId));
+    final key = _blockKeys[blockId];
+    // 在下一帧（bloc 状态更新触发重建后）再读取 context 并滚动定位
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = key?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.3,
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    });
   }
 
   void _applyBold() {

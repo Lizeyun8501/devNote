@@ -1,10 +1,14 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/models/timeline_marker.dart';
 import 'package:devnote/features/editor/widgets/audio_block_widget.dart';
 import 'package:devnote/features/editor/widgets/code_block_widget.dart';
 import 'package:devnote/features/editor/widgets/latex_block_widget.dart';
 import 'package:devnote/features/editor/widgets/table_block_widget.dart';
 import 'package:devnote/features/editor/widgets/task_list_widget.dart';
+import 'package:devnote/features/editor/widgets/timeline_audio_player.dart';
 
 class BlockWidget extends StatefulWidget {
   final BlockModel block;
@@ -15,6 +19,9 @@ class BlockWidget extends StatefulWidget {
   final VoidCallback onEnterPressed;
   final VoidCallback onBackspaceAtStart;
 
+  /// 点击时间轴标记时回调，参数为关联的文本块 ID（用于滚动定位）
+  final ValueChanged<String>? onTimelineMarkerTap;
+
   const BlockWidget({
     super.key,
     required this.block,
@@ -24,6 +31,7 @@ class BlockWidget extends StatefulWidget {
     required this.onTypeChanged,
     required this.onEnterPressed,
     required this.onBackspaceAtStart,
+    this.onTimelineMarkerTap,
   });
 
   @override
@@ -228,13 +236,38 @@ class _BlockWidgetState extends State<BlockWidget> {
           onContentChanged: widget.onContentChanged,
         );
       case BlockType.audio:
-        return AudioBlockWidget(
-          content: widget.block.content,
-          onContentChanged: widget.onContentChanged,
-        );
+        return _buildAudioBlock();
       default:
         return const SizedBox.shrink();
     }
+  }
+
+  /// 渲染音频块：若 content JSON 包含时间轴 markers，使用 TimelineAudioPlayer；
+  /// 否则回退到普通 AudioBlockWidget（向后兼容 P0-3 已有录音）
+  Widget _buildAudioBlock() {
+    Map<String, dynamic>? data;
+    try {
+      data = jsonDecode(widget.block.content) as Map<String, dynamic>;
+    } catch (_) {
+      data = null;
+    }
+    final markersJson = data?['markers'] as List?;
+    if (markersJson != null && markersJson.isNotEmpty) {
+      final markers = markersJson
+          .map((e) => TimelineMarker.fromJson(e as Map<String, dynamic>))
+          .toList();
+      return TimelineAudioPlayer(
+        audioPath: data?['url'] as String? ?? '',
+        durationMs: (data?['duration_ms'] as num?)?.toInt() ?? 0,
+        transcript: data?['transcript'] as String? ?? '',
+        markers: markers,
+        onMarkerTap: widget.onTimelineMarkerTap,
+      );
+    }
+    return AudioBlockWidget(
+      content: widget.block.content,
+      onContentChanged: widget.onContentChanged,
+    );
   }
 
   @override

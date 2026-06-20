@@ -227,6 +227,33 @@ func (s *SyncService) GetNoteLatestVersion(userID, noteID string) (int64, error)
 	return snapshot.Version, nil
 }
 
+// GetNoteHistory 获取笔记的版本历史
+func (s *SyncService) GetNoteHistory(userID string, noteID string, limit int) ([]model.NoteSnapshot, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	var snapshots []model.NoteSnapshot
+	err := s.db.Where("note_id = ? AND user_id = ?", noteID, userID).
+		Order("version DESC").
+		Limit(limit).
+		Find(&snapshots).Error
+	if err != nil {
+		return nil, fmt.Errorf("query note history: %w", err)
+	}
+	return snapshots, nil
+}
+
+// GetNoteVersion 获取笔记的特定版本
+func (s *SyncService) GetNoteVersion(userID string, noteID string, version int64) (*model.NoteSnapshot, error) {
+	var snapshot model.NoteSnapshot
+	err := s.db.Where("note_id = ? AND user_id = ? AND version = ?", noteID, userID, version).
+		First(&snapshot).Error
+	if err != nil {
+		return nil, fmt.Errorf("query note version: %w", err)
+	}
+	return &snapshot, nil
+}
+
 func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolution) error {
 	snapshot := &model.NoteSnapshot{
 		ID:      uuid.New().String(),

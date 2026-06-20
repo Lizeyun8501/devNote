@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
+import 'package:devnote/features/templates/models/note_template.dart';
 
 abstract class NotesEvent extends Equatable {
   const NotesEvent();
@@ -102,4 +103,21 @@ class LoadMoreNotes extends NotesEvent {
 
   @override
   List<Object?> get props => [folderId];
+}
+
+// ============================================================
+// 模板创建笔记 —— P1-3 模板系统
+// 从模板创建笔记：先创建空笔记，再将模板块逐个持久化到 SQLite
+// ============================================================
+class CreateNoteFromTemplate extends NotesEvent {
+  final NoteTemplate template;
+  final String folderId;
+
+  const CreateNoteFromTemplate({
+    required this.template,
+    required this.folderId,
+  });
+
+  @override
+  List<Object?> get props => [template, folderId];
 }

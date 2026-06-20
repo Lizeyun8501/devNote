@@ -12,6 +12,7 @@ import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/sync_settings_page.dart';
 import 'package:devnote/features/canvas/canvas_page.dart';
+import 'package:devnote/features/freeform/freeform_page.dart';
 import 'package:devnote/features/sync/conflict_resolution_page.dart';
 import 'package:devnote/features/plugins/plugin_marketplace_page.dart';
 import 'package:devnote/features/plugins/plugin_settings_page.dart';
@@ -129,6 +130,15 @@ final appRouter = GoRouter(
           path: '/canvas',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: CanvasPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/freeform/:id',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: FreeformPage(
+              pageId: state.pathParameters['id'] ?? '',
+              pageTitle: state.uri.queryParameters['title'] ?? '',
+            ),
           ),
         ),
         GoRoute(
