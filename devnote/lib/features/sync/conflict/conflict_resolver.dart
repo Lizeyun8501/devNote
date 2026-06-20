@@ -527,6 +527,8 @@ class ConflictResolver {
       case BlockType.tableBlock:
       case BlockType.image:
       case BlockType.latexBlock:
+      case BlockType.pdf:
+      case BlockType.whiteboard:
         return false;
     }
   }

@@ -117,6 +117,34 @@ dependencies:
   record: ^5.1.0
   audioplayers: ^6.1.0
   permission_handler: ^11.3.1
+  # ============================================================
+  # PDF 查看 / 标注 —— 借鉴印象笔记和 Notion 的 PDF 标注能力
+  # ------------------------------------------------------------
+  # pdfx: PDF 渲染与查看（pinch 缩放、翻页）
+  # 来源: https://pub.dev/packages/pdfx
+  # 注：syncfusion_flutter_pdfviewer 需注册社区许可证，故选用 pdfx
+  # path_provider / file_picker 已在上方声明，复用即可
+  # ============================================================
+  pdfx: ^2.6.0
+  # ============================================================
+  # P2-8: OneNote 导入工具
+  # ------------------------------------------------------------
+  # html: 解析 OneNote 导出的 HTML 文件（DOM 树遍历）
+  # 来源: https://pub.dev/packages/html
+  # url_launcher: 启动 Microsoft Graph OAuth2 授权流程
+  # 来源: https://pub.dev/packages/url_launcher
+  # ============================================================
+  html: ^0.15.4
+  url_launcher: ^6.3.1
+  # ============================================================
+  # P2-5: 全局待办/提醒系统 —— 本地通知 + 时区支持
+  # ------------------------------------------------------------
+  # flutter_local_notifications: 跨平台本地通知（待办到期提醒）
+  # timezone: 时区数据库，支持 zonedSchedule 按本地时区调度
+  # 对标印象笔记、有道云笔记、Notesnook 的待办提醒功能
+  # ============================================================
+  flutter_local_notifications: ^17.2.2
+  timezone: ^0.9.4
 
 dev_dependencies:
   flutter_test:

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
+import 'math_ink_dialog.dart';
+
 class LatexBlockWidget extends StatefulWidget {
   final String content;
   final ValueChanged<String> onContentChanged;
@@ -43,6 +45,24 @@ class _LatexBlockWidgetState extends State<LatexBlockWidget> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.content);
+  }
+
+  /// P2-9: 弹出手写公式识别对话框，识别完成后将 LaTeX 填入块内容
+  Future<void> _showMathInkDialog() async {
+    final currentLatex = _stripDelimiters(widget.content);
+    await MathInkDialog.show(
+      context,
+      initialLatex: currentLatex,
+      onInsert: (latex) {
+        // 用 $$ ... $$ 包裹为 display 模式
+        final wrapped = latex.isEmpty ? '' : '\$\$$latex\$\$';
+        _controller.text = wrapped;
+        widget.onContentChanged(wrapped);
+        setState(() {
+          _isEditing = false;
+        });
+      },
+    );
   }
 
   @override
@@ -91,6 +111,17 @@ class _LatexBlockWidgetState extends State<LatexBlockWidget> {
                     ),
               ),
               const Spacer(),
+              // P2-9: 手写公式输入按钮
+              IconButton(
+                icon: const Icon(
+                  Icons.gesture,
+                  size: 16,
+                ),
+                tooltip: '手写输入',
+                onPressed: _showMathInkDialog,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              ),
               IconButton(
                 icon: Icon(
                   _isEditing ? Icons.visibility : Icons.edit,

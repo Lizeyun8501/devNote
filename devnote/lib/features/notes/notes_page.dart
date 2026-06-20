@@ -182,11 +182,28 @@ class NotesListPlaceholder extends StatelessWidget {
           actions: [
             const SyncStatusWidget(),
             Semantics(
+              label: 'Daily Notes',
+              hint: '打开每日笔记',
+              child: IconButton(
+                icon: const Icon(Icons.calendar_today),
+                onPressed: () => context.go('/daily-notes'),
+              ),
+            ),
+            Semantics(
               label: '搜索笔记',
               hint: '搜索你的笔记',
               child: IconButton(
                 icon: const Icon(Icons.search),
                 onPressed: () => context.go('/search'),
+              ),
+            ),
+            // P2-5: 全局待办/提醒系统入口
+            Semantics(
+              label: '待办',
+              hint: '打开全局待办列表',
+              child: IconButton(
+                icon: const Icon(Icons.checklist),
+                onPressed: () => context.go('/todo'),
               ),
             ),
             Semantics(

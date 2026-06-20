@@ -41,6 +41,8 @@ members = [
     "devnote-observe",
     # P0-2: OCR 文字识别 + 图片搜索 —— 纯 Rust OCR 引擎（ocrs/rten），无需 Tesseract
     "devnote-ocr",
+    # P2-9: 手写公式识别（数学墨迹）—— 基于规则的特征匹配识别器
+    "devnote-math-ink",
 ]
 resolver = "2"
 
@@ -77,6 +79,8 @@ devnote-websocket = { path = "devnote-websocket" }
 devnote-events = { path = "devnote-events" }
 # P0-2: OCR 文字识别 + 图片搜索
 devnote-ocr = { path = "devnote-ocr" }
+# P2-9: 手写公式识别（数学墨迹）
+devnote-math-ink = { path = "devnote-math-ink" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

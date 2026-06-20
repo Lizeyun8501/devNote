@@ -26,6 +26,8 @@ type Config struct {
 	HTTP2Enabled   bool
 	LogLevel       string
 	LogFormat      string
+	EmailWebhookSecret string // 邮件 Webhook 验证密钥
+	EmailDomain        string // 邮件域名，如 mail.devnote.app
 }
 
 func Load() *Config {
@@ -60,6 +62,8 @@ func Load() *Config {
 		HTTP2Enabled:   getEnvBool("HTTP2_ENABLED", true),
 		LogLevel:       getEnv("LOG_LEVEL", "info"),
 		LogFormat:      getEnv("LOG_FORMAT", "json"),
+		EmailWebhookSecret: getEnv("EMAIL_WEBHOOK_SECRET", ""),
+		EmailDomain:        getEnv("EMAIL_DOMAIN", "mail.devnote.app"),
 	}
 }
 

@@ -512,6 +512,12 @@ class ExportService {
         return '![image](${block.content})';
       case BlockType.latexBlock:
         return '\$\$\n${block.content}\n\$\$';
+      case BlockType.pdf:
+        // PDF 块内容为 JSON 元数据，导出为占位链接
+        return '[PDF](${block.content})';
+      case BlockType.whiteboard:
+        // 白板内容为元素 JSON，导出为占位符（无法用 Markdown 表示）
+        return '[Whiteboard]';
     }
   }
 

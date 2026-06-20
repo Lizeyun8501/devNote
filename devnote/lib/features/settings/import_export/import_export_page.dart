@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
@@ -218,6 +219,20 @@ class _ImportExportPageState extends State<ImportExportPage> {
               _importSource = value!;
             });
           },
+        ),
+        // P2-8: OneNote 导入入口卡片
+        // 提供 Microsoft Graph API 和 HTML 文件两种导入方式
+        Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: ListTile(
+            leading: const Icon(Icons.import_contacts, color: Colors.deepPurple),
+            title: const Text('从 OneNote 导入'),
+            subtitle: const Text('支持 Microsoft 账户授权或 HTML 文件导入'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _isImporting
+                ? null
+                : () => context.push('/settings/import/onenote'),
+          ),
         ),
         ListTile(
           title: const Text('冲突处理'),

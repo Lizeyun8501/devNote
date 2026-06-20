@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -13,11 +15,13 @@ import 'package:devnote/features/editor/services/editor_service.dart';
 import 'package:devnote/features/editor/services/timeline_recorder_service.dart';
 import 'package:devnote/features/editor/widgets/block_widget.dart';
 import 'package:devnote/features/editor/widgets/block_toolbar.dart';
+import 'package:devnote/features/editor/widgets/math_ink_dialog.dart';
 import 'package:devnote/features/editor/widgets/voice_recorder_widget.dart';
 import 'package:devnote/features/editor/widgets/editor_shortcuts.dart';
 import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
 import 'package:devnote/core/performance/virtual_scroll_controller.dart';
 import 'package:devnote/features/notes/version_history_page.dart';
+import 'package:devnote/features/notes/widgets/share_note_dialog.dart';
 
 class EditorPage extends StatelessWidget {
   const EditorPage({super.key, required this.noteId});
@@ -183,6 +187,9 @@ class _EditorViewState extends State<_EditorView> {
                     onInsertList: () => _insertBlock(context, state, BlockType.list),
                     onInsertQuote: () => _insertBlock(context, state, BlockType.quote),
                     onInsertAudio: () => _showVoiceRecorder(context, state),
+                    onInsertPdf: () => _insertPdfBlock(context, state),
+                    onInsertWhiteboard: () => _insertWhiteboardBlock(context, state),
+                    onInsertMathInk: () => _showMathInkDialog(context, state),
                     onTimelineRecord: () => _toggleTimelineRecording(context, state),
                     isTimelineRecording: state.isTimelineRecording,
                   ),
@@ -363,6 +370,69 @@ class _EditorViewState extends State<_EditorView> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 选择 PDF 文件并插入 pdf block
+  /// content JSON 结构：{url, page_count, current_page, annotations}
+  Future<void> _insertPdfBlock(BuildContext context, EditorLoaded state) async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+      );
+      if (result == null || result.files.single.path == null) return;
+      final path = result.files.single.path!;
+      final content = jsonEncode({
+        'url': path,
+        'page_count': 0,
+        'current_page': 1,
+        'annotations': <Map<String, dynamic>>[],
+      });
+      if (!context.mounted) return;
+      context.read<EditorBloc>().add(InsertBlock(
+            noteId: state.noteId,
+            blockType: BlockType.pdf,
+            content: content,
+            position: state.blocks.length,
+          ));
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('插入 PDF 失败: $e')),
+        );
+      }
+    }
+  }
+
+  /// 插入白板块 —— content 初始化为空元素列表的 JSON
+  /// 后续在白板页面编辑后通过 WhiteboardService 持久化
+  void _insertWhiteboardBlock(BuildContext context, EditorLoaded state) {
+    const emptyJson = '{"version":1,"elements":[]}';
+    context.read<EditorBloc>().add(InsertBlock(
+          noteId: state.noteId,
+          blockType: BlockType.whiteboard,
+          content: emptyJson,
+          position: state.blocks.length,
+        ));
+  }
+
+  /// P2-9: 弹出手写公式识别对话框，识别完成后创建 latex block
+  ///
+  /// 识别得到的 LaTeX 用 `$$...$$` 包裹为 display 模式后作为 block content 插入。
+  Future<void> _showMathInkDialog(
+      BuildContext context, EditorLoaded state) async {
+    await MathInkDialog.show(
+      context,
+      onInsert: (latex) {
+        final wrapped = latex.isEmpty ? '' : '\$\$$latex\$\$';
+        context.read<EditorBloc>().add(InsertBlock(
+              noteId: state.noteId,
+              blockType: BlockType.latexBlock,
+              content: wrapped,
+              position: state.blocks.length,
+            ));
+      },
     );
   }
 
@@ -561,6 +631,14 @@ class _EditorViewState extends State<_EditorView> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.public),
+              title: const Text('分享笔记'),
+              onTap: () {
+                Navigator.pop(context);
+                _shareNote(state);
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
               title: const Text('删除笔记', style: TextStyle(color: Colors.red)),
               onTap: () {
@@ -597,6 +675,22 @@ class _EditorViewState extends State<_EditorView> {
           ),
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
         ],
+      ),
+    );
+  }
+
+  /// 分享笔记：打开分享对话框，生成公开链接（支持密码保护和有效期）
+  Future<void> _shareNote(EditorLoaded state) async {
+    final content = state.blocks.map((b) => b.content).join('\n\n');
+    final title = _titleController.text.trim().isEmpty
+        ? '无标题'
+        : _titleController.text.trim();
+    await showDialog(
+      context: context,
+      builder: (context) => ShareNoteDialog(
+        noteId: state.noteId,
+        title: title,
+        content: content,
       ),
     );
   }

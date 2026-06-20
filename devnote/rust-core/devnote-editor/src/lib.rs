@@ -30,6 +30,42 @@ pub enum BlockType {
         duration_ms: u64,
         transcript: Option<String>,
     },
+    Pdf {
+        url: String,
+        page_count: u32,
+        current_page: u32,
+        annotations: Vec<PdfAnnotation>,
+    },
+    /// 手绘画布白板 —— content 为元素 JSON（由 Dart 侧 WhiteboardSerializer 编码）
+    Whiteboard { elements_json: String },
+}
+
+/// PDF 标注类型 —— 与 Dart 侧 PdfAnnotationType 对齐
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PdfAnnotationType {
+    Highlight,
+    Underline,
+    Note,
+    Signature,
+    Drawing,
+}
+
+/// PDF 标注 —— 高亮 / 下划线 / 批注 / 签名 / 绘图
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PdfAnnotation {
+    pub id: String,
+    pub page_number: u32,
+    pub annotation_type: PdfAnnotationType,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub text: Option<String>,
+    pub color: u32,
+    pub points: Option<Vec<(f64, f64)>>,
+    pub user_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -71,6 +71,8 @@ func main() {
 	// Initialize services
 	authService := service.NewAuthService(sqliteStore.DB, cfg)
 	syncService := service.NewSyncService(sqliteStore.DB, s3Store)
+	shareService := service.NewShareService(sqliteStore.DB)
+	emailService := service.NewEmailService(sqliteStore.DB, syncService, cfg.EmailDomain)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
@@ -79,6 +81,8 @@ func main() {
 	healthHandler := handler.NewHealthHandler()
 	realtimeHandler := handler.NewRealtimeHandler(authService)
 	clipperHandler := handler.NewClipperHandler(syncService)
+	shareHandler := handler.NewShareHandler(shareService)
+	emailHandler := handler.NewEmailHandler(emailService, cfg.EmailWebhookSecret)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -147,7 +151,30 @@ func main() {
 		{
 			notes.POST("/clip", clipperHandler.Clip)
 		}
+
+		// 分享管理 API（需认证）—— 公开分享/发布笔记，对标 Obsidian Publish
+		shares := api.Group("/shares")
+		shares.Use(middleware.JWTAuth(authService))
+		{
+			shares.POST("", shareHandler.CreateShare)
+			shares.GET("", shareHandler.ListShares)
+			shares.DELETE("/:shareId", shareHandler.DeleteShare)
+		}
+
+		// 邮件转笔记管理 API（需认证）—— 获取/重新生成专属邮箱别名
+		email := api.Group("/email")
+		email.Use(middleware.JWTAuth(authService))
+		{
+			email.GET("/alias", emailHandler.GetUserAlias)
+			email.POST("/alias/regenerate", emailHandler.RegenerateAlias)
+		}
 	}
+
+	// 公开访问分享的笔记（无需认证）
+	r.GET("/s/:token", shareHandler.GetSharedNote)
+
+	// 邮件 Webhook（无需认证，通过签名验证）—— 接收 SendGrid/Mailgun/SES 等邮件入站
+	r.POST("/webhooks/email", emailHandler.IncomingEmailWebhook)
 
 	// Handle TLS / AutoCert
 	if cfg.EnableTLS && cfg.AutoCert {

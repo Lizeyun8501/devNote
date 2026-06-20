@@ -4,7 +4,9 @@ import 'package:uuid/uuid.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
+import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
+import 'package:devnote/core/persistence/models/folder_model.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
@@ -19,6 +21,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     on<LoadNotes>(_onLoadNotes);
     on<CreateNote>(_onCreateNote);
     on<CreateNoteFromTemplate>(_onCreateNoteFromTemplate);
+    on<CreateDailyNote>(_onCreateDailyNote);
     on<DeleteNote>(_onDeleteNote);
     on<SelectNote>(_onSelectNote);
     on<SearchNotes>(_onSearchNotes);
@@ -118,6 +121,72 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       (e) => e.name == name,
       orElse: () => BlockType.paragraph,
     );
+  }
+
+  /// P2-4: 创建 Daily Note —— 通过文件夹名称解析 folderId（不存在则创建），
+  /// 再创建笔记并应用模板块。与 _onCreateNoteFromTemplate 的区别：
+  /// 1. 使用日期标题而非模板名
+  /// 2. 通过 folderName 解析 folderId（Daily Notes 配置存名称而非 ID）
+  Future<void> _onCreateDailyNote(
+      CreateDailyNote event, Emitter<NotesState> emit) async {
+    try {
+      // 解析文件夹名称到 ID，不存在则创建
+      final folderId = await _resolveFolderIdByName(event.folderName);
+
+      final now = DateTime.now();
+      final note = NoteModel(
+        id: _uuid.v4(),
+        title: event.title,
+        content: '',
+        folderId: folderId,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final created = await _noteRepository.createNote(note);
+
+      // 应用模板块（如果配置了模板）
+      if (event.templateBlocks.isNotEmpty) {
+        final editorService = getIt<EditorService>();
+        for (var i = 0; i < event.templateBlocks.length; i++) {
+          await editorService.createBlock(
+            noteId: created.id,
+            blockType: _blockTypeFromName(event.templateBlocks[i].type),
+            content: event.templateBlocks[i].content,
+            position: i,
+          );
+        }
+      }
+
+      final currentState = state;
+      if (currentState is NotesLoaded) {
+        final notes = List<NoteModel>.from(currentState.notes)..insert(0, created);
+        emit(currentState.copyWith(notes: notes, selectedNoteId: created.id));
+      } else {
+        emit(NotesLoaded(notes: [created], selectedNoteId: created.id));
+      }
+    } catch (e) {
+      emit(NotesError(e.toString()));
+    }
+  }
+
+  /// 通过文件夹名称解析 folderId。
+  /// 在根目录下查找同名文件夹，找不到则创建新文件夹。
+  Future<String> _resolveFolderIdByName(String name) async {
+    final folderRepo = SqliteFolderRepository(_dbHelper);
+    final rootFolders = await folderRepo.listFolders(null);
+    final existing = rootFolders.where((f) => f.name == name).firstOrNull;
+    if (existing != null) return existing.id;
+
+    final now = DateTime.now();
+    final folder = FolderModel(
+      id: _uuid.v4(),
+      name: name,
+      parentId: null,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final created = await folderRepo.createFolder(folder);
+    return created.id;
   }
 
   Future<void> _onDeleteNote(DeleteNote event, Emitter<NotesState> emit) async {

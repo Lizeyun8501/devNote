@@ -20,6 +20,8 @@ enum BlockType {
   latexBlock,
   taskListBlock,
   audio, // 语音录制块
+  pdf, // PDF 查看 / 标注块（高亮、批注、签名）
+  whiteboard, // 手绘画布白板块（Excalidraw 风格）
 }
 
 class BlockModel extends Equatable {

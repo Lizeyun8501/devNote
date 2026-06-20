@@ -7,7 +7,11 @@ class BlockToolbar extends StatelessWidget {
   final VoidCallback onInsertList;
   final VoidCallback onInsertQuote;
   final VoidCallback onInsertAudio;
+  final VoidCallback onInsertPdf;
+  final VoidCallback onInsertWhiteboard;
   final VoidCallback onTimelineRecord;
+  /// P2-9: 公式（手写）按钮 —— 直接弹出 MathInkDialog，插入时创建 latex block
+  final VoidCallback onInsertMathInk;
   final bool isTimelineRecording;
 
   const BlockToolbar({
@@ -18,7 +22,10 @@ class BlockToolbar extends StatelessWidget {
     required this.onInsertList,
     required this.onInsertQuote,
     required this.onInsertAudio,
+    required this.onInsertPdf,
+    required this.onInsertWhiteboard,
     required this.onTimelineRecord,
+    required this.onInsertMathInk,
     this.isTimelineRecording = false,
   });
 
@@ -77,6 +84,24 @@ class BlockToolbar extends StatelessWidget {
                 tooltip: 'Voice Recorder',
                 label: '语音速记',
                 onPressed: onInsertAudio,
+              ),
+              _ToolbarButton(
+                icon: Icons.picture_as_pdf,
+                tooltip: 'PDF',
+                label: '插入 PDF 标注',
+                onPressed: onInsertPdf,
+              ),
+              _ToolbarButton(
+                icon: Icons.draw,
+                tooltip: 'Whiteboard',
+                label: '插入白板',
+                onPressed: onInsertWhiteboard,
+              ),
+              _ToolbarButton(
+                icon: Icons.gesture,
+                tooltip: 'Formula (Handwriting)',
+                label: '公式（手写）',
+                onPressed: onInsertMathInk,
               ),
               _ToolbarButton(
                 icon: isTimelineRecording ? Icons.stop : Icons.timeline,

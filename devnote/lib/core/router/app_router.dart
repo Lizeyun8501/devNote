@@ -5,14 +5,20 @@ import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/features/editor/editor_page.dart';
 import 'package:devnote/features/notes/notes_page.dart';
+import 'package:devnote/features/notes/daily_notes_page.dart';
 import 'package:devnote/features/settings/settings_page.dart';
+import 'package:devnote/features/settings/language_settings_page.dart';
+import 'package:devnote/features/settings/daily_notes_settings_page.dart';
+import 'package:devnote/features/settings/email_settings_page.dart';
 import 'package:devnote/features/settings/import_export/import_export_page.dart';
+import 'package:devnote/features/settings/import_export/onenote_import_page.dart';
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/sync_settings_page.dart';
 import 'package:devnote/features/canvas/canvas_page.dart';
 import 'package:devnote/features/freeform/freeform_page.dart';
+import 'package:devnote/features/whiteboard/whiteboard_page.dart';
 import 'package:devnote/features/sync/conflict_resolution_page.dart';
 import 'package:devnote/features/plugins/plugin_marketplace_page.dart';
 import 'package:devnote/features/plugins/plugin_settings_page.dart';
@@ -34,6 +40,7 @@ import 'package:devnote/features/flashcard/create_card_page.dart';
 import 'package:devnote/features/flashcard/review_stats_page.dart';
 import 'package:devnote/features/ai/pages/ai_settings_page.dart';
 import 'package:devnote/features/vault/vault_page.dart';
+import 'package:devnote/features/todo/todo_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -92,15 +99,45 @@ final appRouter = GoRouter(
           ),
         ),
         GoRoute(
+          path: '/daily-notes',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: DailyNotesPage(),
+          ),
+        ),
+        GoRoute(
           path: '/settings',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: SettingsPage(),
           ),
         ),
         GoRoute(
+          path: '/settings/language',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: LanguageSettingsPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/settings/daily-notes',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: DailyNotesSettingsPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/settings/email',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: EmailSettingsPage(),
+          ),
+        ),
+        GoRoute(
           path: '/settings/import-export',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: ImportExportPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/settings/import/onenote',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: OnenoteImportPage(),
           ),
         ),
         GoRoute(
@@ -139,6 +176,14 @@ final appRouter = GoRouter(
             child: FreeformPage(
               pageId: state.pathParameters['id'] ?? '',
               pageTitle: state.uri.queryParameters['title'] ?? '',
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/whiteboard/:noteId',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: WhiteboardPage(
+              noteId: state.pathParameters['noteId'] ?? '',
             ),
           ),
         ),
@@ -256,6 +301,12 @@ final appRouter = GoRouter(
           path: '/vault',
           pageBuilder: (context, state) => const NoTransitionPage(
             child: VaultPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/todo',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: TodoPage(),
           ),
         ),
       ],

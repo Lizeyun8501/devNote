@@ -212,10 +212,12 @@ void main() {
       expect(BlockType.values, contains(BlockType.image));
       expect(BlockType.values, contains(BlockType.latexBlock));
       expect(BlockType.values, contains(BlockType.taskListBlock));
+      expect(BlockType.values, contains(BlockType.pdf));
+      expect(BlockType.values, contains(BlockType.whiteboard));
     });
 
-    test('BlockType.values 长度为 15', () {
-      expect(BlockType.values.length, 15);
+    test('BlockType.values 长度为 17', () {
+      expect(BlockType.values.length, 17);
     });
   });
 }
