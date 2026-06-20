@@ -124,9 +124,8 @@ pub enum PluginError {
 /// - `Enabled`: 插件已激活，可执行导出函数
 /// - `Disabled`: 插件已停用，保留在内存中，可重新启用
 pub struct PluginSandbox {
-    // extism Runtime —— 替代原自研的 wasmtime Engine + Store
-    runtime: extism::Runtime,
     // 已加载的 extism Plugin 实例
+    // extism 1.30.0 移除了 Runtime 类型，Plugin 内部自行管理 wasmtime Engine/Store
     plugins: HashMap<String, extism::Plugin>,
     // 插件元数据
     entries: HashMap<String, PluginEntry>,
@@ -136,12 +135,10 @@ pub struct PluginSandbox {
 
 impl PluginSandbox {
     pub fn new(host: Box<dyn PluginHost>) -> Result<Self, PluginError> {
-        // 创建 extism Runtime —— 内部自动配置 wasmtime 引擎
-        let runtime = extism::Runtime::new()
-            .map_err(|e| PluginError::ExtismRuntime(e.to_string()))?;
+        // extism 1.30.0 不再需要显式创建 Runtime
+        // Plugin::new 内部自行创建和管理 wasmtime Engine/Store
 
         Ok(Self {
-            runtime,
             plugins: HashMap::new(),
             entries: HashMap::new(),
             host,
@@ -159,12 +156,14 @@ impl PluginSandbox {
             return Err(PluginError::AlreadyLoaded(manifest.id.clone()));
         }
 
-        // extism 支持从 WASM 字节码、文件路径、URL 等多种来源加载
+        // extism 1.30.0: Plugin::new(wasm, imports, with_wasi)
+        // - wasm: 实现 Into<WasmInput> 的类型（&[u8]、Manifest 等）
+        // - imports: Host Function 迭代器（空 vec 表示无自定义 Host Function）
+        // - with_wasi: 是否启用 WASI
         let plugin = extism::Plugin::new(
-            &mut self.runtime,
             wasm_bytes,
-            // extism Manifest —— 替代自研的手动 Engine/Linker 配置
-            extism::Manifest::default(),
+            // 无自定义 Host Function —— extism 内置模块已提供核心 API
+            Vec::<extism::Function>::new(),
             // 启用 WASI（WebAssembly System Interface）
             true,
         )
