@@ -30,14 +30,14 @@ func NewValidationService(db *sql.DB, cfg ValidationConfig) *ValidationService {
 }
 
 // ValidateNote validates a note's structure: required fields, format compliance, size.
-func (s *ValidationService) ValidateNote(noteID string) (*model.ValidationReport, error) {
+func (s *ValidationService) ValidateNote(userID, noteID string) (*model.ValidationReport, error) {
 	var note model.NoteMeta
 	var isEnc int
 	row := s.db.QueryRow(`
-		SELECT id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields
-		FROM note_meta WHERE id=?
-	`, noteID)
-	if err := row.Scan(&note.ID, &note.Title, &note.Author, &note.CreatedAt, &note.ModifiedAt,
+		SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields
+		FROM note_meta WHERE id=? AND user_id=?
+	`, noteID, userID)
+	if err := row.Scan(&note.ID, &note.UserID, &note.Title, &note.Author, &note.CreatedAt, &note.ModifiedAt,
 		&note.WordCount, &note.CharCount, &note.Format, &note.Excerpt, &note.Language,
 		&isEnc, &note.ContentHash, &note.CustomFields); err != nil {
 		if err == sql.ErrNoRows {
@@ -112,11 +112,11 @@ func (s *ValidationService) ValidateNote(noteID string) (*model.ValidationReport
 }
 
 // ValidateFolder validates folder hierarchy: no circular references, max depth.
-func (s *ValidationService) ValidateFolder(folderID string) (*model.ValidationReport, error) {
+func (s *ValidationService) ValidateFolder(userID, folderID string) (*model.ValidationReport, error) {
 	var results []model.ValidationResult
 
 	// Rule: circular reference check
-	hasCycle, err := s.detectFolderCycle(folderID, folderID, make(map[string]bool))
+	hasCycle, err := s.detectFolderCycle(userID, folderID, folderID, make(map[string]bool))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (s *ValidationService) ValidateFolder(folderID string) (*model.ValidationRe
 	}
 
 	// Rule: max depth
-	depth, err := s.calculateFolderDepth(folderID, 1)
+	depth, err := s.calculateFolderDepth(userID, folderID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -165,15 +165,15 @@ func (s *ValidationService) ValidateFolder(folderID string) (*model.ValidationRe
 	}, nil
 }
 
-func (s *ValidationService) detectFolderCycle(rootID, currentID string, visited map[string]bool) (bool, error) {
+func (s *ValidationService) detectFolderCycle(userID, rootID, currentID string, visited map[string]bool) (bool, error) {
 	if visited[currentID] {
 		return currentID == rootID, nil
 	}
 	visited[currentID] = true
 
-	// Get children
+	// Get parent
 	var parentID string
-	err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, currentID).Scan(&parentID)
+	err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=? AND user_id=?`, currentID, userID).Scan(&parentID)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -183,26 +183,26 @@ func (s *ValidationService) detectFolderCycle(rootID, currentID string, visited 
 	if parentID == "" {
 		return false, nil
 	}
-	return s.detectFolderCycle(rootID, parentID, visited)
+	return s.detectFolderCycle(userID, rootID, parentID, visited)
 }
 
-func (s *ValidationService) calculateFolderDepth(folderID string, currentDepth int) (int, error) {
+func (s *ValidationService) calculateFolderDepth(userID, folderID string, currentDepth int) (int, error) {
 	var parentID string
-	err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, folderID).Scan(&parentID)
+	err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=? AND user_id=?`, folderID, userID).Scan(&parentID)
 	if err == sql.ErrNoRows || parentID == "" {
 		return currentDepth, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	return s.calculateFolderDepth(parentID, currentDepth+1)
+	return s.calculateFolderDepth(userID, parentID, currentDepth+1)
 }
 
 // ValidateTag validates a tag: name length, valid characters, no duplicates.
-func (s *ValidationService) ValidateTag(tagID string) (*model.ValidationReport, error) {
+func (s *ValidationService) ValidateTag(userID, tagID string) (*model.ValidationReport, error) {
 	var tag model.TagMeta
-	row := s.db.QueryRow(`SELECT id, name, parent_id, color, description, created_at, use_count FROM tag_meta WHERE id=?`, tagID)
-	if err := row.Scan(&tag.ID, &tag.Name, &tag.ParentID, &tag.Color, &tag.Description, &tag.CreatedAt, &tag.UseCount); err != nil {
+	row := s.db.QueryRow(`SELECT id, user_id, name, parent_id, color, description, created_at, use_count FROM tag_meta WHERE id=? AND user_id=?`, tagID, userID)
+	if err := row.Scan(&tag.ID, &tag.UserID, &tag.Name, &tag.ParentID, &tag.Color, &tag.Description, &tag.CreatedAt, &tag.UseCount); err != nil {
 		if err == sql.ErrNoRows {
 			msg := fmt.Sprintf("tag not found: %s", tagID)
 			return &model.ValidationReport{
@@ -250,9 +250,9 @@ func (s *ValidationService) ValidateTag(tagID string) (*model.ValidationReport, 
 		})
 	}
 
-	// Rule: duplicate check
+	// Rule: duplicate check (scoped to the user).
 	var cnt int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tag_meta WHERE name=? AND id!=?`, tag.Name, tag.ID).Scan(&cnt); err == nil && cnt > 0 {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tag_meta WHERE name=? AND id!=? AND user_id=?`, tag.Name, tag.ID, userID).Scan(&cnt); err == nil && cnt > 0 {
 		results = append(results, model.ValidationResult{
 			RuleID: "tag-name-unique", RuleName: "Unique Name",
 			Passed: false, Message: fmt.Sprintf("duplicate tag name: %s", tag.Name), Severity: "warning",
@@ -266,7 +266,7 @@ func (s *ValidationService) ValidateTag(tagID string) (*model.ValidationReport, 
 
 	// Rule: tag depth
 	if tag.ParentID != "" {
-		depth, err := s.calculateTagDepth(tag.ID, 1)
+		depth, err := s.calculateTagDepth(userID, tag.ID, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -299,26 +299,26 @@ func (s *ValidationService) ValidateTag(tagID string) (*model.ValidationReport, 
 	}, nil
 }
 
-func (s *ValidationService) calculateTagDepth(tagID string, currentDepth int) (int, error) {
+func (s *ValidationService) calculateTagDepth(userID, tagID string, currentDepth int) (int, error) {
 	var parentID string
-	err := s.db.QueryRow(`SELECT parent_id FROM tag_meta WHERE id=?`, tagID).Scan(&parentID)
+	err := s.db.QueryRow(`SELECT parent_id FROM tag_meta WHERE id=? AND user_id=?`, tagID, userID).Scan(&parentID)
 	if err == sql.ErrNoRows || parentID == "" {
 		return currentDepth, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	return s.calculateTagDepth(parentID, currentDepth+1)
+	return s.calculateTagDepth(userID, parentID, currentDepth+1)
 }
 
 // ValidateKnowledgeRelation validates a knowledge relationship: no self-references, valid targets.
-func (s *ValidationService) ValidateKnowledgeRelation(relID string) (*model.ValidationReport, error) {
+func (s *ValidationService) ValidateKnowledgeRelation(userID, relID string) (*model.ValidationReport, error) {
 	var rel model.KnowledgeRelation
 	row := s.db.QueryRow(`
-		SELECT id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
-		FROM knowledge_relation WHERE id=?
-	`, relID)
-	if err := row.Scan(&rel.ID, &rel.SourceNoteID, &rel.TargetNoteID, &rel.Weight,
+		SELECT id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
+		FROM knowledge_relation WHERE id=? AND user_id=?
+	`, relID, userID)
+	if err := row.Scan(&rel.ID, &rel.UserID, &rel.SourceNoteID, &rel.TargetNoteID, &rel.Weight,
 		&rel.ReferenceCount, &rel.RelationType, &rel.CreatedAt, &rel.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			msg := fmt.Sprintf("knowledge relation not found: %s", relID)
@@ -347,9 +347,9 @@ func (s *ValidationService) ValidateKnowledgeRelation(relID string) (*model.Vali
 		})
 	}
 
-	// Rule: source note exists
+	// Rule: source note exists (scoped to the user).
 	var srcCnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=?`, rel.SourceNoteID).Scan(&srcCnt)
+	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, rel.SourceNoteID, userID).Scan(&srcCnt)
 	if srcCnt == 0 {
 		results = append(results, model.ValidationResult{
 			RuleID: "knowledge-valid-source", RuleName: "Valid Source",
@@ -362,9 +362,9 @@ func (s *ValidationService) ValidateKnowledgeRelation(relID string) (*model.Vali
 		})
 	}
 
-	// Rule: target note exists
+	// Rule: target note exists (scoped to the user).
 	var tgtCnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=?`, rel.TargetNoteID).Scan(&tgtCnt)
+	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, rel.TargetNoteID, userID).Scan(&tgtCnt)
 	if tgtCnt == 0 {
 		results = append(results, model.ValidationResult{
 			RuleID: "knowledge-valid-target", RuleName: "Valid Target",
@@ -398,7 +398,7 @@ func (s *ValidationService) ValidateKnowledgeRelation(relID string) (*model.Vali
 // ----------------------------------------------------------------
 
 // CreateRule inserts a new validation rule.
-func (s *ValidationService) CreateRule(rule *model.ValidationRule) (*model.ValidationRule, error) {
+func (s *ValidationService) CreateRule(userID string, rule *model.ValidationRule) (*model.ValidationRule, error) {
 	rule.ID = uuid.New().String()
 	_, err := s.db.Exec(`
 		INSERT INTO validation_rule (id, name, description, category, rule_type, pattern, severity, is_enabled, created_at, updated_at)
@@ -411,7 +411,7 @@ func (s *ValidationService) CreateRule(rule *model.ValidationRule) (*model.Valid
 }
 
 // ListRules returns all validation rules.
-func (s *ValidationService) ListRules() ([]model.ValidationRule, error) {
+func (s *ValidationService) ListRules(userID string) ([]model.ValidationRule, error) {
 	rows, err := s.db.Query(`SELECT id, name, description, category, rule_type, pattern, severity, is_enabled, created_at, updated_at FROM validation_rule ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list rules: %w", err)
@@ -432,7 +432,7 @@ func (s *ValidationService) ListRules() ([]model.ValidationRule, error) {
 }
 
 // UpdateRule modifies an existing validation rule.
-func (s *ValidationService) UpdateRule(rule *model.ValidationRule) (*model.ValidationRule, error) {
+func (s *ValidationService) UpdateRule(userID string, rule *model.ValidationRule) (*model.ValidationRule, error) {
 	_, err := s.db.Exec(`
 		UPDATE validation_rule SET name=?, description=?, category=?, rule_type=?, pattern=?, severity=?, is_enabled=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?
@@ -444,7 +444,7 @@ func (s *ValidationService) UpdateRule(rule *model.ValidationRule) (*model.Valid
 }
 
 // DeleteRule removes a validation rule.
-func (s *ValidationService) DeleteRule(id string) error {
+func (s *ValidationService) DeleteRule(userID, id string) error {
 	_, err := s.db.Exec(`DELETE FROM validation_rule WHERE id=?`, id)
 	return err
 }
@@ -454,7 +454,7 @@ func (s *ValidationService) DeleteRule(id string) error {
 // ----------------------------------------------------------------
 
 // CreateBusinessRule inserts a new business rule.
-func (s *ValidationService) CreateBusinessRule(rule *model.BusinessRule) (*model.BusinessRule, error) {
+func (s *ValidationService) CreateBusinessRule(userID string, rule *model.BusinessRule) (*model.BusinessRule, error) {
 	rule.ID = uuid.New().String()
 	_, err := s.db.Exec(`
 		INSERT INTO business_rule (id, name, expression, action, priority, is_enabled, created_at, updated_at)
@@ -467,7 +467,7 @@ func (s *ValidationService) CreateBusinessRule(rule *model.BusinessRule) (*model
 }
 
 // ListBusinessRules returns all business rules.
-func (s *ValidationService) ListBusinessRules() ([]model.BusinessRule, error) {
+func (s *ValidationService) ListBusinessRules(userID string) ([]model.BusinessRule, error) {
 	rows, err := s.db.Query(`SELECT id, name, expression, action, priority, is_enabled, created_at, updated_at FROM business_rule ORDER BY priority DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list business rules: %w", err)
@@ -488,7 +488,7 @@ func (s *ValidationService) ListBusinessRules() ([]model.BusinessRule, error) {
 }
 
 // UpdateBusinessRule modifies an existing business rule.
-func (s *ValidationService) UpdateBusinessRule(rule *model.BusinessRule) (*model.BusinessRule, error) {
+func (s *ValidationService) UpdateBusinessRule(userID string, rule *model.BusinessRule) (*model.BusinessRule, error) {
 	_, err := s.db.Exec(`
 		UPDATE business_rule SET name=?, expression=?, action=?, priority=?, is_enabled=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?
@@ -500,7 +500,7 @@ func (s *ValidationService) UpdateBusinessRule(rule *model.BusinessRule) (*model
 }
 
 // DeleteBusinessRule removes a business rule.
-func (s *ValidationService) DeleteBusinessRule(id string) error {
+func (s *ValidationService) DeleteBusinessRule(userID, id string) error {
 	_, err := s.db.Exec(`DELETE FROM business_rule WHERE id=?`, id)
 	return err
 }

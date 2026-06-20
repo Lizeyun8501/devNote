@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'package:devnote/core/observability/app_logger.dart';
 import 'storage_adapter.dart';
 
 class WebDavConfig {
@@ -99,9 +100,10 @@ class WebDavAdapter implements StorageAdapter {
           response.statusCode == 200 ||
           response.statusCode == 404;
       return _configured;
-    } catch (_) {
+    } catch (e) {
       _configured = false;
-      return false;
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -134,8 +136,9 @@ class WebDavAdapter implements StorageAdapter {
       return response.statusCode == 201 ||
           response.statusCode == 204 ||
           response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -150,8 +153,9 @@ class WebDavAdapter implements StorageAdapter {
         return response.bodyBytes;
       }
       return null;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -165,8 +169,9 @@ class WebDavAdapter implements StorageAdapter {
       return response.statusCode == 204 ||
           response.statusCode == 200 ||
           response.statusCode == 404;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -217,8 +222,9 @@ class WebDavAdapter implements StorageAdapter {
         }
       }
       return files;
-    } catch (_) {
-      return [];
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -253,8 +259,9 @@ class WebDavAdapter implements StorageAdapter {
         }
       }
       return null;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -266,8 +273,9 @@ class WebDavAdapter implements StorageAdapter {
 
       final response = await _client.head(uri, headers: headers);
       return response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 }

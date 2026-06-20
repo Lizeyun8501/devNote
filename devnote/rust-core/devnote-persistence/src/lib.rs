@@ -10,6 +10,7 @@
 //! 借鉴内容: 附件文件加密存储、SHA-256 完整性校验、EncryptedFileStorage 文件加密层
 
 use devnote_core::models::{Attachment, Folder, Note, Tag, Permission, ResourceACL, Workspace, WorkspaceMember};
+use devnote_core::{Block, BlockType};
 use devnote_observe::{instrument, warn};
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoEngine, DefaultCryptoEngine, CryptoConfig};
@@ -35,6 +36,8 @@ pub enum PersistenceError {
     ConstraintViolation(String),
     #[error("serialization error: {0}")]
     SerializationError(String),
+    #[error("deserialization error: {0}")]
+    DeserializationError(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,7 +287,26 @@ impl SqliteNoteRepository {
         let created_at_str: String = row.get(4)?;
         let updated_at_str: String = row.get(5)?;
 
-        let blocks = serde_json::from_str(&content).unwrap_or_default();
+        let blocks = match serde_json::from_str::<Vec<Block>>(&content) {
+            Ok(blocks) => blocks,
+            Err(_) => {
+                // 兼容旧数据/纯文本 content：当 content 不是合法的 JSON blocks 数组时
+                // （例如 Dart 端 NoteModel 写入的纯文本），将其包装为单个 paragraph block，
+                // 避免 unwrap_or_default() 静默丢弃笔记内容。
+                let note_id = Uuid::parse_str(&id_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                vec![Block {
+                    id: Uuid::new_v4(),
+                    note_id,
+                    block_type: BlockType::Paragraph,
+                    content: content.clone(),
+                    position: 0,
+                    children: Vec::new(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }]
+            }
+        };
 
         Ok(Note {
             id: Uuid::parse_str(&id_str)
@@ -1021,7 +1043,8 @@ impl NoteRepository for EncryptedNoteRepository {
                 if note.is_encrypted && self.is_unlocked() {
                     let content = serde_json::to_string(&note.blocks)?;
                     let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                    note.blocks = serde_json::from_str(&decrypted).unwrap_or_default();
+                    note.blocks = serde_json::from_str(&decrypted)
+                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
                 }
                 Ok(Some(note))
             }
@@ -1062,7 +1085,8 @@ impl NoteRepository for EncryptedNoteRepository {
             if note.is_encrypted && self.is_unlocked() {
                 let content = serde_json::to_string(&note.blocks)?;
                 let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                note.blocks = serde_json::from_str(&decrypted).unwrap_or_default();
+                note.blocks = serde_json::from_str(&decrypted)
+                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
             }
             result.push(note);
         }

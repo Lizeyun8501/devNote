@@ -78,6 +78,8 @@ pub enum ObjectError {
     Sqlite(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("database error: {0}")]
+    DatabaseError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -186,7 +188,10 @@ impl SqliteObjectEngine {
             "SELECT name, icon FROM object_types WHERE id = ?1",
             params![type_id_str],
             |row| Ok((row.get(0)?, row.get(1)?)),
-        ).map_err(|_| ObjectError::TypeNotFound(*type_id))?;
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ObjectError::TypeNotFound(*type_id),
+            _ => ObjectError::DatabaseError(e.to_string()),
+        })?;
 
         let properties = self.load_type_properties(conn, type_id)?;
         let relations = self.load_type_relations(conn, type_id)?;
@@ -227,7 +232,8 @@ impl SqliteObjectEngine {
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 property_type,
-                format: serde_json::from_str(&format_str).unwrap_or(serde_json::Value::Null),
+                format: serde_json::from_str(&format_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -273,7 +279,10 @@ impl SqliteObjectEngine {
             "SELECT object_type_id, properties, created_at, updated_at FROM objects WHERE id = ?1",
             params![object_id_str],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        ).map_err(|_| ObjectError::ObjectNotFound(*object_id))?;
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ObjectError::ObjectNotFound(*object_id),
+            _ => ObjectError::DatabaseError(e.to_string()),
+        })?;
 
         let mut rel_stmt = conn.prepare(
             "SELECT target_id FROM object_relations WHERE source_id = ?1"
@@ -287,11 +296,14 @@ impl SqliteObjectEngine {
         Ok(Object {
             id: *object_id,
             object_type_id: Uuid::parse_str(&type_id_str)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
-            properties: serde_json::from_str(&props_str).unwrap_or(serde_json::Value::Object(Default::default())),
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid object_type_id: {e}")))?,
+            properties: serde_json::from_str(&props_str)
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid properties JSON: {e}")))?,
             relations: rels,
-            created_at: created_str.parse().unwrap_or_else(|_| Utc::now()),
-            updated_at: updated_str.parse().unwrap_or_else(|_| Utc::now()),
+            created_at: created_str.parse()
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid created_at timestamp: {e}")))?,
+            updated_at: updated_str.parse()
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid updated_at timestamp: {e}")))?,
         })
     }
 }

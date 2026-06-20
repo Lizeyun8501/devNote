@@ -115,6 +115,8 @@ pub enum FlashcardError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("database error: {0}")]
+    DatabaseError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -223,8 +225,8 @@ impl SqliteFlashcardEngine {
                 id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 flashcard_id: Uuid::parse_str(&fid_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 quality,
-                reviewed_at: reviewed_at_str.parse().unwrap_or_else(|_| Utc::now()),
-                next_review: next_review_str.parse().unwrap_or_else(|_| Utc::now()),
+                reviewed_at: reviewed_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                next_review: next_review_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 ease_factor,
                 interval,
                 repetitions,
@@ -233,7 +235,7 @@ impl SqliteFlashcardEngine {
 
         match result {
             Some(Ok(record)) => Ok(Some(record)),
-            Some(Err(_)) => Ok(None),
+            Some(Err(e)) => Err(FlashcardError::Sqlite(e)),
             None => Ok(None),
         }
     }
@@ -277,7 +279,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
                 id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 description,
-                created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                created_at: created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
         Ok(decks)
@@ -338,7 +340,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
                     note_id_str,
                     Uuid::parse_str(&deck_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                     front_str,
-                    created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                    created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 ))
             },
         ).map_err(|_| FlashcardError::FlashcardNotFound(*id))?;
@@ -461,7 +463,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
                 front,
                 back,
                 deck_id: Uuid::parse_str(&did_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
-                created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                created_at: created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -500,7 +502,7 @@ impl FlashcardEngine for SqliteFlashcardEngine {
             "SELECT COALESCE(AVG(quality), 0.0) FROM review_records WHERE flashcard_id IN (SELECT id FROM flashcards WHERE deck_id = ?1)",
             params![deck_id_str],
             |row| row.get(0),
-        ).unwrap_or(0.0);
+        ).map_err(|e| FlashcardError::DatabaseError(format!("query avg_quality: {e}")))?;
 
         Ok(ReviewStats {
             total_cards,

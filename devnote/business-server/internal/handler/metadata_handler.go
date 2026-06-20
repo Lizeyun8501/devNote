@@ -23,13 +23,19 @@ func NewMetadataHandler(svc *service.MetadataService, logger *zap.Logger) *Metad
 
 // Create handles POST /api/v1/metadata
 func (h *MetadataHandler) Create(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	var req model.NoteMeta
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "invalid request body", Detail: err.Error()})
 		return
 	}
 
-	result, err := h.svc.Create(&req)
+	result, err := h.svc.Create(userID, &req)
 	if err != nil {
 		h.logger.Error("create metadata failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -41,8 +47,14 @@ func (h *MetadataHandler) Create(c *gin.Context) {
 
 // Get handles GET /api/v1/metadata/:id
 func (h *MetadataHandler) Get(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	result, err := h.svc.Get(id)
+	result, err := h.svc.Get(userID, id)
 	if err != nil {
 		h.logger.Error("get metadata failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: err.Error()})
@@ -53,6 +65,12 @@ func (h *MetadataHandler) Get(c *gin.Context) {
 
 // Update handles PUT /api/v1/metadata/:id
 func (h *MetadataHandler) Update(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
 	var req model.NoteMeta
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -61,7 +79,7 @@ func (h *MetadataHandler) Update(c *gin.Context) {
 	}
 	req.ID = id
 
-	result, err := h.svc.Update(&req)
+	result, err := h.svc.Update(userID, &req)
 	if err != nil {
 		h.logger.Error("update metadata failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -72,8 +90,14 @@ func (h *MetadataHandler) Update(c *gin.Context) {
 
 // Delete handles DELETE /api/v1/metadata/:id
 func (h *MetadataHandler) Delete(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	if err := h.svc.Delete(id); err != nil {
+	if err := h.svc.Delete(userID, id); err != nil {
 		h.logger.Error("delete metadata failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
 		return
@@ -83,11 +107,17 @@ func (h *MetadataHandler) Delete(c *gin.Context) {
 
 // List handles GET /api/v1/metadata
 func (h *MetadataHandler) List(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	search := c.Query("search")
 
-	result, err := h.svc.List(page, pageSize, search)
+	result, err := h.svc.List(userID, page, pageSize, search)
 	if err != nil {
 		h.logger.Error("list metadata failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -98,6 +128,12 @@ func (h *MetadataHandler) List(c *gin.Context) {
 
 // Filter handles GET /api/v1/metadata/filter
 func (h *MetadataHandler) Filter(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
@@ -107,7 +143,7 @@ func (h *MetadataHandler) Filter(c *gin.Context) {
 		"language": c.Query("language"),
 	}
 
-	result, err := h.svc.Filter(filterMap, page, pageSize)
+	result, err := h.svc.Filter(userID, filterMap, page, pageSize)
 	if err != nil {
 		h.logger.Error("filter metadata failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -118,6 +154,12 @@ func (h *MetadataHandler) Filter(c *gin.Context) {
 
 // BatchCreate handles POST /api/v1/metadata/batch
 func (h *MetadataHandler) BatchCreate(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	var req struct {
 		Items []*model.NoteMeta `json:"items"`
 	}
@@ -126,7 +168,7 @@ func (h *MetadataHandler) BatchCreate(c *gin.Context) {
 		return
 	}
 
-	result, err := h.svc.BatchCreate(req.Items)
+	result, err := h.svc.BatchCreate(userID, req.Items)
 	if err != nil {
 		h.logger.Error("batch create metadata failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -137,6 +179,12 @@ func (h *MetadataHandler) BatchCreate(c *gin.Context) {
 
 // BatchDelete handles POST /api/v1/metadata/batch-delete
 func (h *MetadataHandler) BatchDelete(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	var req struct {
 		IDs []string `json:"ids"`
 	}
@@ -145,7 +193,7 @@ func (h *MetadataHandler) BatchDelete(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.BatchDelete(req.IDs); err != nil {
+	if err := h.svc.BatchDelete(userID, req.IDs); err != nil {
 		h.logger.Error("batch delete metadata failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
 		return

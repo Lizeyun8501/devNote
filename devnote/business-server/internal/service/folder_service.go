@@ -23,23 +23,24 @@ func NewFolderService(db *sql.DB) *FolderService {
 }
 
 // Create inserts a new folder.
-func (s *FolderService) Create(folder *model.FolderMeta) (*model.FolderMeta, error) {
+func (s *FolderService) Create(userID string, folder *model.FolderMeta) (*model.FolderMeta, error) {
 	if strings.TrimSpace(folder.Name) == "" {
 		return nil, errors.New("folder name is required")
 	}
 
 	folder.ID = uuid.New().String()
+	folder.UserID = userID
 	now := time.Now().UTC()
 	folder.CreatedAt = now
 	folder.ModifiedAt = now
 
 	// Build path
-	folder.Path = s.buildPath(folder.Name, folder.ParentID)
+	folder.Path = s.buildPath(userID, folder.Name, folder.ParentID)
 
 	_, err := s.db.Exec(`
-		INSERT INTO folder_meta (id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
-	`, folder.ID, folder.Name, folder.ParentID, folder.Path, folder.Description,
+		INSERT INTO folder_meta (id, user_id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+	`, folder.ID, folder.UserID, folder.Name, folder.ParentID, folder.Path, folder.Description,
 		folder.Icon, folder.Color, folder.SortOrder, folder.CreatedAt, folder.ModifiedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert folder: %w", err)
@@ -48,7 +49,7 @@ func (s *FolderService) Create(folder *model.FolderMeta) (*model.FolderMeta, err
 	// Update parent's child_count
 	// 修复(P0): 原代码忽略 child_count 更新错误，统计数据可能永久错误。
 	if folder.ParentID != "" {
-		if _, err := s.db.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=?`, folder.ParentID); err != nil {
+		if _, err := s.db.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=? AND user_id=?`, folder.ParentID, userID); err != nil {
 			return nil, fmt.Errorf("update parent child_count: %w", err)
 		}
 	}
@@ -57,14 +58,14 @@ func (s *FolderService) Create(folder *model.FolderMeta) (*model.FolderMeta, err
 }
 
 // Get retrieves a folder by ID.
-func (s *FolderService) Get(id string) (*model.FolderMeta, error) {
+func (s *FolderService) Get(userID, id string) (*model.FolderMeta, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count
-		FROM folder_meta WHERE id=?
-	`, id)
+		SELECT id, user_id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count
+		FROM folder_meta WHERE id=? AND user_id=?
+	`, id, userID)
 
 	var f model.FolderMeta
-	err := row.Scan(&f.ID, &f.Name, &f.ParentID, &f.Path, &f.Description, &f.Icon, &f.Color,
+	err := row.Scan(&f.ID, &f.UserID, &f.Name, &f.ParentID, &f.Path, &f.Description, &f.Icon, &f.Color,
 		&f.SortOrder, &f.CreatedAt, &f.ModifiedAt, &f.NoteCount, &f.ChildCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("folder not found: %s", id)
@@ -76,41 +77,54 @@ func (s *FolderService) Get(id string) (*model.FolderMeta, error) {
 }
 
 // Update modifies an existing folder.
-func (s *FolderService) Update(folder *model.FolderMeta) (*model.FolderMeta, error) {
+func (s *FolderService) Update(userID string, folder *model.FolderMeta) (*model.FolderMeta, error) {
 	if folder.ID == "" {
 		return nil, errors.New("id is required")
 	}
 
 	folder.ModifiedAt = time.Now().UTC()
-	folder.Path = s.buildPath(folder.Name, folder.ParentID)
+	folder.Path = s.buildPath(userID, folder.Name, folder.ParentID)
 
-	_, err := s.db.Exec(`
+	res, err := s.db.Exec(`
 		UPDATE folder_meta SET name=?, parent_id=?, path=?, description=?, icon=?, color=?, sort_order=?, modified_at=?
-		WHERE id=?
+		WHERE id=? AND user_id=?
 	`, folder.Name, folder.ParentID, folder.Path, folder.Description,
-		folder.Icon, folder.Color, folder.SortOrder, folder.ModifiedAt, folder.ID)
+		folder.Icon, folder.Color, folder.SortOrder, folder.ModifiedAt, folder.ID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("update folder: %w", err)
 	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return nil, fmt.Errorf("folder not found: %s", folder.ID)
+	}
+	folder.UserID = userID
 	return folder, nil
 }
 
 // Delete removes a folder. If cascade is true, deletes all descendants.
-func (s *FolderService) Delete(id string, cascade bool) error {
+func (s *FolderService) Delete(userID, id string, cascade bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
+	// Verify ownership before deleting.
+	var ownCnt int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM folder_meta WHERE id=? AND user_id=?`, id, userID).Scan(&ownCnt); err != nil {
+		return fmt.Errorf("check folder ownership: %w", err)
+	}
+	if ownCnt == 0 {
+		return fmt.Errorf("folder not found: %s", id)
+	}
+
 	if cascade {
-		children, err := s.getAllDescendantIDs(tx, id)
+		children, err := s.getAllDescendantIDs(tx, userID, id)
 		if err != nil {
 			return err
 		}
 		for _, childID := range children {
 			// 修复(P0): 原代码忽略级联删除错误，可能导致子文件夹残留。
-			if _, err := tx.Exec(`DELETE FROM folder_meta WHERE id=?`, childID); err != nil {
+			if _, err := tx.Exec(`DELETE FROM folder_meta WHERE id=? AND user_id=?`, childID, userID); err != nil {
 				return fmt.Errorf("delete descendant %s: %w", childID, err)
 			}
 		}
@@ -118,18 +132,18 @@ func (s *FolderService) Delete(id string, cascade bool) error {
 
 	// Get parent before deleting
 	var parentID string
-	if err := tx.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, id).Scan(&parentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=? AND user_id=?`, id, userID).Scan(&parentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("get parent id: %w", err)
 	}
 
-	if _, err := tx.Exec(`DELETE FROM folder_meta WHERE id=?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM folder_meta WHERE id=? AND user_id=?`, id, userID); err != nil {
 		return fmt.Errorf("delete folder: %w", err)
 	}
 
 	// Update parent's child_count
 	// 修复(P0): 原代码忽略 child_count 更新错误。
 	if parentID != "" {
-		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=?`, parentID); err != nil {
+		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=? AND user_id=?`, parentID, userID); err != nil {
 			return fmt.Errorf("update parent child_count: %w", err)
 		}
 	}
@@ -138,14 +152,14 @@ func (s *FolderService) Delete(id string, cascade bool) error {
 }
 
 // List returns all folders at the root level or all folders.
-func (s *FolderService) List(parentID string) ([]model.FolderMeta, error) {
+func (s *FolderService) List(userID, parentID string) ([]model.FolderMeta, error) {
 	var rows *sql.Rows
 	var err error
 
 	if parentID == "" {
-		rows, err = s.db.Query(`SELECT id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count FROM folder_meta ORDER BY sort_order ASC, name ASC`)
+		rows, err = s.db.Query(`SELECT id, user_id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count FROM folder_meta WHERE user_id=? ORDER BY sort_order ASC, name ASC`, userID)
 	} else {
-		rows, err = s.db.Query(`SELECT id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count FROM folder_meta WHERE parent_id=? ORDER BY sort_order ASC, name ASC`, parentID)
+		rows, err = s.db.Query(`SELECT id, user_id, name, parent_id, path, description, icon, color, sort_order, created_at, modified_at, note_count, child_count FROM folder_meta WHERE user_id=? AND parent_id=? ORDER BY sort_order ASC, name ASC`, userID, parentID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list folders: %w", err)
@@ -155,7 +169,7 @@ func (s *FolderService) List(parentID string) ([]model.FolderMeta, error) {
 	var folders []model.FolderMeta
 	for rows.Next() {
 		var f model.FolderMeta
-		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID, &f.Path, &f.Description, &f.Icon, &f.Color,
+		if err := rows.Scan(&f.ID, &f.UserID, &f.Name, &f.ParentID, &f.Path, &f.Description, &f.Icon, &f.Color,
 			&f.SortOrder, &f.CreatedAt, &f.ModifiedAt, &f.NoteCount, &f.ChildCount); err != nil {
 			return nil, fmt.Errorf("scan folder: %w", err)
 		}
@@ -165,8 +179,8 @@ func (s *FolderService) List(parentID string) ([]model.FolderMeta, error) {
 }
 
 // GetTree returns the folder tree rooted at parentID ("" means root).
-func (s *FolderService) GetTree(parentID string) ([]FolderTreeNode, error) {
-	children, err := s.List(parentID)
+func (s *FolderService) GetTree(userID, parentID string) ([]FolderTreeNode, error) {
+	children, err := s.List(userID, parentID)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +194,7 @@ func (s *FolderService) GetTree(parentID string) ([]FolderTreeNode, error) {
 			ChildCount: f.ChildCount,
 		}
 		if f.ChildCount > 0 {
-			sub, err := s.GetTree(f.ID)
+			sub, err := s.GetTree(userID, f.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -204,13 +218,13 @@ type FolderTreeNode struct {
 // ----------------------------------------------------------------
 
 // MoveFolder moves a folder under a new parent.
-func (s *FolderService) MoveFolder(folderID, newParentID string) error {
+func (s *FolderService) MoveFolder(userID, folderID, newParentID string) error {
 	// Circular reference check
 	if folderID == newParentID {
 		return errors.New("a folder cannot be its own parent")
 	}
 
-	hasCycle, err := s.hasCycle(folderID, newParentID)
+	hasCycle, err := s.hasCycle(userID, folderID, newParentID)
 	if err != nil {
 		return err
 	}
@@ -220,8 +234,11 @@ func (s *FolderService) MoveFolder(folderID, newParentID string) error {
 
 	// Get old parent
 	var oldParentID string
-	if err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, folderID).Scan(&oldParentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=? AND user_id=?`, folderID, userID).Scan(&oldParentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("get old parent: %w", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("folder not found: %s", folderID)
 	}
 
 	tx, err := s.db.Begin()
@@ -231,8 +248,8 @@ func (s *FolderService) MoveFolder(folderID, newParentID string) error {
 	defer tx.Rollback()
 
 	// Update parent
-	newPath := s.buildPathFor(folderID, newParentID)
-	_, err = tx.Exec(`UPDATE folder_meta SET parent_id=?, path=?, modified_at=? WHERE id=?`, newParentID, newPath, time.Now().UTC(), folderID)
+	newPath := s.buildPathFor(userID, folderID, newParentID)
+	_, err = tx.Exec(`UPDATE folder_meta SET parent_id=?, path=?, modified_at=? WHERE id=? AND user_id=?`, newParentID, newPath, time.Now().UTC(), folderID, userID)
 	if err != nil {
 		return fmt.Errorf("move folder: %w", err)
 	}
@@ -240,14 +257,14 @@ func (s *FolderService) MoveFolder(folderID, newParentID string) error {
 	// Update old parent child_count
 	// 修复(P0): 原代码忽略 child_count 更新错误，统计数据可能永久错误。
 	if oldParentID != "" {
-		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=?`, oldParentID); err != nil {
+		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = MAX(child_count - 1, 0) WHERE id=? AND user_id=?`, oldParentID, userID); err != nil {
 			return fmt.Errorf("update old parent child_count: %w", err)
 		}
 	}
 
 	// Update new parent child_count
 	if newParentID != "" {
-		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=?`, newParentID); err != nil {
+		if _, err := tx.Exec(`UPDATE folder_meta SET child_count = child_count + 1 WHERE id=? AND user_id=?`, newParentID, userID); err != nil {
 			return fmt.Errorf("update new parent child_count: %w", err)
 		}
 	}
@@ -256,13 +273,13 @@ func (s *FolderService) MoveFolder(folderID, newParentID string) error {
 }
 
 // CopyFolder duplicates a folder and all its descendants under a new parent.
-func (s *FolderService) CopyFolder(folderID, newParentID string) (*model.FolderMeta, error) {
-	src, err := s.Get(folderID)
+func (s *FolderService) CopyFolder(userID, folderID, newParentID string) (*model.FolderMeta, error) {
+	src, err := s.Get(userID, folderID)
 	if err != nil {
 		return nil, err
 	}
 
-	copy, err := s.Create(&model.FolderMeta{
+	copy, err := s.Create(userID, &model.FolderMeta{
 		Name:        src.Name + " (copy)",
 		ParentID:    newParentID,
 		Description: src.Description,
@@ -275,12 +292,12 @@ func (s *FolderService) CopyFolder(folderID, newParentID string) (*model.FolderM
 	}
 
 	// Recursively copy children
-	children, err := s.List(folderID)
+	children, err := s.List(userID, folderID)
 	if err != nil {
 		return nil, err
 	}
 	for _, child := range children {
-		if _, err := s.CopyFolder(child.ID, copy.ID); err != nil {
+		if _, err := s.CopyFolder(userID, child.ID, copy.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -293,8 +310,8 @@ func (s *FolderService) CopyFolder(folderID, newParentID string) (*model.FolderM
 // ----------------------------------------------------------------
 
 // ResolvePath returns the full path string for a folder.
-func (s *FolderService) ResolvePath(folderID string) (string, error) {
-	f, err := s.Get(folderID)
+func (s *FolderService) ResolvePath(userID, folderID string) (string, error) {
+	f, err := s.Get(userID, folderID)
 	if err != nil {
 		return "", err
 	}
@@ -302,26 +319,26 @@ func (s *FolderService) ResolvePath(folderID string) (string, error) {
 }
 
 // buildPath constructs a full path from folder name and parent.
-func (s *FolderService) buildPath(name, parentID string) string {
+func (s *FolderService) buildPath(userID, name, parentID string) string {
 	if parentID == "" {
 		return "/" + name
 	}
-	parentPath, err := s.ResolvePath(parentID)
+	parentPath, err := s.ResolvePath(userID, parentID)
 	if err != nil {
 		return "/" + name
 	}
 	return parentPath + "/" + name
 }
 
-func (s *FolderService) buildPathFor(folderID, newParentID string) string {
+func (s *FolderService) buildPathFor(userID, folderID, newParentID string) string {
 	var name string
-	if err := s.db.QueryRow(`SELECT name FROM folder_meta WHERE id=?`, folderID).Scan(&name); err != nil {
+	if err := s.db.QueryRow(`SELECT name FROM folder_meta WHERE id=? AND user_id=?`, folderID, userID).Scan(&name); err != nil {
 		return "/"
 	}
 	if newParentID == "" {
 		return "/" + name
 	}
-	parentPath, err := s.ResolvePath(newParentID)
+	parentPath, err := s.ResolvePath(userID, newParentID)
 	if err != nil {
 		return "/" + name
 	}
@@ -333,7 +350,7 @@ func (s *FolderService) buildPathFor(folderID, newParentID string) string {
 // ----------------------------------------------------------------
 
 // GetNotesByFolder returns notes metadata associated with a folder.
-func (s *FolderService) GetNotesByFolder(folderID string, page, pageSize int) (*model.PaginatedResponse, error) {
+func (s *FolderService) GetNotesByFolder(userID, folderID string, page, pageSize int) (*model.PaginatedResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -344,14 +361,14 @@ func (s *FolderService) GetNotesByFolder(folderID string, page, pageSize int) (*
 	// Here we query note_meta.custom_fields for a "folder_id" key.
 	search := `%"folder_id":"` + folderID + `"%`
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE custom_fields LIKE ?`, search).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE user_id=? AND custom_fields LIKE ?`, userID, search).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count folder notes: %w", err)
 	}
 
 	offset := (page - 1) * pageSize
 	rows, err := s.db.Query(
-		`SELECT id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE custom_fields LIKE ? ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
-		search, pageSize, offset)
+		`SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE user_id=? AND custom_fields LIKE ? ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
+		userID, search, pageSize, offset)
 	if err != nil {
 		return nil, fmt.Errorf("get folder notes: %w", err)
 	}
@@ -361,7 +378,7 @@ func (s *FolderService) GetNotesByFolder(folderID string, page, pageSize int) (*
 	for rows.Next() {
 		var m model.NoteMeta
 		var isEnc int
-		if err := rows.Scan(&m.ID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
 			&m.WordCount, &m.CharCount, &m.Format, &m.Excerpt, &m.Language,
 			&isEnc, &m.ContentHash, &m.CustomFields); err != nil {
 			return nil, fmt.Errorf("scan note: %w", err)
@@ -385,15 +402,15 @@ func (s *FolderService) GetNotesByFolder(folderID string, page, pageSize int) (*
 // ----------------------------------------------------------------
 
 // hasCycle checks whether making childID a descendant of parentID creates a cycle.
-func (s *FolderService) hasCycle(childID, parentID string) (bool, error) {
+func (s *FolderService) hasCycle(userID, childID, parentID string) (bool, error) {
 	if parentID == "" {
 		return false, nil
 	}
-	return s.isAncestor(parentID, childID)
+	return s.isAncestor(userID, parentID, childID)
 }
 
 // isAncestor returns true if ancestor is an ancestor of folderID.
-func (s *FolderService) isAncestor(ancestorID, folderID string) (bool, error) {
+func (s *FolderService) isAncestor(userID, ancestorID, folderID string) (bool, error) {
 	currentID := folderID
 	visited := make(map[string]bool)
 	for currentID != "" {
@@ -405,7 +422,7 @@ func (s *FolderService) isAncestor(ancestorID, folderID string) (bool, error) {
 			return true, nil
 		}
 		var pid string
-		err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=?`, currentID).Scan(&pid)
+		err := s.db.QueryRow(`SELECT parent_id FROM folder_meta WHERE id=? AND user_id=?`, currentID, userID).Scan(&pid)
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
@@ -418,9 +435,9 @@ func (s *FolderService) isAncestor(ancestorID, folderID string) (bool, error) {
 }
 
 // getAllDescendantIDs collects all descendant IDs recursively using a transaction.
-func (s *FolderService) getAllDescendantIDs(tx *sql.Tx, folderID string) ([]string, error) {
+func (s *FolderService) getAllDescendantIDs(tx *sql.Tx, userID, folderID string) ([]string, error) {
 	var ids []string
-	rows, err := tx.Query(`SELECT id FROM folder_meta WHERE parent_id=?`, folderID)
+	rows, err := tx.Query(`SELECT id FROM folder_meta WHERE parent_id=? AND user_id=?`, folderID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +449,7 @@ func (s *FolderService) getAllDescendantIDs(tx *sql.Tx, folderID string) ([]stri
 			return nil, err
 		}
 		ids = append(ids, id)
-		children, err := s.getAllDescendantIDs(tx, id)
+		children, err := s.getAllDescendantIDs(tx, userID, id)
 		if err != nil {
 			return nil, err
 		}

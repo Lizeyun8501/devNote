@@ -131,13 +131,7 @@ func (s *AuthService) Login(username, password string) (*model.User, string, err
 			return nil, "", errors.New("invalid credentials")
 		}
 	} else if user.SRPEnabled {
-		// For SRP-enabled users, verify using the verifier directly
-		// 借鉴 SRP 协议：通过比较 v = g^x mod N 与存储的 verifier 是否一致来认证。
-		x := computeSRPX(username, password, user.SRPSalt)
-		v := new(big.Int).Exp(s.srpParams.G(), x, s.srpParams.N())
-		if v.Cmp(new(big.Int).SetBytes(user.SRPVerifier)) != 0 {
-			return nil, "", errors.New("invalid credentials")
-		}
+		return nil, "", errors.New("SRP-enabled accounts must use /auth/srp/init and /auth/srp/verify endpoints")
 	} else {
 		return nil, "", errors.New("invalid credentials")
 	}
@@ -242,6 +236,9 @@ func (s *AuthService) generateToken(user *model.User) (string, error) {
 // ValidateToken 校验 JWT 签名与有效期
 func (s *AuthService) ValidateToken(tokenStr string) (*model.Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &model.Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
 		return []byte(s.cfg.JWTSecret), nil
 	})
 	if err != nil {
@@ -277,10 +274,12 @@ func computeSRPX(username, password string, salt []byte) *big.Int {
 }
 
 // generateRandomToken 生成十六进制编码的随机 token
-func generateRandomToken(length int) string {
+func generateRandomToken(length int) (string, error) {
 	b := make([]byte, length)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // GenerateRefreshToken 生成 refresh token
@@ -288,7 +287,10 @@ func generateRandomToken(length int) string {
 // 借鉴 1Password 的"长生命周期 refresh token"策略：30 天有效期，
 // 同时记录 Revoked 标志位以便主动吊销。
 func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
-	token := generateRandomToken(32)
+	token, err := generateRandomToken(32)
+	if err != nil {
+		return "", err
+	}
 	refreshToken := &model.RefreshToken{
 		ID:        uuid.New().String(),
 		UserID:    userID,

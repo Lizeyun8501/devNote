@@ -109,6 +109,8 @@ pub enum GraphError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("serialization error: {0}")]
+    SerializationError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -233,9 +235,9 @@ impl SqliteGraphEngine {
             id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             title,
             node_type,
-            tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-            created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
-            updated_at: updated_at_str.parse().unwrap_or_else(|_| Utc::now()),
+            tags: serde_json::from_str(&tags_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            created_at: created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            updated_at: updated_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
         })
     }
 
@@ -260,7 +262,7 @@ impl SqliteGraphEngine {
             target_id: Uuid::parse_str(&target_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             edge_type,
             weight,
-            created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+            created_at: created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
         })
     }
 
@@ -321,7 +323,7 @@ impl SqliteGraphEngine {
             NodeType::Folder => "Folder",
             NodeType::Canvas => "Canvas",
         };
-        let tags_json = serde_json::to_string(&node.tags).unwrap_or_default();
+        let tags_json = serde_json::to_string(&node.tags).map_err(|e| GraphError::SerializationError(e.to_string()))?;
         let created_at_str = node.created_at.to_rfc3339();
         let updated_at_str = node.updated_at.to_rfc3339();
         conn.execute(
@@ -564,7 +566,7 @@ impl GraphEngine for SqliteGraphEngine {
 
         for (id, title, tags, created_at, updated_at) in notes {
             let id_str = id.to_string();
-            let tags_json = serde_json::to_string(tags).unwrap_or_default();
+            let tags_json = serde_json::to_string(tags).map_err(|e| GraphError::SerializationError(e.to_string()))?;
             let created_at_str = created_at.to_rfc3339();
             let updated_at_str = updated_at.to_rfc3339();
             conn.execute(

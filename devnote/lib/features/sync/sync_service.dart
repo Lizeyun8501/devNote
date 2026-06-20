@@ -146,6 +146,8 @@ class SyncService {
         status: SyncServiceStatus.error,
         lastError: e.toString(),
       );
+      _notifyListeners();
+      rethrow;
     }
 
     _notifyListeners();
@@ -204,7 +206,7 @@ class SyncService {
         lastError: e.toString(),
       );
       _notifyListeners();
-      return null;
+      rethrow;
     }
   }
 
@@ -359,7 +361,9 @@ class SyncService {
       headers['Authorization'] = 'Bearer $token';
     }
 
-    final response = await http.post(uri, headers: headers, body: data);
+    final response = await http
+        .post(uri, headers: headers, body: data)
+        .timeout(const Duration(seconds: 30));
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       // 推送成功
@@ -386,7 +390,9 @@ class SyncService {
       headers['Authorization'] = 'Bearer $token';
     }
 
-    final response = await http.get(uri, headers: headers);
+    final response = await http
+        .get(uri, headers: headers)
+        .timeout(const Duration(seconds: 30));
 
     if (response.statusCode == 204) {
       // 无新数据
