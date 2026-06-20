@@ -39,6 +39,8 @@ members = [
     # 使用了 version.workspace = true 等 workspace 继承字段，非成员无法解析，
     # 导致依赖它的 crate（如 devnote-core）构建失败。
     "devnote-observe",
+    # P0-2: OCR 文字识别 + 图片搜索 —— 纯 Rust OCR 引擎（ocrs/rten），无需 Tesseract
+    "devnote-ocr",
 ]
 resolver = "2"
 
@@ -73,6 +75,8 @@ devnote-ipfs = { path = "devnote-ipfs" }
 devnote-grpc = { path = "devnote-grpc" }
 devnote-websocket = { path = "devnote-websocket" }
 devnote-events = { path = "devnote-events" }
+# P0-2: OCR 文字识别 + 图片搜索
+devnote-ocr = { path = "devnote-ocr" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

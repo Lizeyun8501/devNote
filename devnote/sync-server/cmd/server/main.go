@@ -77,6 +77,8 @@ func main() {
 	srpAuthHandler := handler.NewSRPAuthHandler(authService)
 	syncHandler := handler.NewSyncHandler(syncService)
 	healthHandler := handler.NewHealthHandler()
+	realtimeHandler := handler.NewRealtimeHandler(authService)
+	clipperHandler := handler.NewClipperHandler(syncService)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -98,6 +100,12 @@ func main() {
 
 	// Prometheus metrics endpoint
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// 实时协作 WebSocket
+	// 注册在根级别 /realtime，与客户端 wss://sync.devnote.app/realtime 对齐。
+	// 不经过 JWTAuth 中间件：WebSocket 升级时无法使用标准 Bearer header，
+	// 改为在 handler 内部从 query param 校验 JWT。
+	r.GET("/realtime", realtimeHandler.Connect)
 
 	// API v1 routes
 	api := r.Group("/api/v1")
@@ -127,6 +135,13 @@ func main() {
 			sync.POST("/pull", syncHandler.Pull)
 			sync.GET("/status", syncHandler.Status)
 			sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
+		}
+
+		// Clipper API (protected) —— 网页剪藏扩展入口
+		notes := api.Group("/notes")
+		notes.Use(middleware.JWTAuth(authService))
+		{
+			notes.POST("/clip", clipperHandler.Clip)
 		}
 	}
 

@@ -1,0 +1,102 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/devnote/sync-server/internal/service"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+)
+
+// ClipperHandler 处理网页剪藏扩展发起的剪藏请求。
+type ClipperHandler struct {
+	syncService *service.SyncService
+}
+
+func NewClipperHandler(syncService *service.SyncService) *ClipperHandler {
+	return &ClipperHandler{syncService: syncService}
+}
+
+// ClipRequest 剪藏请求
+type ClipRequest struct {
+	Title     string   `json:"title" binding:"required"`
+	Content   string   `json:"content" binding:"required"` // Markdown 格式
+	SourceURL string   `json:"source_url" binding:"required"`
+	FolderID  string   `json:"folder_id"`
+	Tags      []string `json:"tags"`
+}
+
+// ClipResponse 剪藏响应
+type ClipResponse struct {
+	NoteID    string    `json:"note_id"`
+	Version   int64     `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Clip 处理网页剪藏：将剪藏内容作为一条新笔记通过 SyncService.Push 持久化。
+func (h *ClipperHandler) Clip(c *gin.Context) {
+	userID := c.GetString("user_id") // 从 JWT 中间件获取
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
+
+	var req ClipRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		return
+	}
+
+	// 生成笔记 ID
+	noteID := uuid.New().String()
+
+	// 构造笔记内容（JSON 格式，包含 source_url 等元数据）
+	noteContent := map[string]interface{}{
+		"title":      req.Title,
+		"content":    req.Content,
+		"source_url": req.SourceURL,
+		"clipped_at": time.Now().UTC().Format(time.RFC3339),
+		"tags":       req.Tags,
+	}
+	if req.FolderID != "" {
+		noteContent["folder_id"] = req.FolderID
+	}
+	contentJSON, err := json.Marshal(noteContent)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode note content: " + err.Error()})
+		return
+	}
+
+	// 通过 SyncService.Push 创建笔记
+	pushReq := &service.PushRequest{
+		DeviceID: "web-clipper",
+		Records: []service.SyncRecordInput{
+			{
+				NoteID:  noteID,
+				Action:  "create",
+				Version: 0,
+				Payload: string(contentJSON),
+			},
+		},
+	}
+
+	if _, err := h.syncService.Push(userID, pushReq); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save clip: " + err.Error()})
+		return
+	}
+
+	// PushResponse 不返回每条 record 的版本号，因此查询实际分配到的版本。
+	version, err := h.syncService.GetNoteLatestVersion(userID, noteID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query clip version: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ClipResponse{
+		NoteID:    noteID,
+		Version:   version,
+		CreatedAt: time.Now().UTC(),
+	})
+}

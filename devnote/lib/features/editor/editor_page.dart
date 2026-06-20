@@ -9,6 +9,7 @@ import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
 import 'package:devnote/features/editor/widgets/block_widget.dart';
 import 'package:devnote/features/editor/widgets/block_toolbar.dart';
+import 'package:devnote/features/editor/widgets/voice_recorder_widget.dart';
 import 'package:devnote/features/editor/widgets/editor_shortcuts.dart';
 import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
 import 'package:devnote/core/performance/virtual_scroll_controller.dart';
@@ -121,6 +122,7 @@ class _EditorViewState extends State<_EditorView> {
                     onInsertCodeBlock: () => _insertBlock(context, state, BlockType.codeBlock),
                     onInsertList: () => _insertBlock(context, state, BlockType.list),
                     onInsertQuote: () => _insertBlock(context, state, BlockType.quote),
+                    onInsertAudio: () => _showVoiceRecorder(context, state),
                   ),
                 ],
               );
@@ -267,6 +269,32 @@ class _EditorViewState extends State<_EditorView> {
           content: '',
           position: state.blocks.length,
         ));
+  }
+
+  /// 显示语音录音底部弹窗，录音完成后插入 audio block
+  Future<void> _showVoiceRecorder(BuildContext context, EditorLoaded state) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+          ),
+          child: VoiceRecorderWidget(
+            onRecordingComplete: (content) {
+              context.read<EditorBloc>().add(InsertBlock(
+                    noteId: state.noteId,
+                    blockType: BlockType.audio,
+                    content: content,
+                    position: state.blocks.length,
+                  ));
+              Navigator.pop(sheetContext);
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   void _applyBold() {

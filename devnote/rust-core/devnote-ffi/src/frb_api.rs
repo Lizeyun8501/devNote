@@ -674,3 +674,89 @@ pub fn export_markdown(notes_json: String, path: String) -> Result<(), String> {
     exporter.export(&notes, Path::new(&path), ExportFormat::Markdown)
         .map_err(|e| e.to_string())
 }
+
+// ── 语音转文字 API ────────────────────────────────────────────────────
+
+/// 语音转文字结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscribeResultFfi {
+    pub text: String,
+    pub duration_ms: u64,
+    pub segments: Vec<TranscriptSegmentFfi>,
+}
+
+/// 转写片段（带时间戳）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptSegmentFfi {
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// 语音转文字 —— 集成 whisper-rs 进行本地语音转文字
+///
+/// 当前为接口框架，实际转写逻辑待 whisper-rs 集成后实现。
+/// 调用方应捕获返回的 Err 并降级为平台原生 API。
+pub fn transcribe_audio(audio_base64: String, lang: String) -> Result<TranscribeResultFfi, String> {
+    let _ = audio_base64;
+    let _ = lang;
+    Err("Speech-to-text is not yet available. Whisper model integration pending.".to_string())
+}
+
+// ── OCR API ──────────────────────────────────────────────────────────
+// P0-2: OCR 文字识别 + 图片搜索
+// 基于 devnote-ocr crate（ocrs 纯 Rust OCR 引擎），识别图片中的文字并纳入全文搜索索引
+
+/// OCR 识别结果（FFI 传输结构）—— FRB 自动生成对应 Dart 类
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrResultFfi {
+    pub text: String,
+    pub lines: Vec<String>,
+    pub confidence: f32,
+}
+
+/// OCR 识别图片中的文字 —— 替代原 OcrEvent.Recognize
+/// image_base64: base64 编码的图片数据（支持 PNG/JPEG/WebP）
+/// 返回识别出的全文
+pub fn ocr_recognize_image(image_base64: String) -> Result<String, String> {
+    let mut engine = devnote_ocr::OcrEngine::new();
+    let result = engine.recognize_from_base64(&image_base64)
+        .map_err(|e| e.to_string())?;
+    Ok(result.text)
+}
+
+/// OCR 识别并返回结构化结果（含按行分割与置信度）
+pub fn ocr_recognize_image_detailed(image_base64: String) -> Result<OcrResultFfi, String> {
+    let mut engine = devnote_ocr::OcrEngine::new();
+    let result = engine.recognize_from_base64(&image_base64)
+        .map_err(|e| e.to_string())?;
+    Ok(OcrResultFfi {
+        text: result.text,
+        lines: result.lines,
+        confidence: result.confidence,
+    })
+}
+
+/// 将 OCR 识别文本纳入笔记的全文搜索索引 —— 替代原 OcrEvent.IndexImage
+/// 将 OCR 文本追加到笔记现有内容后重新索引，使图片中的文字可被全文检索
+pub fn index_ocr_text(note_id: String, ocr_text: String) -> Result<(), String> {
+    let uid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
+    let note = {
+        let guard = NOTE_REPO.lock();
+        let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
+        repo.get_note(&uid).map_err(|e| e.to_string())?
+            .ok_or("Note not found")?
+    };
+    let mut content = extract_content(&note);
+    if !ocr_text.is_empty() {
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str("[OCR] ");
+        content.push_str(&ocr_text);
+    }
+    let sguard = SEARCH_ENGINE.lock();
+    let engine = sguard.as_ref().ok_or("Search engine not initialized")?;
+    engine.index_note_with_meta(&note.id, &note.title, &content, &note.folder_id, &[], &note.updated_at)
+        .map_err(|e| e.to_string())
+}

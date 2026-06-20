@@ -1,5 +1,9 @@
 name: devnote
 description: "A cloud-based note-taking application"
+license: MIT
+repository: https://github.com/Lizeyun8501/devNote
+issue_tracker: https://github.com/Lizeyun8501/devNote/issues
+homepage: https://github.com/Lizeyun8501/devNote
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -97,6 +101,22 @@ dependencies:
   # 来源: https://pub.dev/packages/pointycastle
   # ============================================================
   pointycastle: ^3.7.0
+  # ============================================================
+  # perfect_freehand —— 压感手写笔触渲染
+  # 来源: https://pub.dev/packages/perfect_freehand
+  # 用于 Ink 手写绘图，支持 Apple Pencil / Surface Pen 压感
+  # ============================================================
+  perfect_freehand: ^2.0.0
+  # ============================================================
+  # 语音速记 —— 录音 / 播放 / 麦克风权限
+  # ------------------------------------------------------------
+  # record: 音频录制（AAC-LC 编码，支持 m4a 输出）
+  # audioplayers: 音频播放（支持本地文件播放、进度控制）
+  # permission_handler: 运行时权限请求（麦克风）
+  # ============================================================
+  record: ^5.1.0
+  audioplayers: ^6.1.0
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:

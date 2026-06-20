@@ -212,6 +212,21 @@ func (s *SyncService) GetStatus(userID, deviceID string) (*SyncStatus, error) {
 	}, nil
 }
 
+// GetNoteLatestVersion 返回指定笔记在最新快照中的版本号，找不到时返回 0。
+// 用于剪藏等场景在 Push 之后获取实际分配到的版本号。
+func (s *SyncService) GetNoteLatestVersion(userID, noteID string) (int64, error) {
+	var snapshot model.NoteSnapshot
+	err := s.db.Where("note_id = ? AND user_id = ?", noteID, userID).
+		Order("version DESC").First(&snapshot).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("query note latest version: %w", err)
+	}
+	return snapshot.Version, nil
+}
+
 func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolution) error {
 	snapshot := &model.NoteSnapshot{
 		ID:      uuid.New().String(),

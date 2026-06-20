@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:devnote/features/canvas/canvas_service.dart';
+import 'package:devnote/features/canvas/models/ink_stroke.dart';
 
 abstract class CanvasEvent extends Equatable {
   const CanvasEvent();
@@ -108,4 +109,29 @@ class SaveCanvas extends CanvasEvent {
 
   @override
   List<Object?> get props => [path];
+}
+
+// ============================================================
+// Ink 手写笔触事件
+// ============================================================
+
+class AddInkStroke extends CanvasEvent {
+  final InkStroke stroke;
+
+  const AddInkStroke(this.stroke);
+
+  @override
+  List<Object?> get props => [stroke];
+}
+
+class UndoInkStroke extends CanvasEvent {
+  const UndoInkStroke();
+}
+
+class RedoInkStroke extends CanvasEvent {
+  const RedoInkStroke();
+}
+
+class ClearInkStrokes extends CanvasEvent {
+  const ClearInkStrokes();
 }

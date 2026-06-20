@@ -279,3 +279,17 @@ flutter build web       # Web
 - [ ] 性能基准测试达标
 - [ ] 安全审计通过
 - [ ] 完整文档与教程
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before getting started.
+
+## Community
+
+- [Report a Bug](https://github.com/Lizeyun8501/devNote/issues)
+- [Request a Feature](https://github.com/Lizeyun8501/devNote/issues)
+- [Discussions](https://github.com/Lizeyun8501/devNote/discussions)

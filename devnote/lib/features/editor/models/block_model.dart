@@ -19,6 +19,7 @@ enum BlockType {
   image,
   latexBlock,
   taskListBlock,
+  audio, // 语音录制块
 }
 
 class BlockModel extends Equatable {

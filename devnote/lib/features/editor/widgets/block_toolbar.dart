@@ -6,6 +6,7 @@ class BlockToolbar extends StatelessWidget {
   final VoidCallback onInsertCodeBlock;
   final VoidCallback onInsertList;
   final VoidCallback onInsertQuote;
+  final VoidCallback onInsertAudio;
 
   const BlockToolbar({
     super.key,
@@ -14,6 +15,7 @@ class BlockToolbar extends StatelessWidget {
     required this.onInsertCodeBlock,
     required this.onInsertList,
     required this.onInsertQuote,
+    required this.onInsertAudio,
   });
 
   @override
@@ -65,6 +67,12 @@ class BlockToolbar extends StatelessWidget {
                 tooltip: 'Quote',
                 label: '插入引用',
                 onPressed: onInsertQuote,
+              ),
+              _ToolbarButton(
+                icon: Icons.mic,
+                tooltip: 'Voice Recorder',
+                label: '语音速记',
+                onPressed: onInsertAudio,
               ),
             ],
           ),

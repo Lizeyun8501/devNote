@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>DevNote Web Clipper</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1f2937;
+        --muted: #6b7280;
+        --accent: #2563eb;
+        --accent-hover: #1d4ed8;
+        --border: #e5e7eb;
+        --success: #16a34a;
+        --error: #dc2626;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 16px;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 13px;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .logo {
+        width: 20px;
+        height: 20px;
+        background: var(--accent);
+        border-radius: 4px;
+        display: inline-block;
+        color: #fff;
+        font-weight: 700;
+        text-align: center;
+        line-height: 20px;
+        font-size: 12px;
+      }
+      .title {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .page-info {
+        margin-bottom: 12px;
+        padding: 8px 10px;
+        background: #f9fafb;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .page-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+        word-break: break-word;
+      }
+      .page-url {
+        color: var(--muted);
+        font-size: 11px;
+        word-break: break-all;
+      }
+      .modes {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .mode-btn {
+        padding: 10px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #fff;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--fg);
+        transition: all 0.15s ease;
+        text-align: center;
+      }
+      .mode-btn:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .mode-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .mode-btn .icon {
+        display: block;
+        font-size: 16px;
+        margin-bottom: 2px;
+      }
+      .status {
+        min-height: 18px;
+        text-align: center;
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+      .status.success {
+        color: var(--success);
+      }
+      .status.error {
+        color: var(--error);
+      }
+      .status.loading {
+        color: var(--muted);
+      }
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-top: 1px solid var(--border);
+        padding-top: 10px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .footer a {
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .footer a:hover {
+        text-decoration: underline;
+      }
+      .login-prompt {
+        text-align: center;
+        padding: 20px 8px;
+      }
+      .login-prompt p {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+      .login-btn {
+        display: inline-block;
+        padding: 8px 16px;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .login-btn:hover {
+        background: var(--accent-hover);
+      }
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <span class="logo">D</span>
+      <span class="title">DevNote Web Clipper</span>
+    </div>
+
+    <div id="loggedOut" class="login-prompt hidden">
+      <p>尚未配置 API Token，请先在设置页填写。</p>
+      <button class="login-btn" id="openOptions">打开设置</button>
+    </div>
+
+    <div id="loggedIn">
+      <div class="page-info">
+        <div class="page-title" id="pageTitle">加载中…</div>
+        <div class="page-url" id="pageUrl"></div>
+      </div>
+
+      <div class="modes">
+        <button class="mode-btn" data-mode="full_page">
+          <span class="icon">📄</span>
+          整页
+        </button>
+        <button class="mode-btn" data-mode="simplified_article">
+          <span class="icon">📰</span>
+          正文
+        </button>
+        <button class="mode-btn" data-mode="bookmark">
+          <span class="icon">🔖</span>
+          书签
+        </button>
+        <button class="mode-btn" data-mode="selection">
+          <span class="icon">✂️</span>
+          选中内容
+        </button>
+      </div>
+
+      <div class="status" id="status"></div>
+
+      <div class="footer">
+        <span id="serverInfo"></span>
+        <a id="openOptions2">设置</a>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

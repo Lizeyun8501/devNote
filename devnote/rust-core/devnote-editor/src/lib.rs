@@ -25,6 +25,11 @@ pub enum BlockType {
     Image { url: String, alt: Option<String> },
     LatexBlock,
     TaskListBlock,
+    Audio {
+        url: String,
+        duration_ms: u64,
+        transcript: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -877,6 +882,45 @@ impl MarkdownParser {
                         content: table_lines.join("\n"),
                     });
                 }
+            } else if line.trim() == ":::audio" {
+                flush_paragraph(&mut current_lines, &mut blocks);
+                let mut audio_lines = Vec::new();
+                while let Some(next) = lines.next() {
+                    if next.trim() == ":::" {
+                        break;
+                    }
+                    audio_lines.push(next.to_string());
+                }
+                let json_content = audio_lines.join("\n");
+                let block_type = if let Ok(value) =
+                    serde_json::from_str::<serde_json::Value>(&json_content)
+                {
+                    BlockType::Audio {
+                        url: value
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        duration_ms: value
+                            .get("duration_ms")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        transcript: value
+                            .get("transcript")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                    }
+                } else {
+                    BlockType::Audio {
+                        url: String::new(),
+                        duration_ms: 0,
+                        transcript: None,
+                    }
+                };
+                blocks.push(ParsedBlock {
+                    block_type,
+                    content: json_content,
+                });
             } else if line.starts_with("$$") {
                 flush_paragraph(&mut current_lines, &mut blocks);
                 let mut latex_lines = vec![line.to_string()];

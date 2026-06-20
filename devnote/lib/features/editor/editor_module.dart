@@ -4,11 +4,19 @@
 
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
+import 'package:devnote/features/editor/services/speech_to_text_service.dart';
+import 'package:devnote/features/editor/services/voice_recorder_service.dart';
 
 /// 注册 Editor 模块依赖
 Future<void> registerEditorDependencies() async {
   if (!getIt.isRegistered<EditorService>()) {
     getIt.registerLazySingleton<EditorService>(() => EditorService());
+  }
+  if (!getIt.isRegistered<VoiceRecorderService>()) {
+    getIt.registerLazySingleton<VoiceRecorderService>(() => VoiceRecorderService());
+  }
+  if (!getIt.isRegistered<SpeechToTextService>()) {
+    getIt.registerLazySingleton<SpeechToTextService>(() => SpeechToTextService());
   }
 }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/widgets/audio_block_widget.dart';
 import 'package:devnote/features/editor/widgets/code_block_widget.dart';
 import 'package:devnote/features/editor/widgets/latex_block_widget.dart';
 import 'package:devnote/features/editor/widgets/table_block_widget.dart';
@@ -196,6 +197,7 @@ class _BlockWidgetState extends State<BlockWidget> {
       case BlockType.latexBlock:
       case BlockType.tableBlock:
       case BlockType.taskListBlock:
+      case BlockType.audio:
         return true;
       default:
         return false;
@@ -222,6 +224,11 @@ class _BlockWidgetState extends State<BlockWidget> {
         );
       case BlockType.taskListBlock:
         return TaskListWidget(
+          content: widget.block.content,
+          onContentChanged: widget.onContentChanged,
+        );
+      case BlockType.audio:
+        return AudioBlockWidget(
           content: widget.block.content,
           onContentChanged: widget.onContentChanged,
         );
@@ -363,6 +370,7 @@ class _BlockWidgetState extends State<BlockWidget> {
         const PopupMenuItem(value: BlockType.tableBlock, child: Text('Table')),
         const PopupMenuItem(value: BlockType.latexBlock, child: Text('LaTeX')),
         const PopupMenuItem(value: BlockType.taskListBlock, child: Text('Task List')),
+        const PopupMenuItem(value: BlockType.audio, child: Text('Audio')),
       ],
     ).then((type) {
       if (type != null) {

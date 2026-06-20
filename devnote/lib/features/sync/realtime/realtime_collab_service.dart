@@ -421,6 +421,10 @@ class RealtimeCollabService {
   static const String _deviceIdKey = 'realtime_device_id';
 
   /// 默认 WebSocket 服务器地址（与 sync-server 对齐）
+  ///
+  /// 仅作为兜底默认值；实际连接地址由 [_resolveServerUrl] 从
+  /// SharedPreferences 读取用户配置的同步服务器地址（与 SyncService 共用
+  /// `sync_server_url` key）后转换得到，允许用户自定义部署地址。
   static const String _defaultServerUrl = 'wss://sync.devnote.app/realtime';
 
   final RealtimeTransport _transport;
@@ -560,7 +564,8 @@ class RealtimeCollabService {
 
     // 建立 WebSocket 连接
     final token = await _resolveToken();
-    await _transport.connect(_defaultServerUrl, token: token);
+    final serverUrl = await _resolveServerUrl();
+    await _transport.connect(serverUrl, token: token);
 
     // 发送 join 消息
     final ok = await _transport.send({
@@ -902,6 +907,31 @@ class RealtimeCollabService {
   Future<String?> _resolveToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('sync_auth_token');
+  }
+
+  /// 解析 WebSocket 服务器地址
+  ///
+  /// 优先从 SharedPreferences 读取用户配置的同步服务器地址（与 SyncService
+  /// 共用 `sync_server_url` key），将其从 HTTP(S) 转换为 WS(S) 协议并追加
+  /// `/realtime` 路径。未配置时回退到默认地址 [_defaultServerUrl]。
+  Future<String> _resolveServerUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final syncUrl = prefs.getString('sync_server_url');
+    if (syncUrl == null || syncUrl.isEmpty) {
+      return _defaultServerUrl;
+    }
+    // 将 HTTP(S) URL 转换为 WS(S) URL
+    var wsUrl = syncUrl;
+    if (wsUrl.startsWith('https://')) {
+      wsUrl = 'wss://${wsUrl.substring('https://'.length)}';
+    } else if (wsUrl.startsWith('http://')) {
+      wsUrl = 'ws://${wsUrl.substring('http://'.length)}';
+    }
+    // 追加 /realtime 路径（去除末尾斜杠避免双斜杠）
+    if (wsUrl.endsWith('/')) {
+      wsUrl = wsUrl.substring(0, wsUrl.length - 1);
+    }
+    return '$wsUrl/realtime';
   }
 
   /// 生成设备 ID（密码学安全的 32 位十六进制字符串）

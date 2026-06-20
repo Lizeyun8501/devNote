@@ -74,6 +74,7 @@ pub fn register_all_handlers() {
     register_graph_handlers();
     register_flashcard_handlers();
     register_crdt_handlers();
+    register_ocr_handlers();
     register_plugin_handlers();
     register_p2p_handlers();
     register_system_handlers();
@@ -1225,6 +1226,50 @@ fn register_crdt_handlers() {
         match merge_documents(doc, req.remote_ops) {
             Ok(applied) => serialize_result(Ok(applied)),
             Err(e) => DispatchResponse::error(FFIErrorCode::InternalError, &e.to_string()),
+        }
+    }));
+}
+
+// ── OCR handlers ──────────────────────────────────────────────────────────
+// P0-2: OCR 文字识别 + 图片搜索
+// 委托给 frb_api 中的 ocr_recognize_image / index_ocr_text，避免逻辑重复
+
+fn register_ocr_handlers() {
+    register_handler("OcrEvent.Recognize", Box::new(|payload| {
+        #[derive(Deserialize)]
+        struct Req {
+            image_base64: String,
+        }
+        let req = match parse_payload::<Req>(payload) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        match crate::frb_api::ocr_recognize_image(req.image_base64) {
+            Ok(text) => DispatchResponse::success(&serde_json::to_string(&text).unwrap_or_default()),
+            Err(e) => DispatchResponse::error(FFIErrorCode::InternalError, &e),
+        }
+    }));
+
+    register_handler("OcrEvent.IndexImage", Box::new(|payload| {
+        #[derive(Deserialize)]
+        struct Req {
+            note_id: String,
+            image_base64: String,
+        }
+        let req = match parse_payload::<Req>(payload) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        // 先识别图片文字，再将结果纳入搜索索引
+        let ocr_text = match crate::frb_api::ocr_recognize_image(req.image_base64) {
+            Ok(t) => t,
+            Err(e) => return DispatchResponse::error(FFIErrorCode::InternalError, &e),
+        };
+        match crate::frb_api::index_ocr_text(req.note_id, ocr_text.clone()) {
+            Ok(()) => DispatchResponse::success(&serde_json::to_string(&serde_json::json!({
+                "ocr_text": ocr_text,
+            })).unwrap_or_default()),
+            Err(e) => DispatchResponse::error(FFIErrorCode::InternalError, &e),
         }
     }));
 }

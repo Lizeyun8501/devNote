@@ -26,6 +26,7 @@ devnote-object = { workspace = true }
 devnote-graph = { workspace = true }
 devnote-crdt = { workspace = true }
 devnote-flashcard = { workspace = true }
+devnote-ocr = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

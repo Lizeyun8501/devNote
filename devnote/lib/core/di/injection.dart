@@ -10,6 +10,7 @@ import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/features/notes/services/ocr_service.dart';
 
 /// 修复(P1): 移除所有 features/* 导入，消除 core → features 的反向依赖。
 /// 原实现导入了 13 个 features 模块，违反依赖倒置原则。
@@ -43,6 +44,9 @@ Future<void> setupDependencies() async {
 
   // 统一日志模块 —— 借鉴 log4j 的日志级别设计
   getIt.registerSingleton<AppLogger>(AppLogger.instance);
+
+  // P0-2: OCR 文字识别 + 图片搜索服务
+  getIt.registerLazySingleton<OcrService>(() => OcrService());
 }
 
 /// 释放 core 层已注册单例的资源。

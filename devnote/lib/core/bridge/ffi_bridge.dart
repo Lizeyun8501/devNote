@@ -61,6 +61,37 @@ class FfiVersionInfo {
   }
 }
 
+/// 语音转文字结果（FRB 映射类型）
+///
+/// 对应 Rust 端 `TranscribeResultFfi` 结构体，
+/// FRB codegen 运行后由生成代码替换。
+class TranscribeResultFfi {
+  final String text;
+  final int durationMs;
+  final List<TranscriptSegmentFfi> segments;
+
+  TranscribeResultFfi({
+    required this.text,
+    required this.durationMs,
+    required this.segments,
+  });
+}
+
+/// 转写片段（FRB 映射类型）
+///
+/// 对应 Rust 端 `TranscriptSegmentFfi` 结构体。
+class TranscriptSegmentFfi {
+  final String text;
+  final int startMs;
+  final int endMs;
+
+  TranscriptSegmentFfi({
+    required this.text,
+    required this.startMs,
+    required this.endMs,
+  });
+}
+
 /// FFI 桥接层 - Flutter 与 Rust 核心通信
 /// 
 /// 借鉴: AppFlowy FFI 桥接模式 (https://github.com/AppFlowy-IO/AppFlowy)
@@ -682,6 +713,62 @@ class FFIBridge {
   Future<void> exportMarkdown({required String notesJson, required String path}) async {
     _checkAvailable();
     await _frbApi.exportMarkdown(notesJson: notesJson, path: path);
+  }
+
+  // ============================================================
+  // 语音转文字 API —— Speech-to-Text
+  // ============================================================
+
+  /// 语音转文字 —— 调用 Rust 端 whisper-rs 进行本地转写
+  ///
+  /// [audioBase64] 音频文件的 base64 编码
+  /// [lang] 语言代码（如 'zh', 'en', 'ja'）
+  ///
+  /// Rust 端未集成 whisper-rs 时返回 Err，调用方应降级为平台原生 API。
+  Future<TranscribeResultFfi> transcribeAudio({
+    required String audioBase64,
+    required String lang,
+  }) async {
+    _checkAvailable();
+    // ignore: avoid_dynamic_calls
+    final result = await _frbApi.transcribeAudio(audioBase64: audioBase64, lang: lang);
+    // ignore: avoid_dynamic_calls
+    return TranscribeResultFfi(
+      text: result.text as String,
+      durationMs: result.durationMs as int,
+      segments: (result.segments as List)
+          // ignore: avoid_dynamic_calls
+          .map((s) => TranscriptSegmentFfi(
+                text: s.text as String,
+                startMs: s.startMs as int,
+                endMs: s.endMs as int,
+              ))
+          .toList(),
+    );
+  }
+
+  // ============================================================
+  // OCR API —— 替代原 OcrEvent.* 事件
+  // P0-2: OCR 文字识别 + 图片搜索
+  // ============================================================
+
+  /// OCR 识别图片中的文字
+  Future<String> ocrRecognizeImage({required String imageBase64}) async {
+    _checkAvailable();
+    return await _frbApi.ocrRecognizeImage(imageBase64: imageBase64);
+  }
+
+  /// OCR 识别并返回结构化结果（含按行分割与置信度）
+  Future<Map<String, dynamic>> ocrRecognizeImageDetailed({required String imageBase64}) async {
+    _checkAvailable();
+    final result = await _frbApi.ocrRecognizeImageDetailed(imageBase64: imageBase64);
+    return _toMap(result);
+  }
+
+  /// 将 OCR 识别文本纳入笔记的全文搜索索引
+  Future<void> indexOcrText({required String noteId, required String ocrText}) async {
+    _checkAvailable();
+    await _frbApi.indexOcrText(noteId: noteId, ocrText: ocrText);
   }
 
   // ============================================================
