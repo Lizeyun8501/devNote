@@ -92,6 +92,60 @@ class TranscriptSegmentFfi {
   });
 }
 
+/// Vault 加密数据（FRB 映射类型）
+///
+/// P1-7: 对应 Rust 端 `VaultEncryptedDataFfi` 结构体，
+/// FRB codegen 运行后由生成代码替换。
+/// 包含 toJson/fromJson 以支持 SharedPreferences 持久化。
+class VaultEncryptedData {
+  final String ciphertext;
+  final String salt;
+  final String nonce;
+  final int memoryCost;
+  final int timeCost;
+  final int parallelism;
+
+  VaultEncryptedData({
+    required this.ciphertext,
+    required this.salt,
+    required this.nonce,
+    required this.memoryCost,
+    required this.timeCost,
+    required this.parallelism,
+  });
+
+  /// 从 FRB 生成的 Dart 对象创建
+  factory VaultEncryptedData.fromFrb(dynamic frbData) {
+    return VaultEncryptedData(
+      ciphertext: frbData.ciphertext as String,
+      salt: frbData.salt as String,
+      nonce: frbData.nonce as String,
+      memoryCost: frbData.memoryCost as int,
+      timeCost: frbData.timeCost as int,
+      parallelism: frbData.parallelism as int,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'ciphertext': ciphertext,
+    'salt': salt,
+    'nonce': nonce,
+    'memory_cost': memoryCost,
+    'time_cost': timeCost,
+    'parallelism': parallelism,
+  };
+
+  factory VaultEncryptedData.fromJson(Map<String, dynamic> json) =>
+      VaultEncryptedData(
+        ciphertext: json['ciphertext'] as String,
+        salt: json['salt'] as String,
+        nonce: json['nonce'] as String,
+        memoryCost: (json['memory_cost'] as num).toInt(),
+        timeCost: (json['time_cost'] as num).toInt(),
+        parallelism: (json['parallelism'] as num).toInt(),
+      );
+}
+
 /// FFI 桥接层 - Flutter 与 Rust 核心通信
 /// 
 /// 借鉴: AppFlowy FFI 桥接模式 (https://github.com/AppFlowy-IO/AppFlowy)
@@ -769,6 +823,42 @@ class FFIBridge {
   Future<void> indexOcrText({required String noteId, required String ocrText}) async {
     _checkAvailable();
     await _frbApi.indexOcrText(noteId: noteId, ocrText: ocrText);
+  }
+
+  // ============================================================
+  // Vault API —— P1-7: 保险库（敏感笔记二次加密）
+  // 对标 Notesnook 的 Vault 功能：使用独立密码对敏感笔记进行二次加密
+  // ============================================================
+
+  /// Vault 加密 —— 使用用户密码对明文进行加密
+  ///
+  /// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密
+  Future<VaultEncryptedData> vaultEncrypt({
+    required String password,
+    required String plaintext,
+  }) async {
+    _checkAvailable();
+    // ignore: avoid_dynamic_calls
+    final result = await _frbApi.vaultEncrypt(password: password, plaintext: plaintext);
+    return VaultEncryptedData.fromFrb(result);
+  }
+
+  /// Vault 解密 —— 使用用户密码对密文进行解密
+  Future<String> vaultDecrypt({
+    required String password,
+    required VaultEncryptedData encrypted,
+  }) async {
+    _checkAvailable();
+    return await _frbApi.vaultDecrypt(password: password, encrypted: encrypted);
+  }
+
+  /// 验证 Vault 密码 —— 通过尝试解密测试向量验证密码是否正确
+  bool vaultVerifyPassword({
+    required String password,
+    required VaultEncryptedData encrypted,
+  }) {
+    _checkAvailable();
+    return _frbApi.vaultVerifyPassword(password: password, encrypted: encrypted) as bool;
   }
 
   // ============================================================

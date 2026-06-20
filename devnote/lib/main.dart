@@ -42,6 +42,8 @@ import 'package:devnote/features/knowledge_graph/knowledge_graph_module.dart';
 import 'package:devnote/features/flashcard/flashcard_module.dart';
 // P1-3: 模板系统 + 模板市场
 import 'package:devnote/features/templates/templates_module.dart';
+// P1-7: Vault 保险库（敏感笔记二次加密）
+import 'package:devnote/features/vault/vault_module.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +66,8 @@ void main() async {
   await registerFlashcardDependencies();
   // P1-3: 注册模板系统服务到 DI
   await registerTemplatesDependencies();
+  // P1-7: 注册 Vault 保险库服务到 DI
+  await registerVaultDependencies();
 
   // 修复：Sentry 初始化提前到 FFI Bridge 之前，确保 FFI 初始化过程中的
   // 错误能被 Sentry 捕获上报，防止启动阶段异常丢失
@@ -145,7 +149,9 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   /// 确保数据库句柄在 getIt.reset() 之前被正确关闭。
   Future<void> _disposeAll() async {
     // 修复(P2-1): 释放新增 feature 模块资源（逆序，features 在 core 之前释放）
-    // P1-3: 模板系统最后注册，故最先释放
+    // P1-7: Vault 保险库最后注册，故最先释放（锁定以清除内存中的密码）
+    disposeVaultModule();
+    // P1-3: 模板系统
     disposeTemplatesModule();
     disposeFlashcardModule();
     disposeGraphModule();

@@ -5,9 +5,12 @@ import 'package:devnote/features/database/bloc/database_bloc.dart';
 import 'package:devnote/features/database/bloc/database_event.dart';
 import 'package:devnote/features/database/bloc/database_state.dart';
 import 'package:devnote/features/database/database_service.dart';
+import 'package:devnote/features/database/models/comment_model.dart';
 import 'package:devnote/features/database/widgets/table_view.dart';
 import 'package:devnote/features/database/widgets/kanban_view.dart';
 import 'package:devnote/features/database/widgets/calendar_view.dart';
+import 'package:devnote/features/database/widgets/gallery_view_widget.dart';
+import 'package:devnote/features/database/widgets/comment_panel.dart';
 import 'package:devnote/features/database/widgets/filter_panel.dart';
 import 'package:devnote/features/database/widgets/sort_panel.dart';
 
@@ -53,6 +56,11 @@ class _DatabaseViewState extends State<_DatabaseView> {
           },
         ),
         actions: [
+          // P1-6: 行内评论入口
+          IconButton(
+            icon: const Icon(Icons.comment),
+            onPressed: () => _showRecordPickerForComments(context),
+          ),
           IconButton(
             icon: const Icon(Icons.filter_list),
             onPressed: () => _showFilterPanel(context),
@@ -71,6 +79,7 @@ class _DatabaseViewState extends State<_DatabaseView> {
               const PopupMenuItem(value: 'Table', child: Text('表格视图')),
               const PopupMenuItem(value: 'Kanban', child: Text('看板视图')),
               const PopupMenuItem(value: 'Calendar', child: Text('日历视图')),
+              const PopupMenuItem(value: 'Gallery', child: Text('画廊视图')),
             ],
           ),
         ],
@@ -108,6 +117,8 @@ class _DatabaseViewState extends State<_DatabaseView> {
           database: state.database,
           filters: state.activeFilters,
         );
+      case 'Gallery':
+        return _buildGalleryView(state);
       default:
         return TableView(
           database: state.database,
@@ -115,6 +126,26 @@ class _DatabaseViewState extends State<_DatabaseView> {
           sorts: state.activeSorts,
         );
     }
+  }
+
+  /// P1-6: 构建画廊视图
+  /// 自动检测封面字段（URL 类型）和标题字段（Text 类型）
+  Widget _buildGalleryView(DatabaseDetailLoaded state) {
+    final database = state.database;
+    final coverField =
+        database.fields.where((f) => f.fieldType == 'URL').firstOrNull;
+    final titleField =
+        database.fields.where((f) => f.fieldType == 'Text').firstOrNull;
+
+    return GalleryViewWidget(
+      records: database.rows,
+      fields: database.fields,
+      coverFieldId: coverField?.id,
+      titleFieldId: titleField?.id,
+      onAddRecord: () => _addRow(context),
+      onRecordTap: (recordId) => _showCommentPanel(context, recordId),
+      onRecordLongPress: (recordId) => _showCommentPanel(context, recordId),
+    );
   }
 
   void _addRow(BuildContext context) {
@@ -171,6 +202,130 @@ class _DatabaseViewState extends State<_DatabaseView> {
               ));
           Navigator.of(ctx).pop();
         },
+      ),
+    );
+  }
+
+  /// P1-6: 显示记录选择器，选择后打开评论面板
+  void _showRecordPickerForComments(BuildContext context) {
+    final state = context.read<DatabaseBloc>().state;
+    if (state is! DatabaseDetailLoaded) return;
+    final database = state.database;
+    if (database.rows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无记录')),
+      );
+      return;
+    }
+    final titleField =
+        database.fields.where((f) => f.fieldType == 'Text').firstOrNull;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '选择记录查看评论',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const Divider(height: 1),
+            ...database.rows.map((row) {
+              String title = '未命名';
+              if (titleField != null) {
+                final cell = row.cells
+                    .where((c) => c.fieldId == titleField.id)
+                    .firstOrNull;
+                title = cell?.value?.toString() ?? '未命名';
+              }
+              return ListTile(
+                leading: const Icon(Icons.note),
+                title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                trailing: const Icon(Icons.comment),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _showCommentPanel(context, row.id);
+                },
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// P1-6: 显示评论面板（右侧侧边栏）
+  void _showCommentPanel(BuildContext context, String recordId) {
+    final commentService = getIt<CommentService>();
+    showDialog(
+      context: context,
+      builder: (ctx) => _CommentPanelDialog(
+        commentService: commentService,
+        recordId: recordId,
+      ),
+    );
+  }
+}
+
+/// P1-6: 评论面板对话框 —— 包装 CommentPanel，管理评论状态的刷新
+class _CommentPanelDialog extends StatefulWidget {
+  final CommentService commentService;
+  final String recordId;
+
+  const _CommentPanelDialog({
+    required this.commentService,
+    required this.recordId,
+  });
+
+  @override
+  State<_CommentPanelDialog> createState() => _CommentPanelDialogState();
+}
+
+class _CommentPanelDialogState extends State<_CommentPanelDialog> {
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Material(
+        elevation: 8,
+        color: Theme.of(context).colorScheme.surface,
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height,
+          child: CommentPanel(
+            recordId: widget.recordId,
+            comments: widget.commentService.getComments(widget.recordId),
+            currentUserId: 'current-user',
+            currentUsername: '我',
+            onAddComment: (content, replyTo) {
+              widget.commentService.addComment(
+                recordId: widget.recordId,
+                userId: 'current-user',
+                username: '我',
+                content: content,
+                replyToCommentId: replyTo,
+              );
+              setState(() {});
+            },
+            onUpdateComment: (commentId, newContent) {
+              widget.commentService.updateComment(
+                widget.recordId,
+                commentId,
+                newContent,
+              );
+              setState(() {});
+            },
+            onDeleteComment: (commentId) {
+              widget.commentService.deleteComment(
+                widget.recordId,
+                commentId,
+              );
+              setState(() {});
+            },
+          ),
+        ),
       ),
     );
   }

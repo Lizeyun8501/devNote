@@ -4,11 +4,16 @@
 
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/database/database_service.dart';
+import 'package:devnote/features/database/models/comment_model.dart';
 
 /// 注册 Database 模块依赖
 Future<void> registerDatabaseDependencies() async {
   if (!getIt.isRegistered<DatabaseService>()) {
     getIt.registerLazySingleton<DatabaseService>(() => DatabaseService());
+  }
+  // P1-6: 行内评论服务
+  if (!getIt.isRegistered<CommentService>()) {
+    getIt.registerLazySingleton<CommentService>(() => CommentService());
   }
 }
 

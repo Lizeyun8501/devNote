@@ -1483,10 +1483,12 @@ name = "devnote-crypto"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "base64",
  "bip39",
  "chacha20poly1305",
  "devnote-observe",
  "rand_core 0.6.4",
+ "serde",
  "thiserror 2.0.18",
  "tracing",
 ]

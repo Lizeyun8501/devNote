@@ -17,6 +17,7 @@ use chacha20poly1305::{XChaCha20Poly1305, Key, XNonce, KeyInit};
 use chacha20poly1305::aead::Aead;
 use rand_core::OsRng;
 use rand_core::RngCore;
+use base64::Engine;
 
 #[derive(Debug, Error)]
 pub enum CryptoError {
@@ -32,6 +33,8 @@ pub enum CryptoError {
     InvalidKey,
     #[error("authentication failed")]
     AuthenticationFailed,
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +261,114 @@ impl CryptoEngine for DefaultCryptoEngine {
         OsRng.fill_bytes(&mut salt);
         salt
     }
+}
+
+// ── Vault 保险库加密 API ──────────────────────────────────────────────
+// P1-7: Vault 保险库（敏感笔记二次加密）
+// 对标 Notesnook 的 Vault 功能：使用独立密码对敏感笔记进行二次加密
+// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密（与主加密方案一致）
+
+/// Vault 加密结果
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VaultEncryptedData {
+    /// 加密的密文（base64）
+    pub ciphertext: String,
+    /// 随机盐（base64，用于 Argon2id 密钥派生）
+    pub salt: String,
+    /// 随机 nonce（base64）
+    pub nonce: String,
+    /// Argon2id 参数
+    pub memory_cost: u32,
+    pub time_cost: u32,
+    pub parallelism: u32,
+}
+
+/// Vault 加密：使用用户密码对明文进行加密
+/// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密
+pub fn vault_encrypt(password: &str, plaintext: &str) -> Result<VaultEncryptedData, CryptoError> {
+    // 生成随机盐（16 字节）
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+
+    // Argon2id 参数 —— RFC 9106 推荐值
+    let memory_cost = 65536;  // 64 MB
+    let time_cost = 3;
+    let parallelism = 4;
+
+    // 派生密钥
+    let params = Params::new(memory_cost, time_cost, parallelism, Some(32))
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let mut key_bytes = [0u8; 32];
+    argon2
+        .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+
+    // 生成随机 nonce（24 字节，XChaCha20）
+    let mut nonce_bytes = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce_bytes);
+
+    // 加密
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+    let nonce = XNonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+
+    let b64 = base64::engine::general_purpose::STANDARD;
+    Ok(VaultEncryptedData {
+        ciphertext: b64.encode(&ciphertext),
+        salt: b64.encode(&salt),
+        nonce: b64.encode(&nonce_bytes),
+        memory_cost,
+        time_cost,
+        parallelism,
+    })
+}
+
+/// Vault 解密：使用用户密码对密文进行解密
+pub fn vault_decrypt(password: &str, encrypted: &VaultEncryptedData) -> Result<String, CryptoError> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let salt = b64
+        .decode(&encrypted.salt)
+        .map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    let nonce_bytes = b64
+        .decode(&encrypted.nonce)
+        .map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    let ciphertext = b64
+        .decode(&encrypted.ciphertext)
+        .map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+
+    // 派生密钥
+    let params = Params::new(
+        encrypted.memory_cost,
+        encrypted.time_cost,
+        encrypted.parallelism,
+        Some(32),
+    )
+    .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let mut key_bytes = [0u8; 32];
+    argon2
+        .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+
+    // 解密
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+    let nonce = XNonce::from_slice(&nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+
+    String::from_utf8(plaintext)
+        .map_err(|e| CryptoError::InvalidInput(e.to_string()))
+}
+
+/// 验证 Vault 密码（通过尝试解密一个测试向量）
+pub fn vault_verify_password(password: &str, encrypted: &VaultEncryptedData) -> bool {
+    vault_decrypt(password, encrypted).is_ok()
 }
 
 #[cfg(test)]

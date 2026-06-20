@@ -760,3 +760,60 @@ pub fn index_ocr_text(note_id: String, ocr_text: String) -> Result<(), String> {
     engine.index_note_with_meta(&note.id, &note.title, &content, &note.folder_id, &[], &note.updated_at)
         .map_err(|e| e.to_string())
 }
+
+// ── Vault 保险库 API ──────────────────────────────────────────────────
+// P1-7: Vault 保险库（敏感笔记二次加密）
+// 对标 Notesnook 的 Vault 功能：使用独立密码对敏感笔记进行二次加密
+
+/// Vault 加密数据（FFI 传输结构）—— FRB 自动生成对应 Dart 类
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultEncryptedDataFfi {
+    pub ciphertext: String,
+    pub salt: String,
+    pub nonce: String,
+    pub memory_cost: u32,
+    pub time_cost: u32,
+    pub parallelism: u32,
+}
+
+/// Vault 加密 —— 使用用户密码对明文进行加密
+/// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密
+pub fn vault_encrypt(password: String, plaintext: String) -> Result<VaultEncryptedDataFfi, String> {
+    let result = devnote_crypto::vault_encrypt(&password, &plaintext)
+        .map_err(|e| e.to_string())?;
+    Ok(VaultEncryptedDataFfi {
+        ciphertext: result.ciphertext,
+        salt: result.salt,
+        nonce: result.nonce,
+        memory_cost: result.memory_cost,
+        time_cost: result.time_cost,
+        parallelism: result.parallelism,
+    })
+}
+
+/// Vault 解密 —— 使用用户密码对密文进行解密
+pub fn vault_decrypt(password: String, encrypted: VaultEncryptedDataFfi) -> Result<String, String> {
+    let encrypted_data = devnote_crypto::VaultEncryptedData {
+        ciphertext: encrypted.ciphertext,
+        salt: encrypted.salt,
+        nonce: encrypted.nonce,
+        memory_cost: encrypted.memory_cost,
+        time_cost: encrypted.time_cost,
+        parallelism: encrypted.parallelism,
+    };
+    devnote_crypto::vault_decrypt(&password, &encrypted_data)
+        .map_err(|e| e.to_string())
+}
+
+/// 验证 Vault 密码 —— 通过尝试解密测试向量验证密码是否正确
+pub fn vault_verify_password(password: String, encrypted: VaultEncryptedDataFfi) -> bool {
+    let encrypted_data = devnote_crypto::VaultEncryptedData {
+        ciphertext: encrypted.ciphertext,
+        salt: encrypted.salt,
+        nonce: encrypted.nonce,
+        memory_cost: encrypted.memory_cost,
+        time_cost: encrypted.time_cost,
+        parallelism: encrypted.parallelism,
+    };
+    devnote_crypto::vault_verify_password(&password, &encrypted_data)
+}

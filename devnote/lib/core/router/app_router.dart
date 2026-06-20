@@ -33,6 +33,7 @@ import 'package:devnote/features/flashcard/review_page.dart';
 import 'package:devnote/features/flashcard/create_card_page.dart';
 import 'package:devnote/features/flashcard/review_stats_page.dart';
 import 'package:devnote/features/ai/pages/ai_settings_page.dart';
+import 'package:devnote/features/vault/vault_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -249,6 +250,12 @@ final appRouter = GoRouter(
             child: ReviewStatsPage(
               deckId: state.pathParameters['deckId'] ?? '',
             ),
+          ),
+        ),
+        GoRoute(
+          path: '/vault',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: VaultPage(),
           ),
         ),
       ],
