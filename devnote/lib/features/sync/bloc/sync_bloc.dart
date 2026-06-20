@@ -82,24 +82,54 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   /// 处理服务状态变更事件
+  /// 修复(P1-5): 原实现仅处理 conflict/synced 两种状态，idle/syncing/error/offline
+  /// 时不 emit 任何状态，导致 UI 卡住无法反映实际同步状态。现为所有状态添加 emit。
   void _onServiceStateChanged(_SyncServiceStateChanged event, Emitter<SyncState> emit) {
     final serviceState = event.serviceState;
-    if (serviceState.status == SyncServiceStatus.conflict) {
-      final resolver = _syncService.conflictResolver;
-      final conflicts = resolver.conflicts;
-      emit(SyncConflict(
-        conflicts: conflicts,
-        autoSyncEnabled: state.autoSyncEnabled,
-        syncInterval: state.syncInterval,
-        serverAddress: state.serverAddress,
-      ));
-    } else if (serviceState.status == SyncServiceStatus.synced) {
-      emit(SyncCompleted(
-        lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
-        autoSyncEnabled: state.autoSyncEnabled,
-        syncInterval: state.syncInterval,
-        serverAddress: state.serverAddress,
-      ));
+    switch (serviceState.status) {
+      case SyncServiceStatus.idle:
+        emit(SyncIdle(
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      case SyncServiceStatus.syncing:
+        emit(SyncInProgress(
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      case SyncServiceStatus.synced:
+        emit(SyncCompleted(
+          lastSyncTime: serviceState.lastSyncedAt ?? DateTime.now(),
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      case SyncServiceStatus.error:
+        emit(SyncError(
+          message: serviceState.lastError ?? 'Unknown sync error',
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      case SyncServiceStatus.offline:
+        // 无独立的 SyncOffline 状态，映射为 SyncError 以避免 UI 卡住
+        emit(SyncError(
+          message: serviceState.lastError ?? '网络离线',
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
+      case SyncServiceStatus.conflict:
+        final resolver = _syncService.conflictResolver;
+        final conflicts = resolver.conflicts;
+        emit(SyncConflict(
+          conflicts: conflicts,
+          autoSyncEnabled: state.autoSyncEnabled,
+          syncInterval: state.syncInterval,
+          serverAddress: state.serverAddress,
+        ));
     }
   }
 

@@ -76,12 +76,32 @@ pub fn get_metrics_handle() -> &'static metrics_exporter_prometheus::PrometheusH
 }
 
 /// Increment a counter metric by 1.
-pub fn increment_counter(name: &'static str, _labels: &[(&str, &str)]) {
+///
+/// 注意：当前 metrics 后端尚不支持带标签的计数器。当传入非空 labels 时，
+/// 会通过 tracing::debug! 记录一条日志说明标签被忽略，避免静默丢弃。
+pub fn increment_counter(name: &'static str, labels: &[(&str, &str)]) {
+    if !labels.is_empty() {
+        tracing::debug!(
+            name,
+            ?labels,
+            "counter labels not yet supported by metrics backend"
+        );
+    }
     metrics::counter!(name).increment(1);
 }
 
 /// Record a histogram value.
-pub fn record_histogram(name: &'static str, value: f64, _labels: &[(&str, &str)]) {
+///
+/// 注意：当前 metrics 后端尚不支持带标签的直方图。当传入非空 labels 时，
+/// 会通过 tracing::debug! 记录一条日志说明标签被忽略，避免静默丢弃。
+pub fn record_histogram(name: &'static str, value: f64, labels: &[(&str, &str)]) {
+    if !labels.is_empty() {
+        tracing::debug!(
+            name,
+            ?labels,
+            "histogram labels not yet supported by metrics backend"
+        );
+    }
     metrics::histogram!(name).record(value);
 }
 

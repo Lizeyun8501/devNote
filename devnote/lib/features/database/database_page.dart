@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/database/bloc/database_bloc.dart';
 import 'package:devnote/features/database/bloc/database_event.dart';
 import 'package:devnote/features/database/bloc/database_state.dart';
@@ -18,7 +19,7 @@ class DatabasePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => DatabaseBloc(DatabaseService())
+      create: (context) => DatabaseBloc(getIt<DatabaseService>())
         ..add(LoadDatabaseDetail(databaseId)),
       child: const _DatabaseView(),
     );

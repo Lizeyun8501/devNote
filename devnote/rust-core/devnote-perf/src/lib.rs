@@ -244,12 +244,15 @@ impl BlockCache {
 /// 修复方案：删除伪造模块，`SqliteConnectionPool` 的所有方法改为返回
 /// `anyhow::Error`，明确告知调用方此实现不可用。
 /// 真实 SQLite 连接池应由 `devnote-persistence`（已依赖 rusqlite）提供。
+#[deprecated(note = "Use devnote-persistence for real SQLite connection pooling")]
 pub struct SqliteConnectionPool {
     database_path: String,
     read_count: usize,
 }
 
+#[allow(deprecated)]
 impl SqliteConnectionPool {
+    #[deprecated(note = "Use devnote-persistence for real SQLite connection pooling")]
     pub fn new(database_path: &str, read_pool_size: usize) -> Self {
         Self {
             database_path: database_path.to_string(),
@@ -259,6 +262,7 @@ impl SqliteConnectionPool {
 
     /// 修复(P1): 原实现使用伪造 rusqlite::Connection，静默成功。
     /// 改为返回明确错误，引导调用方使用 devnote-persistence 的真实连接池。
+    #[deprecated(note = "Use devnote-persistence for real SQLite connection pooling")]
     pub fn get_read_connection(&self) -> Result<()> {
         Err(anyhow::anyhow!(
             "SqliteConnectionPool.get_read_connection: not implemented. \
@@ -268,6 +272,7 @@ impl SqliteConnectionPool {
     }
 
     /// 修复(P1): 同上。
+    #[deprecated(note = "Use devnote-persistence for real SQLite connection pooling")]
     pub fn get_write_connection(&self) -> Result<()> {
         Err(anyhow::anyhow!(
             "SqliteConnectionPool.get_write_connection: not implemented. \

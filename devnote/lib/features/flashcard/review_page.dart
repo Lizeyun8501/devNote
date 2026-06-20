@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_bloc.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_event.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_state.dart';
@@ -15,7 +16,7 @@ class ReviewPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => FlashcardBloc(FlashcardService())
+      create: (context) => FlashcardBloc(getIt<FlashcardService>())
         ..add(LoadDueCards(deckId: deckId)),
       child: const _ReviewView(),
     );

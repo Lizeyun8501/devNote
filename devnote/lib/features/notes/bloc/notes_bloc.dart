@@ -141,7 +141,47 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
 
   Future<void> _onFilterByTag(FilterByTag event, Emitter<NotesState> emit) async {
     final currentState = state;
-    if (currentState is NotesLoaded) {
+    if (currentState is! NotesLoaded) return;
+
+    // 修复(P1-7): 原实现仅 copyWith(filterTagId) 而不实际过滤 notes 列表，
+    // 导致 UI 仍显示全部笔记。现根据 tagId 过滤 notes。
+    // NoteModel 无 tags 字段，TagRepository 也无 getNoteIdsByTag 方法，
+    // 故直接查询 note_tags 关联表获取带该标签的笔记 ID。
+    if (event.tagId.isEmpty) {
+      // 清除标签过滤：从数据库重新加载原始列表（保留 folder 过滤）
+      try {
+        final folderId = currentState.filterFolderId;
+        final allNotes = folderId != null
+            ? await _noteRepository.listNotes(folderId)
+            : await _noteRepository.listNotes('');
+        emit(currentState.copyWith(
+          notes: _sortNotes(allNotes, currentState.sortBy),
+          filterTagId: null,
+        ));
+      } catch (_) {
+        emit(currentState.copyWith(filterTagId: null));
+      }
+      return;
+    }
+
+    try {
+      final db = await _dbHelper.database;
+      final rows = await db.query(
+        'note_tags',
+        columns: ['note_id'],
+        where: 'tag_id = ?',
+        whereArgs: [event.tagId],
+      );
+      final noteIds = rows.map((r) => r['note_id'] as String).toSet();
+      final filteredNotes = currentState.notes
+          .where((n) => noteIds.contains(n.id))
+          .toList();
+      emit(currentState.copyWith(
+        notes: filteredNotes,
+        filterTagId: event.tagId,
+      ));
+    } catch (_) {
+      // 查询失败时仅更新 filterTagId，不改变 notes 列表
       emit(currentState.copyWith(filterTagId: event.tagId));
     }
   }

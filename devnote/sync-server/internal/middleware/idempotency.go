@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -29,7 +30,18 @@ type IdempotencyCache struct {
 	maxSize int
 }
 
+// entryStatus 标识幂等条目的处理状态
+type entryStatus int
+
+const (
+	// statusCompleted 表示请求已处理完成，缓存中存放的是最终响应
+	statusCompleted entryStatus = iota
+	// statusInProgress 表示请求正在处理中（占位标记），用于防止并发重复请求
+	statusInProgress
+)
+
 type idempotencyEntry struct {
+	status       entryStatus
 	hash         string
 	responseCode int
 	responseBody []byte
@@ -87,6 +99,35 @@ func (c *IdempotencyCache) put(key string, e idempotencyEntry) {
 	c.entries[key] = e
 }
 
+// tryPutIfAbsent 原子地写入条目：仅当 key 不存在（或已过期）时才写入。
+// 返回 true 表示占位成功，false 表示已有未过期的条目存在（被其他请求占用）。
+// 该方法用于消除 get 与 put 之间的 TOCTOU 竞态窗口。
+func (c *IdempotencyCache) tryPutIfAbsent(key string, e idempotencyEntry) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if existing, ok := c.entries[key]; ok && !time.Now().After(existing.expiresAt) {
+		return false
+	}
+	if len(c.entries) >= c.maxSize {
+		now := time.Now()
+		for k, v := range c.entries {
+			if now.After(v.expiresAt) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	e.expiresAt = time.Now().Add(c.ttl)
+	c.entries[key] = e
+	return true
+}
+
+// remove 删除指定 key 的条目，用于处理失败请求后清理占位标记以便重试。
+func (c *IdempotencyCache) remove(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+}
+
 // IdempotencyConfig 配置
 type IdempotencyConfig struct {
 	Cache *IdempotencyCache
@@ -137,16 +178,23 @@ func IdempotencyMiddleware(cfg IdempotencyConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 缓存命中: 返回之前的结果(状态码 + body)
+		// 提前计算请求体哈希，命中与占位均需使用
+		bodyHash := hashBody(c, cfg.MaxBodySize)
+
+		// 缓存命中: 返回之前的结果(状态码 + body)，或拒绝并发中的重复请求
 		if e, ok := cfg.Cache.get(key); ok {
-			if e.hash != "" {
-				bodyHash := hashBody(c, cfg.MaxBodySize)
-				if bodyHash != e.hash {
-					c.AbortWithStatusJSON(422, gin.H{
-						"error": "Idempotency-Key reused with different request body",
-					})
-					return
-				}
+			if e.hash != "" && bodyHash != e.hash {
+				c.AbortWithStatusJSON(422, gin.H{
+					"error": "Idempotency-Key reused with different request body",
+				})
+				return
+			}
+			if e.status == statusInProgress {
+				// 另一个相同 key 的请求正在处理中，拒绝并发重复
+				c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+					"error": "duplicate request in progress",
+				})
+				return
 			}
 			c.Header("Idempotent-Replay", "true")
 			c.Data(e.responseCode, "application/json", e.responseBody)
@@ -154,8 +202,20 @@ func IdempotencyMiddleware(cfg IdempotencyConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 缓存未命中: 注册 hook 在 handler 完成后捕获响应
-		bodyHash := hashBody(c, cfg.MaxBodySize)
+		// 缓存未命中: 原子占位，防止 get 与 put 之间的 TOCTOU 竞态
+		placeholder := idempotencyEntry{
+			status: statusInProgress,
+			hash:   bodyHash,
+		}
+		if !cfg.Cache.tryPutIfAbsent(key, placeholder) {
+			// 在 get 与 tryPutIfAbsent 之间，另一个请求已占位
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+				"error": "duplicate request in progress",
+			})
+			return
+		}
+
+		// 占位成功: 注册 hook 在 handler 完成后捕获响应
 		writer := &idempotentResponseWriter{
 			ResponseWriter: c.Writer,
 			body:           &buffer{},
@@ -167,10 +227,14 @@ func IdempotencyMiddleware(cfg IdempotencyConfig) gin.HandlerFunc {
 		// 仅缓存 2xx 响应,避免错误结果被固化 24h
 		if writer.Status() >= 200 && writer.Status() < 300 {
 			cfg.Cache.put(key, idempotencyEntry{
+				status:       statusCompleted,
 				hash:         bodyHash,
 				responseCode: writer.Status(),
 				responseBody: writer.body.bytes(),
 			})
+		} else {
+			// 非 2xx: 清理占位标记，允许客户端重试
+			cfg.Cache.remove(key)
 		}
 	}
 }

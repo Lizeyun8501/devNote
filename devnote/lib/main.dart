@@ -33,6 +33,13 @@ import 'package:devnote/features/plugins/plugins_module.dart';
 import 'package:devnote/features/settings/settings_module.dart';
 import 'package:devnote/features/sync/sync_module.dart';
 import 'package:devnote/features/workflow/workflow_module.dart';
+// 修复(P2-1): 新增 feature 模块注册，消除页面中直接 new Service 绕过 DI 的问题
+import 'package:devnote/features/editor/editor_module.dart';
+import 'package:devnote/features/search/search_module.dart';
+import 'package:devnote/features/canvas/canvas_module.dart';
+import 'package:devnote/features/database/database_module.dart';
+import 'package:devnote/features/knowledge_graph/knowledge_graph_module.dart';
+import 'package:devnote/features/flashcard/flashcard_module.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,6 +53,13 @@ void main() async {
   await registerSyncDependencies();
   await registerWorkflowDependencies();
   await registerAIDependencies();
+  // 修复(P2-1): 注册 Editor/Search/Canvas/Database/Graph/Flashcard 服务到 DI
+  await registerEditorDependencies();
+  await registerSearchDependencies();
+  await registerCanvasDependencies();
+  await registerDatabaseDependencies();
+  await registerGraphDependencies();
+  await registerFlashcardDependencies();
 
   // 修复：Sentry 初始化提前到 FFI Bridge 之前，确保 FFI 初始化过程中的
   // 错误能被 Sentry 捕获上报，防止启动阶段异常丢失
@@ -126,6 +140,13 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   /// 修复(P2-16): 改为 async 以 await disposeCore() 中的 DatabaseHelper.close()，
   /// 确保数据库句柄在 getIt.reset() 之前被正确关闭。
   Future<void> _disposeAll() async {
+    // 修复(P2-1): 释放新增 feature 模块资源（逆序，features 在 core 之前释放）
+    disposeFlashcardModule();
+    disposeGraphModule();
+    disposeDatabaseModule();
+    disposeCanvasModule();
+    disposeSearchModule();
+    disposeEditorModule();
     disposeAIModule();
     disposeWorkflowModule();
     disposeSyncModule();

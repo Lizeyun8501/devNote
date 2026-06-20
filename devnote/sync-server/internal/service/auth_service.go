@@ -32,20 +32,54 @@ type AuthService struct {
 	db          *gorm.DB
 	cfg         *config.Config
 	srpParams   *auth.SRPParams
-	srpSessions map[string]*auth.SRPServer
+	srpSessions map[string]*srpSessionEntry
 	srpMu       sync.Mutex
 }
+
+// srpSessionEntry 包装 SRP 会话及其创建时间，用于实现 TTL 过期清理。
+type srpSessionEntry struct {
+	server    *auth.SRPServer
+	createdAt time.Time
+}
+
+// SRP 会话生命周期相关常量
+const (
+	// srpSessionTTL 单个 SRP 会话的最大有效时长，超过后 VerifySRP 将拒绝。
+	srpSessionTTL = 5 * time.Minute
+	// srpSessionCleanupInterval 后台清理 goroutine 的扫描间隔。
+	srpSessionCleanupInterval = 5 * time.Minute
+	// srpSessionMaxAge 后台清理时删除超过此时长的会话。
+	srpSessionMaxAge = 10 * time.Minute
+)
 
 // NewAuthService 构造 AuthService
 //
 // 借鉴 1Password 的"认证上下文隔离"做法：每个 SRP 会话以 username 为 key
 // 独立存放，避免多用户并发登录时的状态串扰。
 func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
-	return &AuthService{
+	s := &AuthService{
 		db:          db,
 		cfg:         cfg,
 		srpParams:   auth.NewSRPParams(),
-		srpSessions: make(map[string]*auth.SRPServer),
+		srpSessions: make(map[string]*srpSessionEntry),
+	}
+	go s.cleanupSRPSessions()
+	return s
+}
+
+// cleanupSRPSessions 后台定期清理过期的 SRP 会话，防止 map 无限增长。
+func (s *AuthService) cleanupSRPSessions() {
+	ticker := time.NewTicker(srpSessionCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.srpMu.Lock()
+		now := time.Now()
+		for k, v := range s.srpSessions {
+			if now.Sub(v.createdAt) > srpSessionMaxAge {
+				delete(s.srpSessions, k)
+			}
+		}
+		s.srpMu.Unlock()
 	}
 }
 
@@ -170,7 +204,10 @@ func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err e
 	// 借鉴 1Password 的"会话隔离"：将 SRP 会话按 username 暂存，
 	// 完成 VerifySRP 后立即删除（一次性会话）。
 	s.srpMu.Lock()
-	s.srpSessions[username] = srv
+	s.srpSessions[username] = &srpSessionEntry{
+		server:    srv,
+		createdAt: time.Now(),
+	}
 	s.srpMu.Unlock()
 
 	return user.SRPSalt, B, nil
@@ -189,7 +226,7 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 	// 借鉴 1Password 的"一次性会话"模式：取出并立刻销毁会话，
 	// 避免重放攻击。
 	s.srpMu.Lock()
-	srv, ok := s.srpSessions[username]
+	entry, ok := s.srpSessions[username]
 	if ok {
 		delete(s.srpSessions, username)
 	}
@@ -199,6 +236,12 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 		return nil, "", errors.New("no active SRP session")
 	}
 
+	// 检查会话是否过期，防止陈旧会话被利用
+	if time.Since(entry.createdAt) > srpSessionTTL {
+		return nil, "", errors.New("session expired")
+	}
+
+	srv := entry.server
 	M2, err = srv.ProcessClientProof(username, user.SRPSalt, A, M1)
 	if err != nil {
 		return nil, "", err

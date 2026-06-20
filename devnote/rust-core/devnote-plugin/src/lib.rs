@@ -291,6 +291,9 @@ pub enum PluginHealthStatus {
     Healthy,
     Warning,
     Unhealthy,
+    /// 插件状态数据不可用（例如 extism metrics 未实际暴露），
+    /// 无法判断健康状态。check_plugin_health 在 get_plugin_state 返回全零值时使用。
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,10 +439,14 @@ impl PluginManager {
     }
 
     pub fn load_lazy(&mut self, id: &str, manifest: PluginManifest) -> Result<(), PluginError> {
+        // 原实现在 id 不在 lazy_loaded 中时静默返回 Ok(())，调用方无法区分
+        // "成功加载"与"无此延迟注册项"。改为返回明确错误。
         if let Some(bytes) = self.lazy_loaded.remove(id) {
             self.load_plugin(&bytes, manifest)?;
+            Ok(())
+        } else {
+            Err(PluginError::NotFound(id.to_string()))
         }
-        Ok(())
     }
 
     pub fn get_plugin_version(&self, id: &str) -> Option<&str> {
@@ -464,7 +471,15 @@ impl PluginManager {
             },
             Some(e) => {
                 let state = self.sandbox.get_plugin_state(plugin_id);
-                let status = if e.state != PluginLifecycleState::Enabled {
+                // get_plugin_state 当前始终返回全零值（extism metrics 未实际暴露），
+                // 若直接基于此判断会永远返回 Healthy（伪装成功）。当状态数据全为零时，
+                // 标记为 Unknown，让调用方知道健康状态不可用。
+                let status = if state.memory_used == 0
+                    && state.execution_count == 0
+                    && state.max_memory == 0
+                {
+                    PluginHealthStatus::Unknown
+                } else if e.state != PluginLifecycleState::Enabled {
                     PluginHealthStatus::Warning
                 } else if state.total_fuel_consumed > 80_000_000 {
                     PluginHealthStatus::Unhealthy
@@ -478,6 +493,8 @@ impl PluginManager {
                     Some("Plugin has consumed excessive fuel, may be stuck".to_string())
                 } else if status == PluginHealthStatus::Warning {
                     Some("Plugin has high fuel consumption or is not enabled".to_string())
+                } else if status == PluginHealthStatus::Unknown {
+                    Some("Plugin state metrics unavailable".to_string())
                 } else {
                     None
                 };

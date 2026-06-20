@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/canvas/bloc/canvas_bloc.dart';
 import 'package:devnote/features/canvas/bloc/canvas_event.dart';
 import 'package:devnote/features/canvas/bloc/canvas_state.dart';
@@ -24,7 +25,7 @@ class CanvasPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => CanvasBloc(CanvasService()),
+      create: (context) => CanvasBloc(getIt<CanvasService>()),
       child: const _CanvasView(),
     );
   }
@@ -89,7 +90,7 @@ class _CanvasViewState extends State<_CanvasView> {
 
   Future<void> _initCanvas() async {
     try {
-      final service = CanvasService();
+      final service = getIt<CanvasService>();
       final canvasId = await service.createCanvas();
       if (mounted) {
         context.read<CanvasBloc>().add(LoadCanvas(canvasId));

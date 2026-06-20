@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/search/bloc/search_bloc.dart';
 import 'package:devnote/features/search/bloc/search_event.dart';
 import 'package:devnote/features/search/bloc/search_state.dart';
@@ -14,7 +15,7 @@ class SearchPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => SearchBloc(SearchService())
+      create: (context) => SearchBloc(getIt<SearchService>())
         ..add(const SearchHistoryRequested()),
       child: const _SearchView(),
     );
@@ -321,7 +322,7 @@ class _SearchViewState extends State<_SearchView> {
             ),
             TextButton(
               onPressed: () {
-                SearchService().clearSearchHistory();
+                getIt<SearchService>().clearSearchHistory();
                 context.read<SearchBloc>().add(const SearchHistoryRequested());
               },
               child: Semantics(

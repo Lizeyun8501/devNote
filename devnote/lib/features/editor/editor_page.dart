@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:get_it/get_it.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/bloc/editor_bloc.dart';
 import 'package:devnote/features/editor/bloc/editor_event.dart';
 import 'package:devnote/features/editor/bloc/editor_state.dart';
@@ -22,7 +22,7 @@ class EditorPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return BlocProvider(
       create: (context) => EditorBloc(
-        EditorService(),
+        getIt<EditorService>(),
         collabService: getIt<RealtimeCollabService>(),
       )..add(LoadNote(noteId)),
       child: const _EditorView(),
