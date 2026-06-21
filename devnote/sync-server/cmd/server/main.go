@@ -95,6 +95,11 @@ func main() {
 		Metrics: metrics,
 	}))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	// 修复(P0): 注册 API 版本控制中间件（原已实现但未挂载，为死代码）
+	r.Use(middleware.APIVersionMiddleware(middleware.APIVersionConfig{
+		Required:      false,
+		LatestVersion: middleware.CurrentAPIVersion,
+	}))
 	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
 	r.Use(rateLimitHandler)
 	defer rateLimitStop()

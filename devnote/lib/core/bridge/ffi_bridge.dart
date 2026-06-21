@@ -17,8 +17,11 @@ import 'dart:convert';
 import 'dart:developer';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:math' show Random;
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart' hide Utf16Pointer;
+import 'package:pointycastle/export.dart';
 
 import 'ffi_response.dart';
 
@@ -388,6 +391,14 @@ class FFIBridge {
     return _dispatchList('FolderEvent.ListFolders', {
       'parent_id': parentId,
     });
+  }
+
+  /// 修复(P0): 补全 getFolder，原缺失导致 PersistenceDispatch.get(entity:'folder') 抛 UnimplementedError
+  Future<Map<String, dynamic>?> getFolder(String id) async {
+    _checkAvailable();
+    final result = _dispatch('FolderEvent.GetFolder', {'id': id});
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result as Map);
   }
 
   Future<void> deleteFolder(String id) async {
@@ -764,23 +775,77 @@ class FFIBridge {
   }
 
   // ============================================================
-  // Vault API —— 无对应 C ABI handler（Vault 在 Dart 端用 pointycastle 实现）
+  // Vault API —— Dart 端实现（Rust 端无对应 C ABI handler）
+  // 使用 AES-256-GCM + PBKDF2-HMAC-SHA256（与 CryptoService 一致）
+  // VaultEncryptedData 中的 memoryCost/timeCost/parallelism 保留用于
+  // 未来 Argon2id 迁移，当前 PBKDF2 使用固定迭代次数
   // ============================================================
+
+  static const int _vaultPbkdf2Iterations = 100000;
 
   Future<VaultEncryptedData> vaultEncrypt({
     required String password,
     required String plaintext,
-  }) async => throw UnimplementedError('vaultEncrypt: no C ABI handler, use Dart-side crypto');
+  }) async {
+    final salt = _generateSecureRandom(32);
+    final nonce = _generateSecureRandom(12);
+    final key = _deriveVaultKey(password, salt);
+
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
+    final ciphertextWithTag = cipher.process(Uint8List.fromList(utf8.encode(plaintext)));
+
+    return VaultEncryptedData(
+      ciphertext: base64Encode(ciphertextWithTag),
+      salt: base64Encode(salt),
+      nonce: base64Encode(nonce),
+      memoryCost: 0,
+      timeCost: _vaultPbkdf2Iterations,
+      parallelism: 1,
+    );
+  }
 
   Future<String> vaultDecrypt({
     required String password,
     required VaultEncryptedData encrypted,
-  }) async => throw UnimplementedError('vaultDecrypt: no C ABI handler, use Dart-side crypto');
+  }) async {
+    final salt = base64Decode(encrypted.salt);
+    final nonce = base64Decode(encrypted.nonce);
+    final ciphertextWithTag = base64Decode(encrypted.ciphertext);
+    final key = _deriveVaultKey(password, salt);
 
-  bool vaultVerifyPassword({
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(false, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
+    final plaintext = cipher.process(ciphertextWithTag);
+    return utf8.decode(plaintext);
+  }
+
+  Future<bool> vaultVerifyPassword({
     required String password,
     required VaultEncryptedData encrypted,
-  }) => throw UnimplementedError('vaultVerifyPassword: no C ABI handler, use Dart-side crypto');
+  }) async {
+    try {
+      await vaultDecrypt(password: password, encrypted: encrypted);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Uint8List _generateSecureRandom(int length) {
+    final random = Random.secure();
+    final bytes = Uint8List(length);
+    for (var i = 0; i < length; i++) {
+      bytes[i] = random.nextInt(256);
+    }
+    return bytes;
+  }
+
+  Uint8List _deriveVaultKey(String password, Uint8List salt) {
+    final derivator = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
+      ..init(Pbkdf2Parameters(salt, _vaultPbkdf2Iterations, 32));
+    return derivator.process(Uint8List.fromList(utf8.encode(password)));
+  }
 
   // ============================================================
   // 工具方法

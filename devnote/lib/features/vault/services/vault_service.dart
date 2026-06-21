@@ -13,7 +13,7 @@ import '../../../core/di/injection.dart';
 /// Vault 保险库服务
 /// 管理敏感笔记的二次加密
 class VaultService {
-  final FfiBridge _ffiBridge = getIt<FfiBridge>();
+  final FFIBridge _ffiBridge = getIt<FFIBridge>();
 
   static const _vaultPasswordHashKey = 'vault_password_hash';
   static const _vaultNotesKey = 'vault_notes';
@@ -63,7 +63,7 @@ class VaultService {
       jsonDecode(hashStr) as Map<String, dynamic>,
     );
 
-    if (_ffiBridge.vaultVerifyPassword(
+    if (await _ffiBridge.vaultVerifyPassword(
       password: password,
       encrypted: encrypted,
     )) {

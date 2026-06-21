@@ -89,6 +89,13 @@ class Dispatch {
     return list.map((map) => FolderModel.fromJson(map)).toList();
   }
 
+  /// 修复(P0): 补全 getFolder，原缺失导致 PersistenceDispatch.get(entity:'folder') 抛 UnimplementedError
+  Future<FolderModel?> getFolder(String id) async {
+    final map = await _bridge.getFolder(id);
+    if (map == null) return null;
+    return FolderModel.fromJson(map);
+  }
+
   Future<void> deleteFolder(String id) => _bridge.deleteFolder(id);
 
   Future<FolderModel> updateFolder({

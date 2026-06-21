@@ -80,6 +80,11 @@ func main() {
 	r.Use(middleware.Recovery(logger))
 	r.Use(middleware.LoggerMiddleware(logger))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	// 修复(P0): 注册 API 版本控制中间件（原完全缺失）
+	r.Use(middleware.APIVersionMiddleware(middleware.APIVersionConfig{
+		Required:      false,
+		LatestVersion: middleware.CurrentAPIVersion,
+	}))
 	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
 	r.Use(rateLimitHandler)
 	defer rateLimitStop()
