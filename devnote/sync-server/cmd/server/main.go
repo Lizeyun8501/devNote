@@ -80,6 +80,8 @@ func main() {
 	syncHandler := handler.NewSyncHandler(syncService)
 	healthHandler := handler.NewHealthHandler()
 	realtimeHandler := handler.NewRealtimeHandler(authService)
+	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader
+	handler.SetupCheckOrigin(cfg.AllowedOrigins)
 	clipperHandler := handler.NewClipperHandler(syncService)
 	shareHandler := handler.NewShareHandler(shareService)
 	emailHandler := handler.NewEmailHandler(emailService, cfg.EmailWebhookSecret)

@@ -6,7 +6,7 @@ import 'package:path/path.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 6;
+  static const _databaseVersion = 7;
 
   // 修复(P2-14): 移除 static 单例字段。DatabaseHelper 本身已通过
   // getIt.registerLazySingleton 注册为单例，static 字段会造成"双重单例"，
@@ -46,6 +46,8 @@ class DatabaseHelper {
         title TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         folder_id TEXT NOT NULL,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        is_encrypted INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
@@ -56,6 +58,7 @@ class DatabaseHelper {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         parent_id TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
@@ -65,6 +68,7 @@ class DatabaseHelper {
       CREATE TABLE tags (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
+        color TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -362,6 +366,21 @@ class DatabaseHelper {
               INSERT INTO notes_fts(note_id, title, content)
               SELECT id, title, content FROM notes
             ''');
+            break;
+          case 7:
+            // v7: P1-6 数据模型跨端对齐
+            // 为 notes 添加 is_pinned/is_encrypted 列（与 Rust Note 模型对齐）
+            // 为 folders 添加 sort_order 列（与 Rust Folder 模型对齐）
+            // 为 tags 添加 color 列（与 Rust Tag 模型对齐）
+            // 使用 ALTER TABLE ADD COLUMN，SQLite 支持且不会丢失数据
+            // 注意: notes.blocks/tags 不添加列，因为它们由 blocks/note_tags 关联表管理
+            batch.execute(
+                'ALTER TABLE notes ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0');
+            batch.execute(
+                'ALTER TABLE notes ADD COLUMN is_encrypted INTEGER NOT NULL DEFAULT 0');
+            batch.execute(
+                'ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+            batch.execute('ALTER TABLE tags ADD COLUMN color TEXT');
             break;
           default:
             break;

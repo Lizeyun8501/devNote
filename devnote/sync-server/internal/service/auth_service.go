@@ -412,8 +412,22 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, e
 //
 // 借鉴 1Password 的"按设备吊销"能力：用户可在"已登录设备"列表中
 // 主动登出某个设备，底层实现就是吊销对应的 refresh token。
+//
+// P0 修复 (SEC-01): 原实现用明文 token 查询，但 GenerateRefreshToken
+// 存储的是 SHA-256 哈希，导致永远查不到记录，吊销静默失败。
+// 现改为哈希后查询，与存储逻辑一致。
 func (s *AuthService) RevokeRefreshToken(token string) error {
-	return s.db.Model(&model.RefreshToken{}).Where("token = ?", token).Update("revoked", true).Error
+	tokenHash := hashToken(token)
+	result := s.db.Model(&model.RefreshToken{}).Where("token = ?", tokenHash).Update("revoked", true)
+	if result.Error != nil {
+		return fmt.Errorf("revoke refresh token: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		// 未匹配到记录：token 已被吊销、已过期清理或输入错误
+		// 返回错误以便调用方知晓吊销未生效（避免静默失败）
+		return errors.New("refresh token not found or already revoked")
+	}
+	return nil
 }
 
 // RevokeAllUserTokens 吊销某个用户的所有未撤销 refresh token

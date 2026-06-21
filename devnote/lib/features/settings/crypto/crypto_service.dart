@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/core/security/secure_key_storage.dart';
+
 enum CryptoStrength {
   standard,
   highStrength,
@@ -50,10 +52,15 @@ class CryptoService {
   static const String _keySalt = 'crypto_salt';
   static const String _keyHash = 'crypto_hash';
 
-  /// PBKDF2-HMAC-SHA256 迭代次数（OWASP 建议值）
-  static const int _pbkdf2Iterations = 100000;
+  /// PBKDF2-HMAC-SHA256 迭代次数（OWASP 2023 建议 600,000 次）
+  /// P0 修复 (ENC-07): 从 100,000 提升至 600,000，符合 OWASP 2023 最低标准
+  static const int _pbkdf2Iterations = 600000;
 
   Uint8List? _currentKey;
+
+  /// P0 修复 (ENC-06): 验证哈希不再明文存 SharedPreferences，改用 SecureKeyStorage
+  /// （平台 KeyStore/Keychain，桌面端兜底为应用层加密 SharedPreferences）
+  late final SecureKeyStorage _secureStorage;
 
   CryptoState _state = const CryptoState(
     isEnabled: false,
@@ -66,6 +73,7 @@ class CryptoService {
   CryptoState get state => _state;
 
   Future<void> initialize() async {
+    _secureStorage = await SecureKeyStorageFactory.getInstance();
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_keyEnabled) ?? false;
     final strengthIndex = prefs.getInt(_keyStrength) ?? 0;
@@ -86,12 +94,12 @@ class CryptoService {
     final hash = _deriveKey(password, salt);
 
     final saltBase64 = base64Encode(salt);
-    final hashBase64 = base64Encode(hash);
+    // P0 修复: 验证哈希存入 SecureKeyStorage，不再明文存 SharedPreferences
+    await _secureStorage.write(_keyHash, hash);
 
     await prefs.setBool(_keyEnabled, true);
     await prefs.setInt(_keyStrength, _state.strength.index);
     await prefs.setString(_keySalt, saltBase64);
-    await prefs.setString(_keyHash, hashBase64);
 
     _currentKey = hash;
 
@@ -110,7 +118,8 @@ class CryptoService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyEnabled);
     await prefs.remove(_keySalt);
-    await prefs.remove(_keyHash);
+    // P0 修复: 从 SecureKeyStorage 删除验证哈希
+    await _secureStorage.delete(_keyHash);
 
     _currentKey = null;
 
@@ -125,12 +134,14 @@ class CryptoService {
   Future<bool> unlock(String password) async {
     final prefs = await SharedPreferences.getInstance();
     final saltBase64 = prefs.getString(_keySalt);
-    final hashBase64 = prefs.getString(_keyHash);
 
-    if (saltBase64 == null || hashBase64 == null) return false;
+    if (saltBase64 == null) return false;
+
+    // P0 修复: 从 SecureKeyStorage 读取验证哈希
+    final storedHash = await _secureStorage.read(_keyHash);
+    if (storedHash == null) return false;
 
     final salt = base64Decode(saltBase64);
-    final storedHash = base64Decode(hashBase64);
     final computedHash = _deriveKey(password, salt);
 
     final matches = _constantTimeEquals(computedHash, storedHash);
@@ -158,10 +169,10 @@ class CryptoService {
     final hash = _deriveKey(newPassword, salt);
 
     final saltBase64 = base64Encode(salt);
-    final hashBase64 = base64Encode(hash);
+    // P0 修复: 新验证哈希存入 SecureKeyStorage
+    await _secureStorage.write(_keyHash, hash);
 
     await prefs.setString(_keySalt, saltBase64);
-    await prefs.setString(_keyHash, hashBase64);
 
     _currentKey = hash;
 

@@ -1,5 +1,5 @@
 use super::*;
-use devnote_core::models::Folder;
+use devnote_core::models::{Folder, Note, Tag};
 use devnote_core::traits::NoteRepository;
 use devnote_canvas::LayoutType;
 use devnote_crypto::CryptoEngine;
@@ -121,6 +121,11 @@ fn register_note_handlers() {
             title: String,
             content: String,
             folder_id: String,
+            // P1 修复 (P1-6): 接收 is_pinned/is_encrypted 字段
+            #[serde(default)]
+            is_pinned: bool,
+            #[serde(default)]
+            is_encrypted: bool,
         }
         let req = match parse_payload::<Req>(payload) {
             Ok(r) => r,
@@ -130,12 +135,26 @@ fn register_note_handlers() {
             Ok(id) => id,
             Err(e) => return e,
         };
-        let guard = NOTE_REPO.lock();
-        let repo = match guard.as_ref() {
+        let mut guard = NOTE_REPO.lock();
+        let repo = match guard.as_mut() {
             Some(r) => r,
             None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Persistence engine not initialized"),
         };
-        serialize_result(repo.create_note(&req.title, &req.content, &folder_id))
+        // P1 修复 (P1-6): 使用 NoteRepository trait 方法以支持 is_pinned/is_encrypted
+        let now = chrono::Utc::now();
+        let note = Note {
+            id: uuid::Uuid::new_v4(),
+            title: req.title,
+            content: req.content,
+            folder_id,
+            blocks: Vec::new(),
+            tags: Vec::new(),
+            is_pinned: req.is_pinned,
+            is_encrypted: req.is_encrypted,
+            created_at: now,
+            updated_at: now,
+        };
+        serialize_result(NoteRepository::create_note(repo, note))
     }));
 
     register_handler("NoteEvent.GetNote", Box::new(|payload| {
@@ -169,6 +188,11 @@ fn register_note_handlers() {
             id: String,
             title: String,
             content: String,
+            // P1 修复 (P1-6): 接收 is_pinned/is_encrypted 字段
+            #[serde(default)]
+            is_pinned: bool,
+            #[serde(default)]
+            is_encrypted: bool,
         }
         let req = match parse_payload::<Req>(payload) {
             Ok(r) => r,
@@ -178,12 +202,31 @@ fn register_note_handlers() {
             Ok(id) => id,
             Err(e) => return e,
         };
-        let guard = NOTE_REPO.lock();
-        let repo = match guard.as_ref() {
+        let mut guard = NOTE_REPO.lock();
+        let repo = match guard.as_mut() {
             Some(r) => r,
             None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Persistence engine not initialized"),
         };
-        serialize_result(repo.update_note(&id, &req.title, &req.content))
+        // P1 修复 (P1-6): 使用 NoteRepository trait 方法以支持 is_pinned/is_encrypted
+        // 先获取现有 note 以保留 created_at/folder_id/blocks/tags
+        let existing = match NoteRepository::get_note(repo, &id) {
+            Ok(Some(n)) => n,
+            Ok(None) => return DispatchResponse::error(FFIErrorCode::NotFound, "Note not found"),
+            Err(e) => return DispatchResponse::error(FFIErrorCode::InternalError, &e.to_string()),
+        };
+        let note = Note {
+            id,
+            title: req.title,
+            content: req.content,
+            folder_id: existing.folder_id,
+            blocks: existing.blocks,
+            tags: existing.tags,
+            is_pinned: req.is_pinned,
+            is_encrypted: req.is_encrypted,
+            created_at: existing.created_at,
+            updated_at: chrono::Utc::now(),
+        };
+        serialize_result(NoteRepository::update_note(repo, note))
     }));
 
     register_handler("NoteEvent.DeleteNote", Box::new(|payload| {
@@ -240,6 +283,9 @@ fn register_folder_handlers() {
         struct Req {
             name: String,
             parent_id: Option<String>,
+            // P1 修复 (P1-6): 接收 sort_order 字段
+            #[serde(default)]
+            sort_order: i32,
         }
         let req = match parse_payload::<Req>(payload) {
             Ok(r) => r,
@@ -249,12 +295,22 @@ fn register_folder_handlers() {
             Some(ref s) => Some(match parse_uuid(s) { Ok(id) => id, Err(e) => return e }),
             None => None,
         };
-        let guard = NOTE_REPO.lock();
-        let repo = match guard.as_ref() {
+        let mut guard = NOTE_REPO.lock();
+        let repo = match guard.as_mut() {
             Some(r) => r,
             None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Persistence engine not initialized"),
         };
-        serialize_result(repo.create_folder(&req.name, parent_id.as_ref()))
+        // P1 修复 (P1-6): 使用 NoteRepository trait 方法以支持 sort_order
+        let now = chrono::Utc::now();
+        let folder = Folder {
+            id: uuid::Uuid::new_v4(),
+            name: req.name,
+            parent_id,
+            sort_order: req.sort_order,
+            created_at: now,
+            updated_at: now,
+        };
+        serialize_result(NoteRepository::create_folder(repo, folder))
     }));
 
     register_handler("FolderEvent.GetFolder", Box::new(|payload| {
@@ -288,6 +344,9 @@ fn register_folder_handlers() {
             id: String,
             name: String,
             parent_id: Option<String>,
+            // P1 修复 (P1-6): 接收 sort_order 字段（可选，不存在时保留原值）
+            #[serde(default)]
+            sort_order: Option<i32>,
         }
         let req = match parse_payload::<Req>(payload) {
             Ok(r) => r,
@@ -312,11 +371,13 @@ fn register_folder_handlers() {
             Ok(None) => return DispatchResponse::error(FFIErrorCode::NotFound, "Folder not found"),
             Err(e) => return DispatchResponse::error(FFIErrorCode::InternalError, &e.to_string()),
         };
+        // P1 修复 (P1-6): 如果请求中指定了 sort_order 则使用请求值，否则保留原值
+        let sort_order = req.sort_order.unwrap_or(existing.sort_order);
         let folder = Folder {
             id,
             name: req.name,
             parent_id,
-            sort_order: existing.sort_order,
+            sort_order,
             created_at: existing.created_at,
             updated_at: chrono::Utc::now(),
         };
@@ -376,17 +437,27 @@ fn register_tag_handlers() {
         #[derive(Deserialize)]
         struct Req {
             name: String,
+            // P1 修复 (P1-6): 接收 color 字段
+            #[serde(default)]
+            color: Option<String>,
         }
         let req = match parse_payload::<Req>(payload) {
             Ok(r) => r,
             Err(e) => return e,
         };
-        let guard = NOTE_REPO.lock();
-        let repo = match guard.as_ref() {
+        let mut guard = NOTE_REPO.lock();
+        let repo = match guard.as_mut() {
             Some(r) => r,
             None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Persistence engine not initialized"),
         };
-        serialize_result(repo.create_tag(&req.name))
+        // P1 修复 (P1-6): 使用 NoteRepository trait 方法以支持 color
+        let tag = Tag {
+            id: uuid::Uuid::new_v4(),
+            name: req.name,
+            color: req.color,
+            created_at: chrono::Utc::now(),
+        };
+        serialize_result(NoteRepository::create_tag(repo, tag))
     }));
 
     register_handler("TagEvent.ListTags", Box::new(|_payload| {

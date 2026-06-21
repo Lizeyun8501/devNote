@@ -5,6 +5,7 @@
 
 import 'dart:developer' as developer;
 
+import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/persistence_dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
@@ -38,15 +39,40 @@ class SqliteNoteRepository implements NoteRepository {
 
   bool get _useFFI => _bridge.isAvailable;
 
+  /// P0 修复 (双持久层数据分裂): FFI 模式下同步 note 元数据到 Dart sqflite。
+  ///
+  /// 问题：FFI 模式下 note 写入 Rust DB，但 EditorService 编辑 block 时
+  /// 写入 Dart DB，搜索也走 Dart FTS，导致数据分裂。
+  ///
+  /// 过渡方案：FFI 模式下双写 —— Rust DB 为权威源，Dart sqflite 作为
+  /// 搜索索引和 block 编辑的同步镜像。长期应统一到 Rust 端实现 block CRUD
+  /// 和 FTS 搜索，消除双写。
+  Future<void> _syncToDartSqflite(NoteModel note) async {
+    try {
+      final db = await _dbHelper.database;
+      // P1 修复 (P1-7): 使用 INSERT OR REPLACE 单语句完成 upsert，
+      // 消除原 query + insert/update 的 TOCTOU 竞态（查询与写入之间笔记可能被删除）
+      final sqfliteJson = note.toSqfliteJson();
+      await db.insert('notes', sqfliteJson,
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (e) {
+      // 同步失败不影响主流程（Rust DB 已是权威源）
+      developer.log('Failed to sync note to Dart sqflite: $e', level: 900);
+    }
+  }
+
   @override
   Future<NoteModel> createNote(NoteModel note) async {
     if (_useFFI) {
       final result = await _dispatch.create(entity: 'note', data: note.toJson());
-      return NoteModel.fromJson(result);
+      final saved = NoteModel.fromJson(result);
+      // P0 修复: 同步到 Dart sqflite，确保搜索和 block 编辑数据一致
+      await _syncToDartSqflite(saved);
+      return saved;
     }
     developer.log('FFI not available, falling back to sqflite for createNote', level: 900);
     final db = await _dbHelper.database;
-    await db.insert('notes', note.toJson());
+    await db.insert('notes', note.toSqfliteJson());
     return note;
   }
 
@@ -59,7 +85,10 @@ class SqliteNoteRepository implements NoteRepository {
       // 返回的是错误的笔记。改用 _dispatch.get() 直接调用 Dispatch.getNote(id)。
       final result = await _dispatch.get(entity: 'note', id: id);
       if (result == null) return null;
-      return NoteModel.fromJson(result);
+      final note = NoteModel.fromJson(result);
+      // P0 修复: 同步到 Dart sqflite，确保后续 block 编辑基于最新数据
+      await _syncToDartSqflite(note);
+      return note;
     }
     developer.log('FFI not available, falling back to sqflite for getNote', level: 900);
     final db = await _dbHelper.database;
@@ -76,13 +105,16 @@ class SqliteNoteRepository implements NoteRepository {
   Future<NoteModel> updateNote(NoteModel note) async {
     if (_useFFI) {
       final result = await _dispatch.update(entity: 'note', id: note.id, data: note.toJson());
-      return NoteModel.fromJson(result);
+      final saved = NoteModel.fromJson(result);
+      // P0 修复: 同步到 Dart sqflite，确保搜索索引和 block 编辑数据一致
+      await _syncToDartSqflite(saved);
+      return saved;
     }
     developer.log('FFI not available, falling back to sqflite for updateNote', level: 900);
     final db = await _dbHelper.database;
     await db.update(
       'notes',
-      note.toJson(),
+      note.toSqfliteJson(),
       where: 'id = ?',
       whereArgs: [note.id],
     );
@@ -99,6 +131,14 @@ class SqliteNoteRepository implements NoteRepository {
   Future<void> deleteNote(String id) async {
     if (_useFFI) {
       await _dispatch.delete(entity: 'note', id: id);
+      // P1 修复 (P1-7): 同步删除 Dart sqflite 镜像，避免孤儿数据
+      // 依赖 ON DELETE CASCADE 清理 note_tags/blocks/attachments
+      try {
+        final db = await _dbHelper.database;
+        await db.delete('notes', where: 'id = ?', whereArgs: [id]);
+      } catch (e) {
+        developer.log('Failed to sync note deletion to Dart sqflite: $e', level: 900);
+      }
       return;
     }
     developer.log('FFI not available, falling back to sqflite for deleteNote', level: 900);

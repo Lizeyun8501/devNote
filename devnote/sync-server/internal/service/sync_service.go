@@ -255,14 +255,36 @@ func (s *SyncService) GetNoteVersion(userID string, noteID string, version int64
 }
 
 func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolution) error {
-	snapshot := &model.NoteSnapshot{
-		ID:      uuid.New().String(),
-		NoteID:  resolution.NoteID,
-		UserID:  userID,
-		Version: resolution.Version + 1,
-		Content: resolution.ChosenData,
-	}
-	return s.db.Create(snapshot).Error
+	// P1 修复 (SEC-12): 原实现仅创建 NoteSnapshot，不写 SyncRecord，
+	// 导致 Pull（基于 SyncRecord.version）拉不到冲突解决结果，其他设备持续看到冲突。
+	// 现改为在事务中同时创建 NoteSnapshot 和 SyncRecord，保证一致性。
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		snapshot := &model.NoteSnapshot{
+			ID:      uuid.New().String(),
+			NoteID:  resolution.NoteID,
+			UserID:  userID,
+			Version: resolution.Version + 1,
+			Content: resolution.ChosenData,
+		}
+		if err := tx.Create(snapshot).Error; err != nil {
+			return fmt.Errorf("create snapshot: %w", err)
+		}
+
+		// 同步写入 SyncRecord，使其他设备 Pull 时能拉到冲突解决结果
+		record := &model.SyncRecord{
+			ID:        uuid.New().String(),
+			UserID:    userID,
+			NoteID:    resolution.NoteID,
+			Action:    "update",
+			Version:   resolution.Version + 1,
+			Payload:   resolution.ChosenData,
+			CreatedAt: time.Now(),
+		}
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("create sync record: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *SyncService) updateDeviceSync(userID, deviceID string, latestVer int64) {

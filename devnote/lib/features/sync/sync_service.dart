@@ -217,12 +217,40 @@ class SyncService {
   /// 解决同步冲突
   /// 修复：原代码完全忽略 useRemote 参数，始终设置 synced 状态而不做任何实际解决。
   /// 现在根据 useRemote 参数记录冲突解决方向，并更新状态。
-  Future<void> resolveConflict(bool useRemote) async {
+  ///
+  /// P1 修复 (INC-07): 原实现仅更新本地状态，不上传服务端，导致其他设备
+  /// 拉取时仍看到冲突态。现改为调用服务端 /sync/conflicts/resolve 端点。
+  Future<void> resolveConflict(bool useRemote, {String? conflictId}) async {
     if (useRemote) {
       // 使用远程版本：当前本地修改已被远程覆盖
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_keyPendingChanges, 0);
     }
+
+    // P1 修复 (INC-07): 上报冲突解决结果到服务端
+    if (conflictId != null) {
+      try {
+        final serverUrl = await _getServerUrl();
+        final token = await _getAuthToken();
+        final uri = Uri.parse('$serverUrl/api/v1/sync/conflicts/resolve');
+        final headers = <String, String>{
+          'Content-Type': 'application/json',
+        };
+        if (token != null && token.isNotEmpty) {
+          headers['Authorization'] = 'Bearer $token';
+        }
+        final body = jsonEncode({
+          'conflict_id': conflictId,
+          'resolution': useRemote ? 'remote' : 'local',
+        });
+        await http.post(uri, headers: headers, body: body).timeout(
+          const Duration(seconds: 15),
+        );
+      } catch (_) {
+        // 上报失败不影响本地状态，下次同步会重新检测冲突
+      }
+    }
+
     _state = _state.copyWith(
       status: SyncServiceStatus.synced,
       pendingChanges: useRemote ? 0 : _state.pendingChanges,
@@ -402,17 +430,55 @@ class SyncService {
       headers['Authorization'] = 'Bearer $token';
     }
 
-    // 构造与服务端 PushRequest 对齐的 JSON 结构
-    final body = jsonEncode({
-      'device_id': deviceId,
-      'records': [
+    // P1 修复 (INC-01): 原实现把所有笔记塞进单条 record（note_id='sync-batch'），
+    // 服务端 Push handler 按 per-note 语义处理，无法正确建立 per-note 版本链。
+    // 改为：解析 data 为 notes 列表，每条 note 生成独立 record。
+    final List<Map<String, dynamic>> records;
+    try {
+      final decoded = jsonDecode(utf8.decode(data));
+      if (decoded is List) {
+        records = decoded.map((note) => {
+          'note_id': note['id'] ?? 'unknown',
+          'action': 'update',
+          'version': note['version'] ?? 0,
+          'payload': base64Encode(utf8.encode(jsonEncode(note))),
+        }).toList();
+      } else if (decoded is Map) {
+        // 单条 note 包装为列表
+        records = [
+          {
+            'note_id': decoded['id'] ?? 'single',
+            'action': 'update',
+            'version': decoded['version'] ?? 0,
+            'payload': base64Encode(data),
+          }
+        ];
+      } else {
+        // 无法解析，回退到批量模式
+        records = [
+          {
+            'note_id': 'sync-batch',
+            'action': 'update',
+            'version': 0,
+            'payload': base64Encode(data),
+          }
+        ];
+      }
+    } catch (_) {
+      // 非 JSON 数据（如加密二进制），使用批量模式
+      records = [
         {
           'note_id': 'sync-batch',
           'action': 'update',
           'version': 0,
           'payload': base64Encode(data),
         }
-      ],
+      ];
+    }
+
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'records': records,
     });
 
     final response = await http

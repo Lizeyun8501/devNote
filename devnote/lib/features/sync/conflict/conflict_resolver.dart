@@ -216,6 +216,19 @@ class ConflictResolver {
       ..addAll(remoteClocks);
   }
 
+  /// P1 修复 (INC-04): 合并块级向量时钟，而非覆盖。
+  ///
+  /// 原实现 setVectorClocks 每次 clear() 后 addAll()，导致多 block 场景下
+  /// 后续调用会清空之前注册的 block 向量时钟。此方法改为合并模式，
+  /// 保留已注册的 block 向量时钟，仅更新/添加当前 block 的时钟。
+  void mergeVectorClocks(
+    Map<String, VectorClock> localClocks,
+    Map<String, VectorClock> remoteClocks,
+  ) {
+    _localVectorClocks.addAll(localClocks);
+    _remoteVectorClocks.addAll(remoteClocks);
+  }
+
   /// 清空所有冲突与已记录的解决结果
   void clear() {
     _conflicts.clear();

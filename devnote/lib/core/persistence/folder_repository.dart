@@ -100,17 +100,21 @@ class SqliteFolderRepository implements FolderRepository {
     final allFolderIds = await _collectSubfolderIdsViaSqflite(db, id);
     allFolderIds.add(id);
 
-    // 删除所有关联文件夹中的笔记
-    for (final folderId in allFolderIds) {
-      await db.delete('notes', where: 'folder_id = ?', whereArgs: [folderId]);
-    }
+    // P1 修复 (P1-7): 删除笔记 + 删除文件夹包裹在事务中，
+    // 确保级联删除原子完成，避免中途失败产生孤儿数据
+    await db.transaction((txn) async {
+      // 删除所有关联文件夹中的笔记
+      for (final folderId in allFolderIds) {
+        await txn.delete('notes', where: 'folder_id = ?', whereArgs: [folderId]);
+      }
 
-    // 批量删除所有文件夹
-    await db.delete(
-      'folders',
-      where: 'id IN (${List.filled(allFolderIds.length, '?').join(',')})',
-      whereArgs: allFolderIds,
-    );
+      // 批量删除所有文件夹
+      await txn.delete(
+        'folders',
+        where: 'id IN (${List.filled(allFolderIds.length, '?').join(',')})',
+        whereArgs: allFolderIds,
+      );
+    });
   }
 
   /// 通过 FFI 递归收集指定文件夹的所有子文件夹 ID

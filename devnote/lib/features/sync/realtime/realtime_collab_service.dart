@@ -711,10 +711,14 @@ class RealtimeCollabService {
 
     // 通过 resolver 注册块级向量时钟，供 EditorBloc 在调用
     // mergeWithVectorClocks 时进行因果关系判定
-    resolver.setVectorClocks(
-      {op.blockId: _localVectorClock},
-      {op.blockId: op.vectorClock},
-    );
+    // P1 修复 (INC-04): 原实现每次用单元素 Map 覆盖 resolver 内部状态，
+    // 导致多 block 场景下其他 block 的向量时钟被清空丢失，因果关系判定失效。
+    // 改为合并到现有 Map 而非覆盖。
+    final localVcMap = <String, VectorClock>{};
+    localVcMap[op.blockId] = _localVectorClock;
+    final remoteVcMap = <String, VectorClock>{};
+    remoteVcMap[op.blockId] = op.vectorClock;
+    resolver.mergeVectorClocks(localVcMap, remoteVcMap);
 
     AppLogger.d(
       _tag,

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"os"
 	"strconv"
@@ -36,9 +38,20 @@ func Load() *Config {
 		if os.Getenv("GO_ENV") == "production" {
 			log.Fatal("JWT_SECRET environment variable must be set in production")
 		}
-		// Only allow default in development
-		jwtSecret = "devnote-dev-secret-key-change-me"
-		log.Println("WARNING: Using default JWT_SECRET. Set JWT_SECRET env var for production.")
+		// P1 修复 (SEC-06): 原实现使用固定默认密钥 "devnote-dev-secret-key-change-me"，
+		// 可被预测伪造 token。现改为每次启动生成随机密钥（仅开发环境）。
+		// 注意：随机密钥会导致重启后所有 token 失效，开发环境可接受。
+		jwtSecret = generateRandomSecret(32)
+		log.Println("WARNING: Generated random JWT_SECRET for development. "
+			+ "Set JWT_SECRET env var for consistent sessions.")
+	}
+
+	// P1 修复 (SEC-06): 校验密钥长度至少 32 字节
+	if len(jwtSecret) < 32 {
+		if os.Getenv("GO_ENV") == "production" {
+			log.Fatal("JWT_SECRET must be at least 32 bytes for security")
+		}
+		log.Printf("WARNING: JWT_SECRET is only %d bytes, recommend at least 32 bytes", len(jwtSecret))
 	}
 
 	allowedOrigins := parseEnvList("ALLOWED_ORIGINS", []string{"*"})
@@ -106,4 +119,15 @@ func parseEnvList(key string, fallback []string) []string {
 		return fallback
 	}
 	return result
+}
+
+// generateRandomSecret 生成密码学安全的随机密钥（十六进制编码）
+// P1 修复 (SEC-06): 替代固定默认密钥
+func generateRandomSecret(byteLength int) string {
+	b := make([]byte, byteLength)
+	if _, err := rand.Read(b); err != nil {
+		// rand.Read 失败极少见，失败时 panic 避免用弱密钥
+		log.Fatalf("Failed to generate random secret: %v", err)
+	}
+	return hex.EncodeToString(b)
 }

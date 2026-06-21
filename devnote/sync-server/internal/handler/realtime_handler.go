@@ -57,13 +57,35 @@ const (
 )
 
 // upgrader 将 HTTP 连接升级为 WebSocket
+//
+// P1 修复 (SEC-04): 原实现 CheckOrigin 恒返回 true，允许任意 origin 建立
+// WebSocket 连接，存在 CSRF 风险。现改为校验 Origin 是否在白名单内。
+// allowedOrigins 通过 SetupCheckOrigin 注入。
+var allowedOrigins = []string{"*"}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	// CORS 由上层中间件处理；WebSocket 升级时放宽 origin 校验
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		// 无 Origin 头（非浏览器客户端，如 curl）允许通过
+		if origin == "" {
+			return true
+		}
+		// P1 修复: 校验 Origin 是否在白名单内
+		for _, allowed := range allowedOrigins {
+			if allowed == "*" || allowed == origin {
+				return true
+			}
+		}
+		return false
 	},
+}
+
+// SetupCheckOrigin 注入允许的 Origin 白名单
+// P1 修复 (SEC-04): 由 main.go 在启动时调用，注入 config.AllowedOrigins
+func SetupCheckOrigin(origins []string) {
+	allowedOrigins = origins
 }
 
 // RealtimeHandler 处理 WebSocket 实时协作连接

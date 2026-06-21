@@ -11,6 +11,7 @@
 // 所有 tag 操作统一走 sqflite，消除混合持久化导致的数据不一致。
 // TODO: 待 Rust 端补全 note_tags handler 后，可将全部 tag 操作迁移至 FFI。
 
+import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/models/tag_model.dart';
 
@@ -37,10 +38,16 @@ class SqliteTagRepository implements TagRepository {
   @override
   Future<void> addTagToNote(String noteId, String tagId) async {
     final db = await _dbHelper.database;
-    await db.insert('note_tags', {
-      'note_id': noteId,
-      'tag_id': tagId,
-    });
+    // P1 修复 (P1-7): 使用 ConflictAlgorithm.ignore 处理重复关联，
+    // note_tags 主键为 (note_id, tag_id)，重复插入会抛异常
+    await db.insert(
+      'note_tags',
+      {
+        'note_id': noteId,
+        'tag_id': tagId,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   @override
@@ -58,7 +65,7 @@ class SqliteTagRepository implements TagRepository {
     final db = await _dbHelper.database;
     final results = await db.rawQuery(
       '''
-      SELECT t.id, t.name, t.created_at
+      SELECT t.id, t.name, t.created_at, t.color
       FROM tags t
       INNER JOIN note_tags nt ON t.id = nt.tag_id
       WHERE nt.note_id = ?
