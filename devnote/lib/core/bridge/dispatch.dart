@@ -91,6 +91,15 @@ class Dispatch {
 
   Future<void> deleteFolder(String id) => _bridge.deleteFolder(id);
 
+  Future<FolderModel> updateFolder({
+    required String id,
+    required String name,
+    String? parentId,
+  }) async {
+    final map = await _bridge.updateFolder(id: id, name: name, parentId: parentId);
+    return FolderModel.fromJson(map);
+  }
+
   // ============================================================
   // 标签操作 —— 替代原 TagEvent.* 事件路由
   // ============================================================

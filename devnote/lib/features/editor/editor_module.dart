@@ -4,6 +4,7 @@
 
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
+import 'package:devnote/features/editor/services/math_ink_service.dart';
 import 'package:devnote/features/editor/services/speech_to_text_service.dart';
 import 'package:devnote/features/editor/services/timeline_recorder_service.dart';
 import 'package:devnote/features/editor/services/voice_recorder_service.dart';
@@ -23,6 +24,10 @@ Future<void> registerEditorDependencies() async {
     getIt.registerLazySingleton<TimelineRecorderService>(
       () => TimelineRecorderService(getIt<VoiceRecorderService>()),
     );
+  }
+  // P2-9: 手写公式识别（数学墨迹）服务
+  if (!getIt.isRegistered<MathInkService>()) {
+    getIt.registerLazySingleton<MathInkService>(() => MathInkService());
   }
 }
 

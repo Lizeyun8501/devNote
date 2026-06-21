@@ -342,7 +342,8 @@ pub extern "C" fn devnote_grpc_connect(server_addr: *const c_char) -> *mut FFIRe
         }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));
@@ -416,7 +417,7 @@ pub extern "C" fn devnote_grpc_dispatch(
         }));
 
         match result {
-            Ok(response) => {
+            Ok(Ok(response)) => {
                 let json = serde_json::json!({
                     "success": response.success,
                     "payload": if response.payload.is_empty() {
@@ -429,6 +430,7 @@ pub extern "C" fn devnote_grpc_dispatch(
                 });
                 FFIResponse::success(&json.to_string())
             }
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));
@@ -470,7 +472,8 @@ pub extern "C" fn devnote_ws_connect(url: *const c_char) -> *mut FFIResponse {
         }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));
@@ -536,7 +539,8 @@ pub extern "C" fn devnote_ws_send(message: *const c_char) -> *mut FFIResponse {
         }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));

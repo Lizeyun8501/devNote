@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/core/di/injection.dart';
-import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/features/editor/editor_page.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/notes/daily_notes_page.dart';
@@ -54,28 +53,10 @@ final appRouter = GoRouter(
   // 借鉴内容: 全局前置守卫 (global before guard)，用于权限校验和重定向
   // ============================================================
   redirect: (context, state) {
-    final currentPath = state.matchedLocation;
-    // 需要同步初始化完成才能访问的受保护路由
-    final protectedPaths = [
-      '/settings/sync',
-      '/sync/conflicts',
-      '/canvas',
-      '/workflow/settings',
-      '/workflow/git-history',
-    ];
-    final isProtected = protectedPaths.any((p) => currentPath.startsWith(p));
-    if (isProtected) {
-      // 检查 FFI 桥接是否可用，不可用则重定向到首页
-      try {
-        final bridge = getIt<FFIBridge>();
-        if (!bridge.isAvailable) {
-          return '/notes';
-        }
-      } catch (_) {
-        return '/notes';
-      }
-    }
-    return null; // 无需重定向
+    // 路由守卫已移除 FFI 可用性检查
+    // 原实现因 _frbApi 恒为 null 导致 5 条路由永远重定向到 /notes
+    // FFI 不可用时各页面自行降级到 sqflite，无需路由层拦截
+    return null;
   },
   routes: [
     ShellRoute(

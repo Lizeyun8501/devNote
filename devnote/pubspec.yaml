@@ -154,7 +154,7 @@ dev_dependencies:
   freezed: ^2.5.7
   json_serializable: ^6.9.4
   # 测试依赖 —— BLoC 测试、Mock 框架、集成测试
-  bloc_test: ^9.1.0
+  bloc_test: ^10.0.0
   mocktail: ^1.0.0
   integration_test:
     sdk: flutter

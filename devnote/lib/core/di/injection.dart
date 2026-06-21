@@ -10,19 +10,11 @@ import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
-import 'package:devnote/core/persistence/folder_repository.dart';
-import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/services/locale_service.dart';
-import 'package:devnote/features/editor/services/math_ink_service.dart';
-import 'package:devnote/features/notes/services/ocr_service.dart';
-import 'package:devnote/features/notes/services/share_service.dart';
-import 'package:devnote/features/notes/services/version_history_service.dart';
-import 'package:devnote/features/settings/import_export/onenote_import_service.dart';
 
-/// 修复(P1): 移除所有 features/* 导入，消除 core → features 的反向依赖。
-/// 原实现导入了 13 个 features 模块，违反依赖倒置原则。
-/// features 层各自提供 register<Module>Dependencies() 和 dispose<Module>() 函数
-/// （如 ai_module.dart），由 main.dart 在 setupDependencies() 之后顺序调用。
+/// core 层仅注册 core 层依赖。
+/// features 层依赖由各自的 *_module.dart register 函数注册，由 main.dart 调用。
+/// 此文件不导入任何 features/* 路径，确保 core → features 无反向依赖。
 
 final GetIt getIt = GetIt.instance;
 
@@ -45,45 +37,15 @@ Future<void> setupDependencies() async {
   // Database
   getIt.registerLazySingleton<DatabaseHelper>(() => DatabaseHelper());
 
-  // 统一配置管理 —— 借鉴 1Password 的集中配置管理思想
+  // 统一配置管理
   getIt.registerSingleton<AppConfig>(AppConfig.instance);
   await getIt<AppConfig>().init();
 
-  // 统一日志模块 —— 借鉴 log4j 的日志级别设计
+  // 统一日志模块
   getIt.registerSingleton<AppLogger>(AppLogger.instance);
 
   // P2-7: 多语言扩展 —— 语言设置服务（持久化用户语言偏好）
   getIt.registerLazySingleton<LocaleService>(() => LocaleService());
-
-  // P0-2: OCR 文字识别 + 图片搜索服务
-  getIt.registerLazySingleton<OcrService>(() => OcrService());
-
-  // P1-4: 版本历史服务
-  getIt.registerLazySingleton<VersionHistoryService>(() => VersionHistoryService());
-
-  // P2-1: 笔记公开分享/发布服务
-  getIt.registerLazySingleton<ShareService>(() => ShareService());
-
-  // P2-9: 手写公式识别（数学墨迹）服务
-  if (!getIt.isRegistered<MathInkService>()) {
-    getIt.registerLazySingleton<MathInkService>(() => MathInkService());
-  }
-
-  // P2-8: OneNote 导入工具
-  // OneNoteGraphImporter: 通过 Microsoft Graph API 导入（OAuth2 授权流程）
-  // OneNoteHtmlImporter: 通过导出的 HTML 文件导入（本地文件解析）
-  if (!getIt.isRegistered<OneNoteGraphImporter>()) {
-    getIt.registerLazySingleton<OneNoteGraphImporter>(() => OneNoteGraphImporter());
-  }
-  if (!getIt.isRegistered<OneNoteHtmlImporter>()) {
-    getIt.registerLazySingleton<OneNoteHtmlImporter>(() {
-      final dbHelper = getIt<DatabaseHelper>();
-      return OneNoteHtmlImporter(
-        noteRepository: SqliteNoteRepository(dbHelper),
-        folderRepository: SqliteFolderRepository(dbHelper),
-      );
-    });
-  }
 }
 
 /// 释放 core 层已注册单例的资源。

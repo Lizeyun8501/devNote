@@ -13,6 +13,8 @@
 // 来源: https://github.com/anyproto/anytype-kb
 // 借鉴内容: 以对象(Object)为原语的数据建模方式
 
+import 'dart:async';
+import 'dart:ui' show AppExitResponse;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:devnote/core/i18n/app_localizations.dart';
@@ -53,15 +55,30 @@ import 'package:devnote/features/todo/services/notification_service.dart';
 // P2-6: 手绘画布白板（Excalidraw 风格）
 import 'package:devnote/features/whiteboard/whiteboard_module.dart';
 
-void main() async {
+void main() {
+  // 全局错误边界：捕获同步异常和 Flutter 框架异常
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('FlutterError: ${details.exception}');
+  };
+
+  // runZonedGuarded 捕获所有未处理的异步异常
+  runZonedGuarded<Future<void>>(() async {
+    await _initializeApp();
+    runApp(const DevNoteApp());
+  }, (error, stack) {
+    debugPrint('Unhandled async error: $error\n$stack');
+  });
+}
+
+/// 应用初始化流程
+Future<void> _initializeApp() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize core dependency injection (core layer only)
   await setupDependencies();
 
   // P2-7: 多语言扩展 —— 读取用户上次选择的语言并应用到 LocaleProvider
-  // 必须在 setupDependencies() 之后（LocaleService 已注册），
-  // 在 runApp() 之前，确保首帧即使用正确的 locale。
   try {
     final localeService = getIt<LocaleService>();
     final savedLocale = await localeService.getCurrentLocale();
@@ -72,48 +89,40 @@ void main() async {
     debugPrint('Warning: Failed to load saved locale: $e');
   }
 
-  // 修复(P1): features 层依赖由各自模块注册，消除 core → features 反向依赖
+  // 修复: Sentry 初始化提前到所有 feature 注册之前，确保注册过程中的异常能被捕获
+  await setupSentry();
+
+  // features 层依赖由各自模块注册，消除 core → features 反向依赖
   await registerPluginsDependencies();
   await registerSettingsDependencies();
   await registerSyncDependencies();
   await registerWorkflowDependencies();
   await registerAIDependencies();
-  // 修复(P2-1): 注册 Editor/Search/Canvas/Database/Graph/Flashcard 服务到 DI
   await registerEditorDependencies();
   await registerSearchDependencies();
   await registerCanvasDependencies();
   await registerDatabaseDependencies();
   await registerGraphDependencies();
   await registerFlashcardDependencies();
-  // P1-3: 注册模板系统服务到 DI
   await registerTemplatesDependencies();
-  // P2-4: 注册 Daily Notes 服务到 DI（依赖 TemplateService，须在 templates 之后）
+  // Daily Notes 依赖 TemplateService，须在 templates 之后
   await registerNotesDependencies();
-  // P1-7: 注册 Vault 保险库服务到 DI
   await registerVaultDependencies();
-  // P2-5: 注册全局待办/提醒系统服务到 DI
   await registerTodoDependencies();
-  // P2-6: 注册白板模块服务到 DI
   await registerWhiteboardDependencies();
 
-  // P2-5: 初始化本地通知服务（timezone + flutter_local_notifications）
-  // 失败时降级为无通知模式，不阻断应用启动
+  // P2-5: 初始化本地通知服务（失败时降级为无通知模式，不阻断启动）
   try {
     await getIt<NotificationService>().init();
   } catch (e) {
     debugPrint('Warning: Notification service initialization failed: $e');
   }
 
-  // 修复：Sentry 初始化提前到 FFI Bridge 之前，确保 FFI 初始化过程中的
-  // 错误能被 Sentry 捕获上报，防止启动阶段异常丢失
-  await setupSentry();
-
-  // Initialize Rust FFI bridge
+  // Initialize Rust FFI bridge (failure → graceful degradation to sqflite)
   try {
     await getIt<FFIBridge>().init();
   } catch (e) {
     debugPrint('Warning: FFI bridge initialization failed: $e');
-    // Continue without FFI - graceful degradation
   }
 
   // Initialize platform channel
@@ -123,7 +132,6 @@ void main() async {
     debugPrint('Platform channel initialized. Device info: $deviceInfo');
   } catch (e) {
     debugPrint('Warning: Platform channel initialization failed: $e');
-    // Continue without platform channel - graceful degradation
   }
 
   // Initialize performance systems
@@ -137,8 +145,6 @@ void main() async {
 
   // Set memory limit
   getIt<MemoryManager>().setMemoryLimit(100 * 1024 * 1024);
-
-  runApp(const DevNoteApp());
 }
 
 class DevNoteApp extends StatefulWidget {
@@ -155,6 +161,11 @@ class DevNoteApp extends StatefulWidget {
 /// 修复(P1): disposeAll 拆分为各 feature 模块的 dispose 函数 + disposeCore()，
 /// 消除 core/di 对 features 的反向依赖。
 class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
+  /// 修复竞态: dispose() 与 didRequestAppExit() 可能并发调用 _disposeAll()，
+  /// 通过单例 Future 保证清理逻辑只执行一次，后续调用复用同一 Future。
+  /// 避免第二次 getIt.reset() 抛 StateError。
+  Future<void>? _disposeFuture;
+
   @override
   void initState() {
     super.initState();
@@ -182,7 +193,13 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   ///
   /// 修复(P2-16): 改为 async 以 await disposeCore() 中的 DatabaseHelper.close()，
   /// 确保数据库句柄在 getIt.reset() 之前被正确关闭。
-  Future<void> _disposeAll() async {
+  ///
+  /// 修复竞态: 通过 _disposeFuture 单例化，确保 _doDisposeAll 只执行一次。
+  Future<void> _disposeAll() {
+    return _disposeFuture ??= _doDisposeAll();
+  }
+
+  Future<void> _doDisposeAll() async {
     // 修复(P2-1): 释放新增 feature 模块资源（逆序，features 在 core 之前释放）
     // P2-5: Todo 模块最后注册，故最先释放（取消所有已调度通知）
     disposeTodoModule();

@@ -42,14 +42,7 @@ class SqliteTagRepository implements TagRepository {
 
   @override
   Future<void> addTagToNote(String noteId, String tagId) async {
-    if (_useFFI) {
-      await _dispatch.create(entity: 'note_tag', data: {
-        'note_id': noteId,
-        'tag_id': tagId,
-      });
-      return;
-    }
-    developer.log('FFI not available, falling back to sqflite for addTagToNote', level: 900);
+    // note_tag 关联表操作始终使用 sqflite —— Rust 端无对应 C ABI handler
     final db = await _dbHelper.database;
     await db.insert('note_tags', {
       'note_id': noteId,
@@ -59,11 +52,7 @@ class SqliteTagRepository implements TagRepository {
 
   @override
   Future<void> removeTagFromNote(String noteId, String tagId) async {
-    if (_useFFI) {
-      await _dispatch.delete(entity: 'note_tag', id: '${noteId}_${tagId}');
-      return;
-    }
-    developer.log('FFI not available, falling back to sqflite for removeTagFromNote', level: 900);
+    // note_tag 关联表操作始终使用 sqflite —— Rust 端无对应 C ABI handler
     final db = await _dbHelper.database;
     await db.delete(
       'note_tags',
@@ -74,12 +63,7 @@ class SqliteTagRepository implements TagRepository {
 
   @override
   Future<List<TagModel>> getTagsForNote(String noteId) async {
-    // 修复：FFI 路径下 PersistenceDispatch.list 不支持 tag 的 note_id 过滤，
-    // getTagsForNote 需要 JOIN note_tags 表，FFI 桥接层未实现此查询。
-    // 因此始终使用 sqflite 路径执行 JOIN 查询，确保返回正确的标签。
-    if (_useFFI) {
-      developer.log('FFI 模式下 getTagsForNote 降级到 sqflite（FFI 不支持 note_id 过滤）', level: 900);
-    }
+    // JOIN 查询始终使用 sqflite —— Rust 端无对应 C ABI handler
     final db = await _dbHelper.database;
     final results = await db.rawQuery('''
       SELECT t.id, t.name, t.created_at

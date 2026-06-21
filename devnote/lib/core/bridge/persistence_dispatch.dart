@@ -98,6 +98,14 @@ class PersistenceDispatch {
           content: data['content'] as String,
         );
         return result.toJson();
+      case 'folder':
+        // 修复: 补全 folder update 路径，原代码缺失此 case 导致 UnimplementedError
+        final result = await _dispatch.updateFolder(
+          id: id,
+          name: data['name'] as String,
+          parentId: data['parent_id'] as String?,
+        );
+        return result.toJson();
       case 'block':
         await _dispatch.updateBlock(id: id, content: data['content'] as String);
         return {'id': id};

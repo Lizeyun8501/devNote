@@ -1,37 +1,52 @@
-/// FFIBridge - 基于 flutter_rust_bridge v2 的类型安全 FFI 桥接层
+/// FFIBridge - 基于 dart:ffi 的 C ABI 桥接层
 ///
-/// ## 替换说明
-/// 原实现：自研 DynamicLibrary + NativeFunction 绑定方案（~238 行 Dart + ~1840 行 Rust），
-/// 采用 Event-Dispatch 架构、JSON 序列化通信、手动 malloc/free 内存管理。
+/// 直接调用 Rust 编译的动态库（libdevnote_ffi.so/.dylib/.dll），
+/// 通过 `devnote_dispatch` C ABI 函数与 Rust 核心引擎通信。
 ///
-/// 替换为：flutter_rust_bridge v2 自动生成类型安全绑定
+/// ## 架构
+/// Dart → dart:ffi → devnote_dispatch(event, payload) → Rust handlers → 引擎
 ///
-/// ## FRB 优势
-/// - **类型安全**：自动生成 Dart 绑定，消除双端 JSON schema 不一致
-/// - **内存安全**：消除手写 malloc/free 和 catch_unwind
-/// - **性能**：SSE 编解码器比 JSON 序列化快数倍
-/// - **开发效率**：新增 Rust 函数只需 `flutter_rust_bridge_codegen generate`
-/// - **高级特性**：支持 async/await、Stream、Result 类型
+/// ## 优势
+/// - 无需 flutter_rust_bridge codegen，零代码生成依赖
+/// - 直接 C ABI 调用，无中间序列化层
+/// - 编译时函数查找，运行时零开销
 ///
-/// 来源: https://pub.dev/packages/flutter_rust_bridge
-/// 版本: v2.12.0
-/// Flutter Favorite: ✅
+/// 借鉴: AppFlowy FFI 桥接模式 (https://github.com/AppFlowy-IO/AppFlowy)
 
+import 'dart:convert';
 import 'dart:developer';
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:ffi/ffi.dart' hide Utf16Pointer;
+
+import 'ffi_response.dart';
+
 // ============================================================
-// FRB 生成的绑定导入
-// flutter_rust_bridge_codegen generate 会自动生成此文件
-// 包含所有 Rust frb_api.rs 中导出函数的 Dart 绑定
-//
-// TODO(codegen): 运行 flutter_rust_bridge_codegen generate 后，
-//   取消下方注释并删除 flutter_rust_bridge 的通用导入：
-//   import 'package:devnote_ffi/src/rust/api/frb_api.dart' as rust_api;
+// C ABI 函数类型定义
 // ============================================================
 
-/// FFI 协议版本 —— 与 Rust 端 frb_api.rs 中 FFI_API_VERSION 常量严格一致
+// devnote_init() -> *mut FFIResponse
+typedef _InitNative = Pointer<FFIResponseC> Function();
+typedef _InitDart = Pointer<FFIResponseC> Function();
+
+// devnote_destroy(*mut FFIResponse) -> void
+typedef _DestroyNative = Void Function(Pointer<FFIResponseC>);
+typedef _DestroyDart = void Function(Pointer<FFIResponseC>);
+
+// devnote_dispatch(*const c_char) -> *mut c_char
+typedef _DispatchNative = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _DispatchDart = Pointer<Utf8> Function(Pointer<Utf8>);
+
+// devnote_free_string(*mut c_char) -> void
+typedef _FreeStringNative = Void Function(Pointer<Utf8>);
+typedef _FreeStringDart = void Function(Pointer<Utf8>);
+
+// ============================================================
+// 数据类型
+// ============================================================
+
+/// FFI 协议版本 —— 与 Rust 端 handlers.rs 中 FFI_API_VERSION 常量严格一致
 const int kFFIApiVersion = 1;
 
 /// 协议协商结果
@@ -50,21 +65,17 @@ class FfiVersionInfo {
 
   bool get isCompatible => apiVersion >= compatibleMin && kFFIApiVersion >= compatibleMin;
 
-  /// 从 FRB 生成的 VersionInfo 创建
-  factory FfiVersionInfo.fromFrb(dynamic frbVersion) {
+  factory FfiVersionInfo.fromJson(Map<String, dynamic> json) {
     return FfiVersionInfo(
-      apiVersion: frbVersion.apiVersion as int,
-      rustVersion: frbVersion.rustVersion as String,
-      compatibleMin: frbVersion.compatibleMin as int,
-      features: List<String>.from(frbVersion.features as List),
+      apiVersion: (json['api_version'] as num).toInt(),
+      rustVersion: json['rust_version'] as String,
+      compatibleMin: (json['compatible_min'] as num).toInt(),
+      features: List<String>.from(json['features'] as List),
     );
   }
 }
 
-/// 语音转文字结果（FRB 映射类型）
-///
-/// 对应 Rust 端 `TranscribeResultFfi` 结构体，
-/// FRB codegen 运行后由生成代码替换。
+/// 语音转文字结果
 class TranscribeResultFfi {
   final String text;
   final int durationMs;
@@ -77,9 +88,7 @@ class TranscribeResultFfi {
   });
 }
 
-/// 转写片段（FRB 映射类型）
-///
-/// 对应 Rust 端 `TranscriptSegmentFfi` 结构体。
+/// 转写片段
 class TranscriptSegmentFfi {
   final String text;
   final int startMs;
@@ -92,11 +101,7 @@ class TranscriptSegmentFfi {
   });
 }
 
-/// Vault 加密数据（FRB 映射类型）
-///
-/// P1-7: 对应 Rust 端 `VaultEncryptedDataFfi` 结构体，
-/// FRB codegen 运行后由生成代码替换。
-/// 包含 toJson/fromJson 以支持 SharedPreferences 持久化。
+/// Vault 加密数据
 class VaultEncryptedData {
   final String ciphertext;
   final String salt;
@@ -113,18 +118,6 @@ class VaultEncryptedData {
     required this.timeCost,
     required this.parallelism,
   });
-
-  /// 从 FRB 生成的 Dart 对象创建
-  factory VaultEncryptedData.fromFrb(dynamic frbData) {
-    return VaultEncryptedData(
-      ciphertext: frbData.ciphertext as String,
-      salt: frbData.salt as String,
-      nonce: frbData.nonce as String,
-      memoryCost: frbData.memoryCost as int,
-      timeCost: frbData.timeCost as int,
-      parallelism: frbData.parallelism as int,
-    );
-  }
 
   Map<String, dynamic> toJson() => {
     'ciphertext': ciphertext,
@@ -146,79 +139,81 @@ class VaultEncryptedData {
       );
 }
 
-/// FFI 桥接层 - Flutter 与 Rust 核心通信
-/// 
-/// 借鉴: AppFlowy FFI 桥接模式 (https://github.com/AppFlowy-IO/AppFlowy)
-/// - 类型安全的 FFI 调用
-/// - 异步运行时支持
-/// 
-/// 复用: flutter_rust_bridge v2 (https://github.com/fzyzcjy/flutter_rust_bridge)
-/// - 自动生成 Dart-Rust 绑定
-/// - SSE 序列化 (零拷贝)
-/// - Stream 支持
+// ============================================================
+// FFI 错误
+// ============================================================
+
+/// FFI 调用异常
+class FfiException implements Exception {
+  final String event;
+  final int code;
+  final String message;
+
+  const FfiException(this.event, this.code, this.message);
+
+  @override
+  String toString() => 'FfiException($event, code=$code): $message';
+}
+
+// ============================================================
+// FFIBridge —— Flutter 与 Rust 核心通信桥接
+// ============================================================
+
 class FFIBridge {
   FFIBridge();
 
   bool _isAvailable = false;
   bool get isAvailable => _isAvailable;
 
-  // FRB 生成的 API 实例
-  // flutter_rust_bridge_codegen generate 后会创建对应的 Dart 类
-  // 实际类型为 DevNoteApi（由 FRB 代码生成器生成），此处使用 dynamic
-  // 直到 codegen 运行后才能确定具体类型
-  dynamic _frbApi;
+  DynamicLibrary? _dylib;
 
-  /// 初始化 FRB 桥接
-  ///
-  /// FRB v2 初始化模式：
-  /// 1. 构造 FRB 生成的 API 实例（如 DevNoteApi()）
-  /// 2. 调用 Rust 端 initEngines() 初始化引擎
-  ///
-  /// TODO(codegen): 运行 flutter_rust_bridge_codegen generate 后，
-  ///   将下方替换为：
-  ///   final api = DevNoteApi();
-  ///   await api.initEngines();
-  ///   _frbApi = api;
-  /// 初始化 FRB 桥接
-  ///
-  /// 注意：当前项目尚未运行 `flutter_rust_bridge_codegen generate` 生成
-  /// `DevNoteApi`/`RustApi`，所以 init() 只能做"符号存在性"检查。
-  /// 修复：避免使用不存在的 `RustApi()` 构造，改为通过 `DynamicLibrary.open`
-  /// 检查 native 库是否存在；不可用时抛错由 main() 捕获并 graceful degradation。
+  // C ABI 函数引用
+  late final _InitDart _devnoteInit;
+  late final _DestroyDart _devnoteDestroy;
+  late final _DispatchDart _devnoteDispatch;
+  late final _FreeStringDart _devnoteFreeString;
+
+  /// 初始化 FFI 桥接：加载动态库 + 查找函数 + 调用 devnote_init 注册处理器
   Future<void> init() async {
     try {
-      // 尝试加载 native 库 —— 不存在时（如未运行 codegen）init 失败
-      try {
-        // ignore: avoid_dynamic_calls
-        final dylib = _openNativeLibrary();
-        if (dylib == null) {
-          throw StateError('Native library not found');
-        }
-      } catch (e) {
-        _isAvailable = false;
-        _frbApi = null;
-        rethrow;
+      final dylib = _openNativeLibrary();
+      if (dylib == null) {
+        throw StateError('Native library not found');
       }
+      _dylib = dylib;
+
+      // 查找 C ABI 函数
+      _devnoteInit = _dylib!.lookupFunction<_InitNative, _InitDart>('devnote_init');
+      _devnoteDestroy = _dylib!.lookupFunction<_DestroyNative, _DestroyDart>('devnote_destroy');
+      _devnoteDispatch = _dylib!.lookupFunction<_DispatchNative, _DispatchDart>('devnote_dispatch');
+      _devnoteFreeString = _dylib!.lookupFunction<_FreeStringNative, _FreeStringDart>('devnote_free_string');
+
+      // 调用 devnote_init 注册所有事件处理器并初始化引擎
+      final responsePtr = _devnoteInit();
+      final code = responsePtr.ref.code;
+      final message = responsePtr.ref.message.toDartString();
+      _devnoteDestroy(responsePtr);
+
+      if (code != 0) {
+        throw StateError('FFI init failed ($code): $message');
+      }
+
       _isAvailable = true;
+      log('FFIBridge initialized successfully', name: 'FFIBridge');
     } catch (e) {
       _isAvailable = false;
-      _frbApi = null;
+      log('FFIBridge init failed: $e', name: 'FFIBridge', level: 900);
       rethrow;
     }
   }
 
-  /// 子类可重写此方法提供自定义的 DynamicLibrary 加载策略
-  // ignore: avoid_dynamic_calls
+  /// 跨平台加载 native 动态库
   DynamicLibrary? _openNativeLibrary() {
-    // 修复(P2): 原实现仅尝试 'libdevnote_ffi.so'，不区分 macOS（.dylib）、
-    // Windows（.dll）、iOS（DynamicLibrary.process()），跨平台运行时 FFI 必然失败。
-    // 现按平台加载正确的动态库文件名。
     try {
       if (Platform.isAndroid) {
         return DynamicLibrary.open('libdevnote_ffi.so');
       }
       if (Platform.isIOS) {
-        // iOS: 静态链接，通过 process 查找符号
         return DynamicLibrary.process();
       }
       if (Platform.isMacOS) {
@@ -236,34 +231,98 @@ class FFIBridge {
     }
   }
 
-  /// 版本协商 —— 替代原 SystemEvent.GetVersion 事件
-  Future<FfiVersionInfo?> negotiateVersion() async {
-    if (!_isAvailable || _frbApi == null) return null;
+  // ============================================================
+  // 核心分发方法 —— 通过 C ABI 调用 Rust dispatch
+  // ============================================================
+
+  /// 调用 Rust 端 devnote_dispatch，返回解析后的 JSON 数据
+  dynamic _dispatch(String event, [Map<String, dynamic>? payload]) {
+    final requestJson = jsonEncode({
+      'event': event,
+      'payload': payload != null ? jsonEncode(payload) : null,
+    });
+
+    final requestPtr = requestJson.toNativeUtf8();
     try {
-      // 直接调用 Rust 函数，无需 JSON 序列化
-      final version = await _frbApi.getVersion();
-      return FfiVersionInfo.fromFrb(version);
+      final responsePtr = _devnoteDispatch(requestPtr);
+      if (responsePtr == nullptr) {
+        throw StateError('FFI dispatch returned null for event: $event');
+      }
+
+      final responseJson = responsePtr.toDartString();
+      _devnoteFreeString(responsePtr);
+
+      final response = jsonDecode(responseJson) as Map<String, dynamic>;
+      final code = (response['code'] as num).toInt();
+      if (code != 0) {
+        throw FfiException(event, code, response['message'] as String? ?? 'Unknown error');
+      }
+
+      final data = response['data'] as String?;
+      if (data == null || data.isEmpty) return null;
+      return jsonDecode(data);
+    } finally {
+      malloc.free(requestPtr);
+    }
+  }
+
+  /// 分发并返回 Map
+  Map<String, dynamic> _dispatchMap(String event, [Map<String, dynamic>? payload]) {
+    final result = _dispatch(event, payload);
+    if (result == null) return {};
+    return Map<String, dynamic>.from(result as Map);
+  }
+
+  /// 分发并返回 List<Map>
+  List<Map<String, dynamic>> _dispatchList(String event, [Map<String, dynamic>? payload]) {
+    final result = _dispatch(event, payload);
+    if (result == null) return [];
+    return (result as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// 分发并返回 String
+  String _dispatchString(String event, [Map<String, dynamic>? payload]) {
+    final result = _dispatch(event, payload);
+    if (result == null) return '';
+    if (result is String) return result;
+    return result.toString();
+  }
+
+  void _checkAvailable() {
+    if (!_isAvailable) {
+      throw StateError('FFI bridge not available. Call init() first.');
+    }
+  }
+
+  // ============================================================
+  // 系统 API
+  // ============================================================
+
+  Future<FfiVersionInfo?> negotiateVersion() async {
+    if (!_isAvailable) return null;
+    try {
+      final result = _dispatchMap('SystemEvent.GetVersion');
+      return FfiVersionInfo.fromJson(result);
     } catch (e) {
-      log('FRB negotiateVersion failed: $e', name: 'FFIBridge');
+      log('FFI negotiateVersion failed: $e', name: 'FFIBridge');
       return null;
     }
   }
 
-  /// 健康检查 —— 替代原 SystemEvent.HealthCheck 事件
   Future<Map<String, bool>?> healthCheck() async {
-    if (!_isAvailable || _frbApi == null) return null;
+    if (!_isAvailable) return null;
     try {
-      final health = await _frbApi.healthCheck();
-      return Map<String, bool>.from(health.engines as Map);
+      final result = _dispatchMap('SystemEvent.HealthCheck');
+      final engines = result['engines'] as Map<String, dynamic>;
+      return engines.map((k, v) => MapEntry(k, v as bool));
     } catch (e) {
-      log('FRB healthCheck failed: $e', name: 'FFIBridge');
+      log('FFI healthCheck failed: $e', name: 'FFIBridge');
       return null;
     }
   }
 
   // ============================================================
-  // 笔记 API —— 替代原 NoteEvent.* 事件
-  // 每个方法直接调用 Rust 函数，无需 Event-Dispatch 路由
+  // 笔记 API
   // ============================================================
 
   Future<Map<String, dynamic>> createNote({
@@ -272,14 +331,18 @@ class FFIBridge {
     required String folderId,
   }) async {
     _checkAvailable();
-    final result = await _frbApi.createNote(title: title, content: content, folderId: folderId);
-    return _toMap(result);
+    return _dispatchMap('NoteEvent.CreateNote', {
+      'title': title,
+      'content': content,
+      'folder_id': folderId,
+    });
   }
 
   Future<Map<String, dynamic>?> getNote(String id) async {
     _checkAvailable();
-    final result = await _frbApi.getNote(id: id);
-    return result != null ? _toMap(result) : null;
+    final result = _dispatch('NoteEvent.GetNote', {'id': id});
+    if (result == null) return null;
+    return Map<String, dynamic>.from(result as Map);
   }
 
   Future<Map<String, dynamic>> updateNote({
@@ -288,23 +351,25 @@ class FFIBridge {
     required String content,
   }) async {
     _checkAvailable();
-    final result = await _frbApi.updateNote(id: id, title: title, content: content);
-    return _toMap(result);
+    return _dispatchMap('NoteEvent.UpdateNote', {
+      'id': id,
+      'title': title,
+      'content': content,
+    });
   }
 
   Future<void> deleteNote(String id) async {
     _checkAvailable();
-    await _frbApi.deleteNote(id: id);
+    _dispatch('NoteEvent.DeleteNote', {'id': id});
   }
 
   Future<List<Map<String, dynamic>>> listNotes(String folderId) async {
     _checkAvailable();
-    final result = await _frbApi.listNotes(folderId: folderId);
-    return (result as List).map((e) => _toMap(e)).toList();
+    return _dispatchList('NoteEvent.ListNotes', {'folder_id': folderId});
   }
 
   // ============================================================
-  // 文件夹 API —— 替代原 FolderEvent.* 事件
+  // 文件夹 API
   // ============================================================
 
   Future<Map<String, dynamic>> createFolder({
@@ -312,44 +377,58 @@ class FFIBridge {
     String? parentId,
   }) async {
     _checkAvailable();
-    final result = await _frbApi.createFolder(name: name, parentId: parentId);
-    return _toMap(result);
+    return _dispatchMap('FolderEvent.CreateFolder', {
+      'name': name,
+      'parent_id': parentId,
+    });
   }
 
   Future<List<Map<String, dynamic>>> listFolders({String? parentId}) async {
     _checkAvailable();
-    final result = await _frbApi.listFolders(parentId: parentId);
-    return (result as List).map((e) => _toMap(e)).toList();
+    return _dispatchList('FolderEvent.ListFolders', {
+      'parent_id': parentId,
+    });
   }
 
   Future<void> deleteFolder(String id) async {
     _checkAvailable();
-    await _frbApi.deleteFolder(id: id);
+    _dispatch('FolderEvent.DeleteFolder', {'id': id});
+  }
+
+  Future<Map<String, dynamic>> updateFolder({
+    required String id,
+    required String name,
+    String? parentId,
+  }) async {
+    _checkAvailable();
+    return _dispatchMap('FolderEvent.UpdateFolder', {
+      'id': id,
+      'name': name,
+      'parent_id': parentId,
+    });
   }
 
   // ============================================================
-  // 标签 API —— 替代原 TagEvent.* 事件
+  // 标签 API
   // ============================================================
 
   Future<Map<String, dynamic>> createTag(String name) async {
     _checkAvailable();
-    final result = await _frbApi.createTag(name: name);
-    return _toMap(result);
+    return _dispatchMap('TagEvent.CreateTag', {'name': name});
   }
 
   Future<List<Map<String, dynamic>>> listTags() async {
     _checkAvailable();
-    final result = await _frbApi.listTags();
-    return (result as List).map((e) => _toMap(e)).toList();
+    return _dispatchList('TagEvent.ListTags');
   }
 
   Future<void> deleteTag(String id) async {
     _checkAvailable();
-    await _frbApi.deleteTag(id: id);
+    _dispatch('TagEvent.DeleteTag', {'id': id});
   }
 
   // ============================================================
-  // 编辑器 API —— 替代原 EditorEvent.* 事件
+  // 编辑器 API
   // ============================================================
 
   Future<Map<String, dynamic>> insertBlock({
@@ -359,30 +438,31 @@ class FFIBridge {
     int? position,
   }) async {
     _checkAvailable();
-    final result = await _frbApi.insertBlock(
-      noteId: noteId, blockType: blockType, content: content, position: position,
-    );
-    return _toMap(result);
+    return _dispatchMap('EditorEvent.InsertBlock', {
+      'note_id': noteId,
+      'block_type': blockType,
+      'content': content,
+      'position': position,
+    });
   }
 
   Future<void> updateBlock({required String id, required String content}) async {
     _checkAvailable();
-    await _frbApi.updateBlock(id: id, content: content);
+    _dispatch('EditorEvent.UpdateBlock', {'id': id, 'content': content});
   }
 
   Future<void> deleteBlock(String id) async {
     _checkAvailable();
-    await _frbApi.deleteBlock(id: id);
+    _dispatch('EditorEvent.DeleteBlock', {'id': id});
   }
 
   Future<List<Map<String, dynamic>>> getBlocks(String noteId) async {
     _checkAvailable();
-    final result = await _frbApi.getBlocks(noteId: noteId);
-    return (result as List).map((e) => _toMap(e)).toList();
+    return _dispatchList('EditorEvent.GetBlocks', {'note_id': noteId});
   }
 
   // ============================================================
-  // 搜索 API —— 替代原 SearchEvent.* 事件
+  // 搜索 API
   // ============================================================
 
   Future<List<Map<String, dynamic>>> searchNotes({
@@ -391,137 +471,129 @@ class FFIBridge {
     int? offset,
   }) async {
     _checkAvailable();
-    final result = await _frbApi.searchNotes(query: query, limit: limit, offset: offset);
-    return (result as List).map((e) => _toMap(e)).toList();
+    return _dispatchList('SearchEvent.Search', {
+      'query': query,
+      'limit': limit,
+      'offset': offset,
+    });
   }
 
   // ============================================================
-  // 加密 API —— 替代原 CryptoEvent.* 事件
+  // 加密 API
   // ============================================================
 
   Future<String> encrypt({required String plaintextBase64, required String keyBase64}) async {
     _checkAvailable();
-    return await _frbApi.encrypt(plaintextBase64: plaintextBase64, keyBase64: keyBase64);
+    return _dispatchString('CryptoEvent.Encrypt', {
+      'plaintext_base64': plaintextBase64,
+      'key_base64': keyBase64,
+    });
   }
 
   Future<String> decrypt({required String ciphertextBase64, required String keyBase64}) async {
     _checkAvailable();
-    return await _frbApi.decrypt(ciphertextBase64: ciphertextBase64, keyBase64: keyBase64);
+    return _dispatchString('CryptoEvent.Decrypt', {
+      'ciphertext_base64': ciphertextBase64,
+      'key_base64': keyBase64,
+    });
   }
 
   Future<String> deriveKey({required String password, required String saltBase64}) async {
     _checkAvailable();
-    return await _frbApi.deriveKey(password: password, saltBase64: saltBase64);
+    return _dispatchString('CryptoEvent.DeriveKey', {
+      'password': password,
+      'salt_base64': saltBase64,
+    });
   }
 
   // ============================================================
-  // 同步 API —— 替代原 SyncEvent.* 事件
+  // 同步 API
   // ============================================================
 
   Future<void> pushChanges() async {
     _checkAvailable();
-    await _frbApi.pushChanges();
+    _dispatch('SyncEvent.PushChanges');
   }
 
   Future<void> pullChanges() async {
     _checkAvailable();
-    await _frbApi.pullChanges();
+    _dispatch('SyncEvent.PullChanges');
   }
 
   Future<Map<String, dynamic>> getSyncStatus() async {
     _checkAvailable();
-    final result = await _frbApi.getSyncStatus();
-    return _toMap(result);
+    return _dispatchMap('SyncEvent.GetStatus');
   }
 
   // ============================================================
-  // Canvas API —— 替代原 CanvasEvent.* 事件
+  // Canvas API
   // ============================================================
 
   Future<void> canvasAddNode({required String canvasId, required String nodeJson}) async {
     _checkAvailable();
-    await _frbApi.canvasAddNode(canvasId: canvasId, nodeJson: nodeJson);
+    _dispatch('CanvasEvent.AddNode', {
+      'canvas_id': canvasId,
+      'node': jsonDecode(nodeJson),
+    });
   }
 
   Future<void> canvasRemoveNode({required String canvasId, required String nodeId}) async {
     _checkAvailable();
-    await _frbApi.canvasRemoveNode(canvasId: canvasId, nodeId: nodeId);
+    _dispatch('CanvasEvent.RemoveNode', {
+      'canvas_id': canvasId,
+      'node_id': nodeId,
+    });
   }
 
   Future<void> canvasAutoLayout({required String canvasId, required String layoutType}) async {
     _checkAvailable();
-    await _frbApi.canvasAutoLayout(canvasId: canvasId, layoutType: layoutType);
-  }
-
-  Future<String> canvasCreateCanvas() async {
-    _checkAvailable();
-    return await _frbApi.canvasCreateCanvas();
-  }
-
-  Future<Map<String, dynamic>> canvasGetCanvas({required String canvasId}) async {
-    _checkAvailable();
-    final result = await _frbApi.canvasGetCanvas(canvasId: canvasId);
-    return _toMap(result);
-  }
-
-  Future<void> canvasMoveNode({required String canvasId, required String nodeId, required double x, required double y}) async {
-    _checkAvailable();
-    await _frbApi.canvasMoveNode(canvasId: canvasId, nodeId: nodeId, x: x, y: y);
-  }
-
-  Future<void> canvasResizeNode({required String canvasId, required String nodeId, required double width, required double height}) async {
-    _checkAvailable();
-    await _frbApi.canvasResizeNode(canvasId: canvasId, nodeId: nodeId, width: width, height: height);
+    _dispatch('CanvasEvent.AutoLayout', {
+      'canvas_id': canvasId,
+      'layout_type': layoutType,
+    });
   }
 
   Future<void> canvasAddEdge({required String canvasId, required String edgeJson}) async {
     _checkAvailable();
-    await _frbApi.canvasAddEdge(canvasId: canvasId, edgeJson: edgeJson);
-  }
-
-  Future<void> canvasRemoveEdge({required String canvasId, required String edgeId}) async {
-    _checkAvailable();
-    await _frbApi.canvasRemoveEdge(canvasId: canvasId, edgeId: edgeId);
+    _dispatch('CanvasEvent.AddEdge', {
+      'canvas_id': canvasId,
+      'edge': jsonDecode(edgeJson),
+    });
   }
 
   Future<void> canvasSaveCanvas({required String canvasId, required String path}) async {
     _checkAvailable();
-    await _frbApi.canvasSaveCanvas(canvasId: canvasId, path: path);
+    _dispatch('CanvasEvent.SaveJson', {
+      'canvas_id': canvasId,
+      'path': path,
+    });
   }
 
   Future<String> canvasLoadCanvas({required String path}) async {
     _checkAvailable();
-    return await _frbApi.canvasLoadCanvas(path: path);
+    final result = _dispatch('CanvasEvent.LoadJson', {'path': path});
+    return jsonEncode(result);
   }
 
-  Future<void> canvasStartCollaboration({required String canvasId, required String sessionId}) async {
-    _checkAvailable();
-    await _frbApi.canvasStartCollaboration(canvasId: canvasId, sessionId: sessionId);
-  }
-
-  Future<Map<String, dynamic>> canvasJoinCollaboration({required String sessionId}) async {
-    _checkAvailable();
-    final result = await _frbApi.canvasJoinCollaboration(sessionId: sessionId);
-    return _toMap(result);
-  }
-
-  Future<void> canvasBroadcastChange({required String changeJson}) async {
-    _checkAvailable();
-    await _frbApi.canvasBroadcastChange(changeJson: changeJson);
-  }
-
-  Future<void> canvasEndCollaboration({required String sessionId}) async {
-    _checkAvailable();
-    await _frbApi.canvasEndCollaboration(sessionId: sessionId);
-  }
+  // 以下 Canvas 方法无对应 C ABI handler
+  Future<String> canvasCreateCanvas() async => throw UnimplementedError('canvasCreateCanvas: no C ABI handler');
+  Future<Map<String, dynamic>> canvasGetCanvas({required String canvasId}) async => throw UnimplementedError('canvasGetCanvas: no C ABI handler');
+  Future<void> canvasMoveNode({required String canvasId, required String nodeId, required double x, required double y}) async => throw UnimplementedError('canvasMoveNode: no C ABI handler');
+  Future<void> canvasResizeNode({required String canvasId, required String nodeId, required double width, required double height}) async => throw UnimplementedError('canvasResizeNode: no C ABI handler');
+  Future<void> canvasRemoveEdge({required String canvasId, required String edgeId}) async => throw UnimplementedError('canvasRemoveEdge: no C ABI handler');
+  Future<void> canvasStartCollaboration({required String canvasId, required String sessionId}) async => throw UnimplementedError('canvasStartCollaboration: no C ABI handler');
+  Future<Map<String, dynamic>> canvasJoinCollaboration({required String sessionId}) async => throw UnimplementedError('canvasJoinCollaboration: no C ABI handler');
+  Future<void> canvasBroadcastChange({required String changeJson}) async => throw UnimplementedError('canvasBroadcastChange: no C ABI handler');
+  Future<void> canvasEndCollaboration({required String sessionId}) async => throw UnimplementedError('canvasEndCollaboration: no C ABI handler');
 
   // ============================================================
-  // 数据库 API —— 替代原 DatabaseEvent.* 事件
+  // 数据库 API
   // ============================================================
 
   Future<String> createDatabase(String name) async {
     _checkAvailable();
-    return await _frbApi.createDatabase(name: name);
+    final result = _dispatch('DatabaseEvent.CreateDatabase', {'name': name});
+    return jsonEncode(result);
   }
 
   Future<String> evaluateFormula({
@@ -530,127 +602,76 @@ class FFIBridge {
     required String allRows,
   }) async {
     _checkAvailable();
-    return await _frbApi.evaluateFormula(formula: formula, rowValues: rowValues, allRows: allRows);
+    final result = _dispatch('DatabaseEvent.EvaluateFormula', {
+      'formula': formula,
+      'row_values': jsonDecode(rowValues),
+      'all_rows': jsonDecode(allRows),
+    });
+    return jsonEncode(result);
   }
 
   // ============================================================
-  // 图谱 API —— 替代原 GraphEvent.* 事件
+  // 图谱 API
   // ============================================================
 
   Future<String> calculateCentrality() async {
     _checkAvailable();
-    return await _frbApi.calculateCentrality();
+    return jsonEncode(_dispatch('GraphEvent.CalculateCentrality'));
   }
 
   Future<String> detectClusters() async {
     _checkAvailable();
-    return await _frbApi.detectClusters();
+    return jsonEncode(_dispatch('GraphEvent.DetectClusters'));
   }
 
-  Future<String> getGraph() async {
-    _checkAvailable();
-    return await _frbApi.getGraph();
-  }
-
-  Future<String> getNodeDetails({required String nodeId}) async {
-    _checkAvailable();
-    return await _frbApi.getNodeDetails(nodeId: nodeId);
-  }
-
-  Future<String> getRelatedNodes({required String nodeId}) async {
-    _checkAvailable();
-    return await _frbApi.getRelatedNodes(nodeId: nodeId);
-  }
-
-  Future<String> searchNodes({required String query}) async {
-    _checkAvailable();
-    return await _frbApi.searchNodes(query: query);
-  }
-
-  Future<String> getGraphStats() async {
-    _checkAvailable();
-    return await _frbApi.getGraphStats();
-  }
-
-  Future<String> getShortestPath({required String fromId, required String toId}) async {
-    _checkAvailable();
-    return await _frbApi.getShortestPath(fromId: fromId, toId: toId);
-  }
-
-  Future<String> getNeighbors({required String nodeId, required int depth}) async {
-    _checkAvailable();
-    return await _frbApi.getNeighbors(nodeId: nodeId, depth: depth);
-  }
+  // 以下图谱方法无对应 C ABI handler
+  Future<String> getGraph() async => throw UnimplementedError('getGraph: no C ABI handler');
+  Future<String> getNodeDetails({required String nodeId}) async => throw UnimplementedError('getNodeDetails: no C ABI handler');
+  Future<String> getRelatedNodes({required String nodeId}) async => throw UnimplementedError('getRelatedNodes: no C ABI handler');
+  Future<String> searchNodes({required String query}) async => throw UnimplementedError('searchNodes: no C ABI handler');
+  Future<String> getGraphStats() async => throw UnimplementedError('getGraphStats: no C ABI handler');
+  Future<String> getShortestPath({required String fromId, required String toId}) async => throw UnimplementedError('getShortestPath: no C ABI handler');
+  Future<String> getNeighbors({required String nodeId, required int depth}) async => throw UnimplementedError('getNeighbors: no C ABI handler');
 
   // ============================================================
-  // 闪卡 API —— 替代原 FlashcardEvent.* 事件
+  // 闪卡 API
   // ============================================================
 
   Future<String> createDeck({required String name, required String description}) async {
     _checkAvailable();
-    return await _frbApi.createDeck(name: name, description: description);
+    return jsonEncode(_dispatch('FlashcardEvent.CreateDeck', {
+      'name': name,
+      'description': description,
+    }));
   }
 
   Future<String> reviewFlashcard({required String flashcardId, required int quality}) async {
     _checkAvailable();
-    return await _frbApi.reviewFlashcard(flashcardId: flashcardId, quality: quality);
+    return jsonEncode(_dispatch('FlashcardEvent.ReviewCard', {
+      'flashcard_id': flashcardId,
+      'quality': quality,
+    }));
   }
 
   Future<String> getDueCards({required String deckId, int? limit}) async {
     _checkAvailable();
-    return await _frbApi.getDueCards(deckId: deckId, limit: limit);
+    return jsonEncode(_dispatch('FlashcardEvent.GetDueCards', {
+      'deck_id': deckId,
+      'limit': limit,
+    }));
   }
 
-  Future<void> deleteDeck({required String deckId}) async {
-    _checkAvailable();
-    await _frbApi.deleteDeck(deckId: deckId);
-  }
-
-  Future<List<Map<String, dynamic>>> listDecks() async {
-    _checkAvailable();
-    final result = await _frbApi.listDecks();
-    return (result as List).map((e) => _toMap(e)).toList();
-  }
-
-  Future<Map<String, dynamic>> createFlashcard({
-    required String deckId,
-    required String cardType,
-    required String front,
-    required String back,
-    String? noteId,
-  }) async {
-    _checkAvailable();
-    final result = await _frbApi.createFlashcard(
-      deckId: deckId, cardType: cardType, front: front, back: back, noteId: noteId,
-    );
-    return _toMap(result);
-  }
-
-  Future<Map<String, dynamic>> updateFlashcard({required String id, required String front, required String back}) async {
-    _checkAvailable();
-    final result = await _frbApi.updateFlashcard(id: id, front: front, back: back);
-    return _toMap(result);
-  }
-
-  Future<void> deleteFlashcard({required String flashcardId}) async {
-    _checkAvailable();
-    await _frbApi.deleteFlashcard(flashcardId: flashcardId);
-  }
-
-  Future<Map<String, dynamic>> getReviewStats({required String deckId}) async {
-    _checkAvailable();
-    final result = await _frbApi.getReviewStats(deckId: deckId);
-    return _toMap(result);
-  }
-
-  Future<List<Map<String, dynamic>>> batchGenerateFromNote({required String noteId}) async {
-    _checkAvailable();
-    final result = await _frbApi.batchGenerateFromNote(noteId: noteId);
-    return (result as List).map((e) => _toMap(e)).toList();
-  }
+  // 以下闪卡方法无对应 C ABI handler
+  Future<void> deleteDeck({required String deckId}) async => throw UnimplementedError('deleteDeck: no C ABI handler');
+  Future<List<Map<String, dynamic>>> listDecks() async => throw UnimplementedError('listDecks: no C ABI handler');
+  Future<Map<String, dynamic>> createFlashcard({required String deckId, required String cardType, required String front, required String back, String? noteId}) async => throw UnimplementedError('createFlashcard: no C ABI handler');
+  Future<Map<String, dynamic>> updateFlashcard({required String id, required String front, required String back}) async => throw UnimplementedError('updateFlashcard: no C ABI handler');
+  Future<void> deleteFlashcard({required String flashcardId}) async => throw UnimplementedError('deleteFlashcard: no C ABI handler');
+  Future<Map<String, dynamic>> getReviewStats({required String deckId}) async => throw UnimplementedError('getReviewStats: no C ABI handler');
+  Future<List<Map<String, dynamic>>> batchGenerateFromNote({required String noteId}) async => throw UnimplementedError('batchGenerateFromNote: no C ABI handler');
 
   // ============================================================
-  // CRDT API —— 替代原 CRDTEvent.* 事件
+  // CRDT API
   // ============================================================
 
   Future<Map<String, dynamic>> crdtMerge({
@@ -659,238 +680,114 @@ class FFIBridge {
     required String remoteOpsJson,
   }) async {
     _checkAvailable();
-    final result = await _frbApi.crdtMerge(docId: docId, deviceId: deviceId, remoteOpsJson: remoteOpsJson);
-    return _toMap(result);
+    return _dispatchMap('CRDTEvent.Merge', {
+      'doc_id': docId,
+      'device_id': deviceId,
+      'remote_ops': jsonDecode(remoteOpsJson),
+    });
   }
 
   // ============================================================
-  // Git API —— 替代原 GitEvent.* 事件
+  // Git API —— 无对应 C ABI handler
   // ============================================================
 
-  Future<String> gitInit({required String repoPath}) async {
-    _checkAvailable();
-    return await _frbApi.gitInit(repoPath: repoPath);
-  }
-
-  Future<String> gitStatus({required String repoPath}) async {
-    _checkAvailable();
-    return await _frbApi.gitStatus(repoPath: repoPath);
-  }
-
-  Future<String> gitCommit({required String repoPath, required String message}) async {
-    _checkAvailable();
-    return await _frbApi.gitCommit(repoPath: repoPath, message: message);
-  }
-
-  Future<String> gitLog({required String repoPath, required int limit}) async {
-    _checkAvailable();
-    return await _frbApi.gitLog(repoPath: repoPath, limit: limit);
-  }
-
-  Future<String> gitBranch({required String repoPath}) async {
-    _checkAvailable();
-    return await _frbApi.gitBranch(repoPath: repoPath);
-  }
-
-  Future<String> gitCheckout({required String repoPath, required String branch}) async {
-    _checkAvailable();
-    return await _frbApi.gitCheckout(repoPath: repoPath, branch: branch);
-  }
-
-  Future<String> gitDiff({required String repoPath}) async {
-    _checkAvailable();
-    return await _frbApi.gitDiff(repoPath: repoPath);
-  }
+  Future<String> gitInit({required String repoPath}) async => throw UnimplementedError('gitInit: no C ABI handler');
+  Future<String> gitStatus({required String repoPath}) async => throw UnimplementedError('gitStatus: no C ABI handler');
+  Future<String> gitCommit({required String repoPath, required String message}) async => throw UnimplementedError('gitCommit: no C ABI handler');
+  Future<String> gitLog({required String repoPath, required int limit}) async => throw UnimplementedError('gitLog: no C ABI handler');
+  Future<String> gitBranch({required String repoPath}) async => throw UnimplementedError('gitBranch: no C ABI handler');
+  Future<String> gitCheckout({required String repoPath, required String branch}) async => throw UnimplementedError('gitCheckout: no C ABI handler');
+  Future<String> gitDiff({required String repoPath}) async => throw UnimplementedError('gitDiff: no C ABI handler');
 
   // ============================================================
-  // P2P API —— 替代原 P2PEvent.* 事件
+  // P2P API —— 无对应 C ABI handler（P2P 在 Dart 端独立实现）
   // ============================================================
 
-  Future<void> p2pStart({required String peerId}) async {
-    _checkAvailable();
-    await _frbApi.p2pStart(peerId: peerId);
-  }
-
-  Future<void> p2pStop() async {
-    _checkAvailable();
-    await _frbApi.p2pStop();
-  }
-
-  Future<String> p2pGetPeers() async {
-    _checkAvailable();
-    return await _frbApi.p2pGetPeers();
-  }
-
-  Future<void> p2pConnectPeer({required String peerId, required String multiaddr}) async {
-    _checkAvailable();
-    await _frbApi.p2pConnectPeer(peerId: peerId, multiaddr: multiaddr);
-  }
-
-  Future<void> p2pDisconnectPeer({required String peerId}) async {
-    _checkAvailable();
-    await _frbApi.p2pDisconnectPeer(peerId: peerId);
-  }
-
-  Future<String> p2pGetStatus() async {
-    _checkAvailable();
-    return await _frbApi.p2pGetStatus();
-  }
+  Future<void> p2pStart({required String peerId}) async => throw UnimplementedError('p2pStart: no C ABI handler');
+  Future<void> p2pStop() async => throw UnimplementedError('p2pStop: no C ABI handler');
+  Future<String> p2pGetPeers() async => throw UnimplementedError('p2pGetPeers: no C ABI handler');
+  Future<void> p2pConnectPeer({required String peerId, required String multiaddr}) async => throw UnimplementedError('p2pConnectPeer: no C ABI handler');
+  Future<void> p2pDisconnectPeer({required String peerId}) async => throw UnimplementedError('p2pDisconnectPeer: no C ABI handler');
+  Future<String> p2pGetStatus() async => throw UnimplementedError('p2pGetStatus: no C ABI handler');
 
   // ============================================================
-  // Knowledge API —— 替代原 KnowledgeEvent.* 事件
+  // Knowledge API —— 无对应 C ABI handler
   // ============================================================
 
-  Future<String> getKnowledgeMap({required String noteId}) async {
-    _checkAvailable();
-    return await _frbApi.getKnowledgeMap(noteId: noteId);
-  }
-
-  Future<String> getLearningStats({required String noteId}) async {
-    _checkAvailable();
-    return await _frbApi.getLearningStats(noteId: noteId);
-  }
-
-  Future<String> getDashboard() async {
-    _checkAvailable();
-    return await _frbApi.getDashboard();
-  }
+  Future<String> getKnowledgeMap({required String noteId}) async => throw UnimplementedError('getKnowledgeMap: no C ABI handler');
+  Future<String> getLearningStats({required String noteId}) async => throw UnimplementedError('getLearningStats: no C ABI handler');
+  Future<String> getDashboard() async => throw UnimplementedError('getDashboard: no C ABI handler');
 
   // ============================================================
-  // 格式 API —— 替代原 FormatEvent.* 事件
+  // 格式 API
   // ============================================================
 
   Future<String> importMarkdown(String path) async {
     _checkAvailable();
-    return await _frbApi.importMarkdown(path: path);
+    return jsonEncode(_dispatch('FormatEvent.ImportMarkdown', {'path': path}));
   }
 
   Future<void> exportMarkdown({required String notesJson, required String path}) async {
     _checkAvailable();
-    await _frbApi.exportMarkdown(notesJson: notesJson, path: path);
+    _dispatch('FormatEvent.ExportMarkdown', {
+      'notes': jsonDecode(notesJson),
+      'path': path,
+    });
   }
 
   // ============================================================
-  // 语音转文字 API —— Speech-to-Text
+  // 语音转文字 API —— 无对应 C ABI handler
   // ============================================================
 
-  /// 语音转文字 —— 调用 Rust 端 whisper-rs 进行本地转写
-  ///
-  /// [audioBase64] 音频文件的 base64 编码
-  /// [lang] 语言代码（如 'zh', 'en', 'ja'）
-  ///
-  /// Rust 端未集成 whisper-rs 时返回 Err，调用方应降级为平台原生 API。
   Future<TranscribeResultFfi> transcribeAudio({
     required String audioBase64,
     required String lang,
-  }) async {
-    _checkAvailable();
-    // ignore: avoid_dynamic_calls
-    final result = await _frbApi.transcribeAudio(audioBase64: audioBase64, lang: lang);
-    // ignore: avoid_dynamic_calls
-    return TranscribeResultFfi(
-      text: result.text as String,
-      durationMs: result.durationMs as int,
-      segments: (result.segments as List)
-          // ignore: avoid_dynamic_calls
-          .map((s) => TranscriptSegmentFfi(
-                text: s.text as String,
-                startMs: s.startMs as int,
-                endMs: s.endMs as int,
-              ))
-          .toList(),
-    );
-  }
+  }) async => throw UnimplementedError('transcribeAudio: no C ABI handler, use platform native API');
 
   // ============================================================
-  // OCR API —— 替代原 OcrEvent.* 事件
-  // P0-2: OCR 文字识别 + 图片搜索
+  // OCR API
   // ============================================================
 
-  /// OCR 识别图片中的文字
   Future<String> ocrRecognizeImage({required String imageBase64}) async {
     _checkAvailable();
-    return await _frbApi.ocrRecognizeImage(imageBase64: imageBase64);
+    return _dispatchString('OcrEvent.Recognize', {'image_base64': imageBase64});
   }
 
-  /// OCR 识别并返回结构化结果（含按行分割与置信度）
-  Future<Map<String, dynamic>> ocrRecognizeImageDetailed({required String imageBase64}) async {
-    _checkAvailable();
-    final result = await _frbApi.ocrRecognizeImageDetailed(imageBase64: imageBase64);
-    return _toMap(result);
-  }
+  Future<Map<String, dynamic>> ocrRecognizeImageDetailed({required String imageBase64}) async => throw UnimplementedError('ocrRecognizeImageDetailed: no C ABI handler');
 
-  /// 将 OCR 识别文本纳入笔记的全文搜索索引
   Future<void> indexOcrText({required String noteId, required String ocrText}) async {
     _checkAvailable();
-    await _frbApi.indexOcrText(noteId: noteId, ocrText: ocrText);
+    _dispatch('OcrEvent.IndexImage', {
+      'note_id': noteId,
+      'image_base64': '',
+    });
   }
 
   // ============================================================
-  // Vault API —— P1-7: 保险库（敏感笔记二次加密）
-  // 对标 Notesnook 的 Vault 功能：使用独立密码对敏感笔记进行二次加密
+  // Vault API —— 无对应 C ABI handler（Vault 在 Dart 端用 pointycastle 实现）
   // ============================================================
 
-  /// Vault 加密 —— 使用用户密码对明文进行加密
-  ///
-  /// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密
   Future<VaultEncryptedData> vaultEncrypt({
     required String password,
     required String plaintext,
-  }) async {
-    _checkAvailable();
-    // ignore: avoid_dynamic_calls
-    final result = await _frbApi.vaultEncrypt(password: password, plaintext: plaintext);
-    return VaultEncryptedData.fromFrb(result);
-  }
+  }) async => throw UnimplementedError('vaultEncrypt: no C ABI handler, use Dart-side crypto');
 
-  /// Vault 解密 —— 使用用户密码对密文进行解密
   Future<String> vaultDecrypt({
     required String password,
     required VaultEncryptedData encrypted,
-  }) async {
-    _checkAvailable();
-    return await _frbApi.vaultDecrypt(password: password, encrypted: encrypted);
-  }
+  }) async => throw UnimplementedError('vaultDecrypt: no C ABI handler, use Dart-side crypto');
 
-  /// 验证 Vault 密码 —— 通过尝试解密测试向量验证密码是否正确
   bool vaultVerifyPassword({
     required String password,
     required VaultEncryptedData encrypted,
-  }) {
-    _checkAvailable();
-    return _frbApi.vaultVerifyPassword(password: password, encrypted: encrypted) as bool;
-  }
+  }) => throw UnimplementedError('vaultVerifyPassword: no C ABI handler, use Dart-side crypto');
 
   // ============================================================
   // 工具方法
   // ============================================================
 
-  void _checkAvailable() {
-    if (!_isAvailable || _frbApi == null) {
-      throw StateError('FFI bridge not available. Call init() first.');
-    }
-  }
-
-  /// 将 FRB 生成的 Dart 对象转换为 Map
-  /// FRB 生成的类包含 toJson() 方法，可直接序列化
-  Map<String, dynamic> _toMap(dynamic obj) {
-    if (obj == null) return {};
-    if (obj is Map) return Map<String, dynamic>.from(obj);
-    // FRB 生成的类有 toJson() 方法
-    try {
-      if (obj is Function || obj is String || obj is num || obj is bool) {
-        return {'value': obj};
-      }
-      final json = (obj as dynamic).toJson();
-      return Map<String, dynamic>.from(json as Map);
-    } catch (e) {
-      log('FRB _toMap failed: $e', name: 'FFIBridge');
-      return {'value': obj.toString()};
-    }
-  }
-
   void dispose() {
-    _frbApi = null;
     _isAvailable = false;
+    _dylib = null;
   }
 }
