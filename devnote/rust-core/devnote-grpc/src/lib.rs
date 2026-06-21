@@ -76,9 +76,7 @@ pub struct DevNoteGrpcClient {
     dispatch_client: RwLock<Option<DevNoteServiceClient<Channel>>>,
     sync_client: RwLock<Option<SyncServiceClient<Channel>>>,
     reconnect_enabled: RwLock<bool>,
-    #[allow(dead_code)]
     max_retries: u32,
-    #[allow(dead_code)]
     retry_delay_ms: u64,
 }
 

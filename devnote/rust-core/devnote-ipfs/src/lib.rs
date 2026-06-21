@@ -21,7 +21,6 @@ pub enum IpfsError {
 
 // IPFS API response types
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct IpfsAddResponse {
     #[serde(rename = "Name")]
     name: String,

@@ -129,19 +129,16 @@ pub struct PluginSandbox {
     plugins: HashMap<String, extism::Plugin>,
     // 插件元数据
     entries: HashMap<String, PluginEntry>,
-    #[allow(dead_code)]
-    host: Box<dyn PluginHost>,
 }
 
 impl PluginSandbox {
-    pub fn new(host: Box<dyn PluginHost>) -> Result<Self, PluginError> {
+    pub fn new() -> Result<Self, PluginError> {
         // extism 1.30.0 不再需要显式创建 Runtime
         // Plugin::new 内部自行创建和管理 wasmtime Engine/Store
 
         Ok(Self {
             plugins: HashMap::new(),
             entries: HashMap::new(),
-            host,
         })
     }
 
@@ -338,8 +335,8 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    pub fn new(host: Box<dyn PluginHost>) -> Result<Self, PluginError> {
-        let sandbox = PluginSandbox::new(host)?;
+    pub fn new(_host: Box<dyn PluginHost>) -> Result<Self, PluginError> {
+        let sandbox = PluginSandbox::new()?;
         Ok(Self {
             sandbox,
             lazy_loaded: HashMap::new(),

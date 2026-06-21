@@ -128,7 +128,6 @@ impl FFIResponse {
 #[derive(Deserialize)]
 struct DispatchRequest {
     event: String,
-    #[allow(dead_code)]
     payload: Option<String>,
 }
 
