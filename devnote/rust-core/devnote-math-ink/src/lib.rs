@@ -450,9 +450,12 @@ impl MathInkRecognizer {
         for (i, stroke) in strokes.iter().enumerate() {
             if is_horizontal(&stroke.points) && stroke.points.len() >= 2 {
                 // 查找线上方和线下方的笔画
-                let line_y = (bounding_box(&stroke.points).unwrap().1
-                    + bounding_box(&stroke.points).unwrap().3)
-                    * 0.5;
+                // 修复(P1): 替换 .unwrap() 为安全匹配，避免空笔画时 panic
+                let bb = match bounding_box(&stroke.points) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let line_y = (bb.1 + bb.3) * 0.5;
                 let mut above = Vec::new();
                 let mut below = Vec::new();
                 for (j, c) in centers.iter().enumerate() {

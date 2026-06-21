@@ -66,24 +66,52 @@ class _SettingsPageState extends State<SettingsPage> {
       });
       return;
     }
-    // FFI 层尚未实现 FeatureFlagEvent.ListFlags，返回空列表
-    if (!mounted) return;
-    setState(() {
-      _featureFlags = [];
-      _featureFlagsLoading = false;
-      _featureFlagsError = 'Feature Flags 暂不可用';
-    });
+    // 修复(P1/R10-04): 调用 FFI 获取 Feature Flags，原为空壳返回空列表
+    try {
+      final flags = await bridge.listFeatureFlags();
+      if (!mounted) return;
+      setState(() {
+        _featureFlags = flags;
+        _featureFlagsLoading = false;
+        _featureFlagsError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _featureFlagsLoading = false;
+        _featureFlagsError = '加载 Feature Flags 失败: $e';
+      });
+    }
   }
 
   Future<void> _toggleFeatureFlag(String key, bool value) async {
-    // FFI 层尚未实现 FeatureFlagEvent.SetFlag，仅更新本地状态
-    if (!mounted) return;
-    setState(() {
-      final idx = _featureFlags.indexWhere((f) => f['key'] == key);
-      if (idx >= 0) {
-        _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
-      }
-    });
+    final bridge = getIt<FFIBridge>();
+    // 修复(P1/R10-04): 通过 FFI 持久化 Feature Flag 设置，原仅更新本地状态
+    try {
+      final existing = _featureFlags.firstWhere(
+        (f) => f['key'] == key,
+        orElse: () => {'key': key, 'description': ''},
+      );
+      await bridge.setFeatureFlag(
+        key: key,
+        enabled: value,
+        description: (existing['description'] as String?) ?? '',
+      );
+      if (!mounted) return;
+      setState(() {
+        final idx = _featureFlags.indexWhere((f) => f['key'] == key);
+        if (idx >= 0) {
+          _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
+        } else {
+          _featureFlags.add({'key': key, 'enabled': value, 'description': ''});
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _featureFlagsError = '更新 Feature Flag 失败: $e';
+      });
+    }
   }
 
   Future<void> _loadDefaultEditMode() async {

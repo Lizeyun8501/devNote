@@ -775,6 +775,28 @@ class FFIBridge {
   }
 
   // ============================================================
+  // FeatureFlag API —— 修复(P1/R10-04): 补全 FFI 桥接，原 UI 为空壳
+  // ============================================================
+
+  Future<List<Map<String, dynamic>>> listFeatureFlags() async {
+    _checkAvailable();
+    return _dispatchList('FeatureFlagEvent.ListFlags');
+  }
+
+  Future<void> setFeatureFlag({
+    required String key,
+    required bool enabled,
+    String description = '',
+  }) async {
+    _checkAvailable();
+    _dispatch('FeatureFlagEvent.SetFlag', {
+      'key': key,
+      'enabled': enabled,
+      'description': description,
+    });
+  }
+
+  // ============================================================
   // Vault API —— Dart 端实现（Rust 端无对应 C ABI handler）
   // 使用 AES-256-GCM + PBKDF2-HMAC-SHA256（与 CryptoService 一致）
   // VaultEncryptedData 中的 memoryCost/timeCost/parallelism 保留用于

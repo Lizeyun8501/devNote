@@ -11,6 +11,7 @@ use devnote_editor::BlockEditor;
 use devnote_flashcard::FlashcardEngine;
 use devnote_graph::GraphEngine;
 use devnote_object::ObjectEngine;
+use devnote_persistence::FeatureFlag;
 use devnote_search::SearchEngine;
 use devnote_sync::SyncEngine;
 use devnote_format::{FormatExporter, FormatImporter, HtmlExporter, MarkdownExporter, MarkdownImporter, ObsidianImporter, ImportFormat, ExportFormat};
@@ -1362,5 +1363,43 @@ fn register_system_handlers() {
             }
         });
         DispatchResponse::success(&health.to_string())
+    }));
+
+    // ============================================================
+    // FeatureFlag API —— 修复(P1/R10-04): 补全 FFI handler，原 UI 为空壳
+    // ============================================================
+
+    register_handler("FeatureFlagEvent.ListFlags", Box::new(|_payload| {
+        let guard = NOTE_REPO.lock();
+        let repo = match guard.as_ref() {
+            Some(r) => r,
+            None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Persistence engine not initialized"),
+        };
+        serialize_result(repo.list_feature_flags().map_err(|e| anyhow::anyhow!(e.to_string())))
+    }));
+
+    register_handler("FeatureFlagEvent.SetFlag", Box::new(|payload| {
+        #[derive(Deserialize)]
+        struct Req {
+            key: String,
+            enabled: bool,
+            description: String,
+        }
+        let req = match parse_payload::<Req>(payload) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        let guard = NOTE_REPO.lock();
+        let repo = match guard.as_ref() {
+            Some(r) => r,
+            None => return DispatchResponse::error(FFIErrorCode::NotConnected, "Persistence engine not initialized"),
+        };
+        let flag = FeatureFlag {
+            key: req.key,
+            enabled: req.enabled,
+            description: req.description,
+            updated_at: chrono::Utc::now().timestamp(),
+        };
+        serialize_result(repo.set_feature_flag(flag).map_err(|e| anyhow::anyhow!(e.to_string())))
     }));
 }
