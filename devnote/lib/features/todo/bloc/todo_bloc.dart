@@ -1,14 +1,14 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:devnote/core/di/injection.dart';
 import '../models/todo_model.dart';
 import '../services/todo_service.dart';
 import 'todo_event.dart';
 import 'todo_state.dart';
 
 class TodoBloc extends Bloc<TodoEvent, TodoState> {
-  final TodoService _todoService = getIt<TodoService>();
+  final TodoService _todoService;
 
-  TodoBloc() : super(TodoInitial()) {
+  // P1 修复 (P1-5): 通过构造函数注入 TodoService，替代 getIt Service Locator 反模式
+  TodoBloc(this._todoService) : super(TodoInitial()) {
     on<LoadTodos>(_onLoad);
     on<AddTodoEvent>(_onAdd);
     on<UpdateTodoEvent>(_onUpdate);

@@ -1,25 +1,29 @@
-import 'dart:developer' as developer;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
-import 'package:devnote/core/persistence/database_helper.dart';
-import 'package:devnote/core/di/injection.dart';
-// P1 架构修复: 移除对 features/editor/models/block_model.dart 的直接依赖，
-// 消除 notes ↔ editor 循环依赖。BlockType 映射逻辑已移至
-// EditorService.createBlockFromString，由 editor 模块内部处理。
-import 'package:devnote/features/editor/services/editor_service.dart';
+// P1 修复 (P1-3): 依赖 NoteBlockCreationPort 抽象接口而非 EditorService 具体类，
+// 彻底消除 notes → editor 的 import 依赖，打破循环依赖。
+// BlockType 映射逻辑由 EditorService 在接口实现内部处理。
+import 'package:devnote/core/services/note_block_creation_port.dart';
 
 class NotesBloc extends Bloc<NotesEvent, NotesState> {
   final NoteRepository _noteRepository;
-  final DatabaseHelper _dbHelper;
+  final FolderRepository _folderRepository;
+  final NoteBlockCreationPort _blockCreationPort;
   final _uuid = const Uuid();
 
-  NotesBloc(this._noteRepository) : _dbHelper = getIt<DatabaseHelper>(), super(const NotesInitial()) {
+  // P1 修复 (P1-5): 所有依赖通过构造函数注入，替代 getIt Service Locator 反模式
+  NotesBloc(
+    this._noteRepository,
+    this._folderRepository,
+    this._blockCreationPort,
+  ) : super(const NotesInitial()) {
     on<LoadNotes>(_onLoadNotes);
     on<CreateNote>(_onCreateNote);
     on<CreateNoteFromTemplate>(_onCreateNoteFromTemplate);
@@ -92,11 +96,11 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       );
       final created = await _noteRepository.createNote(note);
       // 应用模板块：按 position 顺序逐个创建（笔记为空，无需位置重排）
-      final editorService = getIt<EditorService>();
+      // P1 修复 (P1-5): 使用构造函数注入的 _blockCreationPort，替代 getIt
       final blocks = event.template.blocks;
       for (var i = 0; i < blocks.length; i++) {
-        // P1 架构修复: 使用 createBlockFromString 避免依赖 BlockType enum
-        await editorService.createBlockFromString(
+        // P1 修复 (P1-3): 通过抽象接口调用，不依赖 editor 模块
+        await _blockCreationPort.createBlockFromString(
           noteId: created.id,
           blockTypeName: blocks[i].type,
           content: blocks[i].content,
@@ -142,10 +146,10 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
 
       // 应用模板块（如果配置了模板）
       if (event.templateBlocks.isNotEmpty) {
-        final editorService = getIt<EditorService>();
+        // P1 修复 (P1-5): 使用构造函数注入的 _blockCreationPort，替代 getIt
         for (var i = 0; i < event.templateBlocks.length; i++) {
-          // P1 架构修复: 使用 createBlockFromString 避免依赖 BlockType enum
-          await editorService.createBlockFromString(
+          // P1 修复 (P1-3): 通过抽象接口调用，不依赖 editor 模块
+          await _blockCreationPort.createBlockFromString(
             noteId: created.id,
             blockTypeName: event.templateBlocks[i].type,
             content: event.templateBlocks[i].content,
@@ -169,8 +173,8 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
   /// 通过文件夹名称解析 folderId。
   /// 在根目录下查找同名文件夹，找不到则创建新文件夹。
   Future<String> _resolveFolderIdByName(String name) async {
-    final folderRepo = SqliteFolderRepository(_dbHelper);
-    final rootFolders = await folderRepo.listFolders(null);
+    // P1 修复 (P1-5): 使用构造函数注入的 _folderRepository，替代直接 new
+    final rootFolders = await _folderRepository.listFolders(null);
     final existing = rootFolders.where((f) => f.name == name).firstOrNull;
     if (existing != null) return existing.id;
 
@@ -182,7 +186,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       createdAt: now,
       updatedAt: now,
     );
-    final created = await folderRepo.createFolder(folder);
+    final created = await _folderRepository.createFolder(folder);
     return created.id;
   }
 
@@ -238,7 +242,8 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
         emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(notes, currentState.sortBy)));
       } catch (e) {
         // FTS5 不可用时回退到内存过滤（兼容旧数据库未迁移到 v6 的场景）
-        developer.log('searchNotes failed, falling back to in-memory filter: $e', level: 900);
+        // P1 修复 (P1-5): 使用 AppLogger 替代 developer.log
+        AppLogger.w('NotesBloc', 'searchNotes failed, falling back to in-memory filter: $e');
         try {
           final folderId = currentState.filterFolderId;
           final allNotes = folderId != null
@@ -364,7 +369,8 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
         ));
       } catch (e) {
         // 加载更多失败时保持当前状态，不切换到错误状态
-        developer.log('Failed to load more notes: $e', level: 900);
+        // P1 修复 (P1-5): 使用 AppLogger 替代 developer.log
+        AppLogger.w('NotesBloc', 'Failed to load more notes: $e');
         emit(currentState.copyWith(loadMoreError: 'Failed to load more notes'));
       }
     }

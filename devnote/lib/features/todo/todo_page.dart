@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'bloc/todo_bloc.dart';
 import 'bloc/todo_event.dart';
 import 'bloc/todo_state.dart';
 import 'models/todo_model.dart';
+import 'services/todo_service.dart';
 import 'widgets/todo_item_tile.dart';
 import 'widgets/add_todo_dialog.dart';
 
@@ -13,7 +15,8 @@ class TodoPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => TodoBloc()..add(LoadTodos()),
+      // P1 修复 (P1-5): 通过 getIt 获取 TodoService 注入 TodoBloc
+      create: (context) => TodoBloc(getIt<TodoService>())..add(LoadTodos()),
       child: DefaultTabController(
         length: 4,
         child: Scaffold(

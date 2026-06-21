@@ -311,9 +311,12 @@ impl SqliteObjectEngine {
 impl ObjectEngine for SqliteObjectEngine {
     #[instrument(skip(self, properties))]
     fn create_object_type(&self, name: &str, icon: &str, properties: Vec<ObjectProperty>) -> Result<ObjectType, ObjectError> {
-        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
-        conn.execute(
+
+        // P1 修复 (P1-7): INSERT 类型 + 循环 INSERT 属性包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO object_types (id, name, icon) VALUES (?1, ?2, ?3)",
             params![id.to_string(), name, icon],
         )?;
@@ -329,11 +332,12 @@ impl ObjectEngine for SqliteObjectEngine {
                 PropertyType::Checkbox => "Checkbox",
                 PropertyType::URL => "URL",
             };
-            conn.execute(
+            tx.execute(
                 "INSERT INTO object_type_properties (id, object_type_id, name, property_type, format) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![prop.id.to_string(), id.to_string(), prop.name, pt_str, prop.format.to_string()],
             )?;
         }
+        tx.commit()?;
 
         Ok(ObjectType {
             id,

@@ -16,6 +16,7 @@ import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/bloc/sync_state.dart';
 import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_settings_service.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 
 // Mock SyncService —— 避免对 E2ECryptoService/HTTP 的依赖
@@ -23,6 +24,7 @@ class MockSyncService extends Mock implements SyncService {}
 
 void main() {
   late MockSyncService mockSyncService;
+  late SyncSettingsService settingsService;
   late ConflictResolver conflictResolver;
 
   setUpAll(() {
@@ -38,6 +40,7 @@ void main() {
 
     conflictResolver = ConflictResolver();
     mockSyncService = MockSyncService();
+    settingsService = SyncSettingsService();
 
     // 默认配置 SyncService 的 mock 行为
     when(() => mockSyncService.stateStream)
@@ -52,7 +55,7 @@ void main() {
 
   group('SyncBloc', () {
     test('初始状态为 SyncIdle', () {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       expect(bloc.state, isA<SyncIdle>());
       bloc.close();
     });
@@ -67,7 +70,7 @@ void main() {
             status: SyncServiceStatus.synced,
             lastSyncedAt: DateTime(2024, 1, 1),
           ));
-          return SyncBloc(mockSyncService);
+          return SyncBloc(mockSyncService, settingsService);
         },
         act: (bloc) => bloc.add(const StartSync()),
         wait: const Duration(milliseconds: 200),
@@ -88,7 +91,7 @@ void main() {
             status: SyncServiceStatus.error,
             lastError: '网络连接失败',
           ));
-          return SyncBloc(mockSyncService);
+          return SyncBloc(mockSyncService, settingsService);
         },
         act: (bloc) => bloc.add(const StartSync()),
         wait: const Duration(milliseconds: 200),
@@ -106,7 +109,7 @@ void main() {
     group('StopSync', () {
       blocTest<SyncBloc, SyncState>(
         '停止同步时切换到 SyncIdle 并关闭自动同步',
-        build: () => SyncBloc(mockSyncService),
+        build: () => SyncBloc(mockSyncService, settingsService),
         act: (bloc) => bloc.add(const StopSync()),
         wait: const Duration(milliseconds: 200),
         skip: 1,
@@ -127,7 +130,7 @@ void main() {
                     status: SyncServiceStatus.synced,
                     lastSyncedAt: DateTime(2024, 1, 1),
                   ));
-          return SyncBloc(mockSyncService);
+          return SyncBloc(mockSyncService, settingsService);
         },
         act: (bloc) => bloc.add(const PushChanges({'key': 'value'})),
         wait: const Duration(milliseconds: 200),
@@ -145,7 +148,7 @@ void main() {
         build: () {
           when(() => mockSyncService.pushChanges(any()))
               .thenThrow(Exception('推送失败'));
-          return SyncBloc(mockSyncService);
+          return SyncBloc(mockSyncService, settingsService);
         },
         act: (bloc) => bloc.add(const PushChanges({'key': 'value'})),
         wait: const Duration(milliseconds: 200),
@@ -169,7 +172,7 @@ void main() {
             status: SyncServiceStatus.synced,
             lastSyncedAt: DateTime(2024, 1, 1),
           ));
-          return SyncBloc(mockSyncService);
+          return SyncBloc(mockSyncService, settingsService);
         },
         act: (bloc) => bloc.add(const PullChanges()),
         wait: const Duration(milliseconds: 200),
@@ -191,7 +194,7 @@ void main() {
             status: SyncServiceStatus.error,
             lastError: '拉取失败',
           ));
-          return SyncBloc(mockSyncService);
+          return SyncBloc(mockSyncService, settingsService);
         },
         act: (bloc) => bloc.add(const PullChanges()),
         wait: const Duration(milliseconds: 200),
@@ -208,7 +211,7 @@ void main() {
     group('AutoSyncToggled', () {
       blocTest<SyncBloc, SyncState>(
         '开启自动同步时持久化配置并更新状态',
-        build: () => SyncBloc(mockSyncService),
+        build: () => SyncBloc(mockSyncService, settingsService),
         act: (bloc) => bloc.add(const AutoSyncToggled(true)),
         wait: const Duration(milliseconds: 200),
         skip: 1,
@@ -221,7 +224,7 @@ void main() {
 
       blocTest<SyncBloc, SyncState>(
         '关闭自动同步时持久化配置并更新状态',
-        build: () => SyncBloc(mockSyncService),
+        build: () => SyncBloc(mockSyncService, settingsService),
         act: (bloc) => bloc.add(const AutoSyncToggled(false)),
         wait: const Duration(milliseconds: 200),
         skip: 1,
@@ -235,7 +238,7 @@ void main() {
     group('SyncIntervalChanged', () {
       blocTest<SyncBloc, SyncState>(
         '修改同步间隔时持久化配置',
-        build: () => SyncBloc(mockSyncService),
+        build: () => SyncBloc(mockSyncService, settingsService),
         act: (bloc) =>
             bloc.add(const SyncIntervalChanged(Duration(minutes: 10))),
         wait: const Duration(milliseconds: 200),

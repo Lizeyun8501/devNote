@@ -1,12 +1,12 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/bloc/sync_state.dart';
 import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_settings_service.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/sync/retry_policy.dart';
 import 'package:devnote/features/sync/offline_queue.dart';
@@ -17,15 +17,13 @@ import 'package:devnote/features/sync/offline_queue.dart';
 /// 离线支持：网络不可用时将操作暂存到 OfflineQueue，恢复后自动回放。
 class SyncBloc extends Bloc<SyncEvent, SyncState> {
   final SyncService _syncService;
+  // P1 修复 (P1-5): SharedPreferences 副作用外移到 SyncSettingsService
+  final SyncSettingsService _settingsService;
   final OfflineQueue _offlineQueue = OfflineQueue();
   Timer? _autoSyncTimer;
   StreamSubscription<SyncServiceState>? _serviceStateSubscription;
 
-  static const String _keyAutoSync = 'sync_auto_sync_enabled';
-  static const String _keySyncInterval = 'sync_interval_minutes';
-  static const String _keyServerAddress = 'sync_server_address';
-
-  SyncBloc(this._syncService) : super(const SyncIdle()) {
+  SyncBloc(this._syncService, this._settingsService) : super(const SyncIdle()) {
     on<StartSync>(_onStartSync);
     on<StopSync>(_onStopSync);
     on<PushChanges>(_onPushChanges);
@@ -44,18 +42,15 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
     _listenToServiceState();
   }
 
-  /// 从 SharedPreferences 初始化同步配置
-  /// 修复：改为通过 add 事件触发，而非直接 emit
+  /// 从 SyncSettingsService 初始化同步配置
+  /// 修复 (P1-5): 改为通过 Service 读取，避免 BLoC 直接依赖 SharedPreferences
   Future<void> _initFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    final autoSync = prefs.getBool(_keyAutoSync) ?? false;
-    final intervalMinutes = prefs.getInt(_keySyncInterval) ?? 5;
-    final serverAddress = prefs.getString(_keyServerAddress);
+    final snapshot = await _settingsService.loadAll();
 
     add(_SyncPrefsLoaded(
-      autoSyncEnabled: autoSync,
-      syncInterval: Duration(minutes: intervalMinutes),
-      serverAddress: serverAddress,
+      autoSyncEnabled: snapshot.autoSyncEnabled,
+      syncInterval: snapshot.syncInterval,
+      serverAddress: snapshot.serverAddress,
     ));
   }
 
@@ -318,9 +313,9 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
       // 拉取成功验证：result 为 null 表示无需应用数据（无变更）
       // result 非 null 表示数据已由 SyncService 返回，需由调用方写入本地数据库
       if (result != null && serviceState.status != SyncServiceStatus.error) {
-        developer.log('拉取同步完成，数据已返回待应用: ${serviceState.lastSyncedAt}', name: 'SyncBloc');
+        AppLogger.i('SyncBloc', '拉取同步完成，数据已返回待应用: ${serviceState.lastSyncedAt}');
       } else if (result == null && serviceState.status != SyncServiceStatus.error) {
-        developer.log('拉取完成，远端无新数据', name: 'SyncBloc');
+        AppLogger.i('SyncBloc', '拉取完成，远端无新数据');
       }
     } catch (e) {
       // 拉取失败，将操作加入离线队列，等待网络恢复后重试
@@ -421,13 +416,13 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   /// 切换自动同步开关
-  /// 开启时启动定时器，关闭时取消定时器，配置持久化到 SharedPreferences
+  /// 开启时启动定时器，关闭时取消定时器，配置通过 SyncSettingsService 持久化
+  /// 修复 (P1-5): SharedPreferences 写入外移到 SyncSettingsService
   Future<void> _onAutoSyncToggled(
     AutoSyncToggled event,
     Emitter<SyncState> emit,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyAutoSync, event.enabled);
+    await _settingsService.setAutoSyncEnabled(event.enabled);
 
     if (event.enabled) {
       _startAutoSyncTimer(state.syncInterval);
@@ -441,13 +436,13 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   }
 
   /// 修改同步间隔
-  /// 将新间隔持久化到 SharedPreferences，若自动同步已开启则重启定时器
+  /// 通过 SyncSettingsService 持久化新间隔，若自动同步已开启则重启定时器
+  /// 修复 (P1-5): SharedPreferences 写入外移到 SyncSettingsService
   Future<void> _onSyncIntervalChanged(
     SyncIntervalChanged event,
     Emitter<SyncState> emit,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keySyncInterval, event.interval.inMinutes);
+    await _settingsService.setSyncInterval(event.interval);
 
     if (state.autoSyncEnabled) {
       _startAutoSyncTimer(event.interval);
@@ -556,7 +551,7 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
           syncInterval: state.syncInterval,
           serverAddress: state.serverAddress,
         ));
-        developer.log('同步重试 $attempt/${policy.maxRetries}, 延迟 ${delay.inMilliseconds}ms, 错误类型: $errorType', name: 'SyncBloc');
+        AppLogger.w('SyncBloc', '同步重试 $attempt/${policy.maxRetries}, 延迟 ${delay.inMilliseconds}ms, 错误类型: $errorType');
         await Future.delayed(delay);
       }
     }

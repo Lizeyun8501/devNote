@@ -4,7 +4,8 @@
 // 同时携带原始分数、来源标签（关键词/语义/混合）和高亮信息，
 // 便于 UI 层区分结果来源并展示匹配上下文。
 
-import 'package:devnote/features/search/search_service.dart' show HighlightModel;
+// P1 修复 (P1-3): 改为从 core 层导入 HighlightModel，打破 ai ↔ search 循环依赖
+import 'package:devnote/core/persistence/models/highlight_model.dart';
 
 /// 搜索结果来源
 ///

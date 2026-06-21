@@ -1,5 +1,5 @@
-import 'dart:developer' as developer;
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_event.dart';
 import 'package:devnote/features/flashcard/bloc/flashcard_state.dart';
 import 'package:devnote/features/flashcard/flashcard_service.dart';
@@ -89,9 +89,10 @@ class FlashcardBloc extends Bloc<FlashcardEvent, FlashcardState> {
   Future<void> _onReviewFlashcard(ReviewFlashcardEvent event, Emitter<FlashcardState> emit) async {
     final currentState = state;
     if (currentState is! DueCardsLoaded) {
-      developer.log(
+      // P1 修复 (P1-5): 使用 AppLogger 替代 developer.log
+      AppLogger.w(
+        'FlashcardBloc',
         'ReviewFlashcard called in unexpected state: ${currentState.runtimeType}',
-        name: 'FlashcardBloc',
       );
       return;
     }

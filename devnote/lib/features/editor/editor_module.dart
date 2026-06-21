@@ -3,6 +3,7 @@
 // features 层各自提供 register/dispose 函数，由 main.dart 调用。
 
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/services/note_block_creation_port.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
 import 'package:devnote/features/editor/services/math_ink_service.dart';
 import 'package:devnote/features/editor/services/speech_to_text_service.dart';
@@ -13,6 +14,13 @@ import 'package:devnote/features/editor/services/voice_recorder_service.dart';
 Future<void> registerEditorDependencies() async {
   if (!getIt.isRegistered<EditorService>()) {
     getIt.registerLazySingleton<EditorService>(() => EditorService());
+  }
+  // P1 修复 (P1-3): 注册 NoteBlockCreationPort 接口，允许 notes 模块
+  // 通过接口依赖 editor 实现，打破 notes ↔ editor 循环依赖。
+  if (!getIt.isRegistered<NoteBlockCreationPort>()) {
+    getIt.registerLazySingleton<NoteBlockCreationPort>(
+      () => getIt<EditorService>(),
+    );
   }
   if (!getIt.isRegistered<VoiceRecorderService>()) {
     getIt.registerLazySingleton<VoiceRecorderService>(() => VoiceRecorderService());

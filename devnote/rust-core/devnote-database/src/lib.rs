@@ -613,18 +613,21 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn update_cell(&self, _db_id: &Uuid, row_id: &Uuid, field_id: &Uuid, value: serde_json::Value) -> Result<DatabaseCell, DatabaseError> {
-        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let now = Utc::now();
 
-        conn.execute(
+        // P1 修复 (P1-7): UPDATE row + INSERT OR REPLACE cell 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE database_rows SET updated_at = ?1 WHERE id = ?2",
             params![now.to_rfc3339(), row_id.to_string()],
         )?;
 
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO database_cells (row_id, field_id, value) VALUES (?1, ?2, ?3)",
             params![row_id.to_string(), field_id.to_string(), value.to_string()],
         )?;
+        tx.commit()?;
 
         Ok(DatabaseCell {
             field_id: *field_id,

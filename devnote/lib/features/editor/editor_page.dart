@@ -20,13 +20,46 @@ import 'package:devnote/features/editor/widgets/voice_recorder_widget.dart';
 import 'package:devnote/features/editor/widgets/editor_shortcuts.dart';
 import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
 import 'package:devnote/core/performance/virtual_scroll_controller.dart';
-import 'package:devnote/features/notes/version_history_page.dart';
-import 'package:devnote/features/notes/widgets/share_note_dialog.dart';
+
+// P1 修复 (P1-3): 移除对 notes 模块的直接 UI 依赖，
+// 改为通过回调注入 VersionHistoryPage 和 ShareNoteDialog 的构造，
+// 打破 editor → notes 方向的循环依赖。
+// 回调由组合根（feature_routes.dart）提供，该层可合法依赖两个模块。
+
+/// 版本历史展示回调
+///
+/// 由组合根提供实现，负责构造并展示 VersionHistoryPage。
+/// [onRestore] 由 editor 侧提供，用于将恢复的内容写回 EditorBloc。
+typedef ShowVersionHistoryCallback = void Function(
+  BuildContext context,
+  String noteId,
+  String currentContent,
+  void Function(String) onRestore,
+);
+
+/// 分享笔记回调
+///
+/// 由组合根提供实现，负责构造并展示 ShareNoteDialog。
+typedef ShareNoteCallback = void Function(
+  BuildContext context,
+  String noteId,
+  String title,
+  String content,
+);
 
 class EditorPage extends StatelessWidget {
-  const EditorPage({super.key, required this.noteId});
+  const EditorPage({
+    super.key,
+    required this.noteId,
+    this.onShowVersionHistory,
+    this.onShareNote,
+  });
 
   final String noteId;
+
+  // P1 修复 (P1-3): 通过回调注入 UI 依赖，打破 editor → notes 循环依赖
+  final ShowVersionHistoryCallback? onShowVersionHistory;
+  final ShareNoteCallback? onShareNote;
 
   @override
   Widget build(BuildContext context) {
@@ -139,24 +172,23 @@ class _EditorViewState extends State<_EditorView> {
                   child: IconButton(
                     icon: const Icon(Icons.history),
                     tooltip: '版本历史',
-                    onPressed: () {
-                      final currentContent =
-                          state.blocks.map((b) => b.content).join('\n\n');
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => VersionHistoryPage(
-                            noteId: state.noteId,
-                            currentContent: currentContent,
-                            onRestore: (content) {
-                              context
-                                  .read<EditorBloc>()
-                                  .add(RestoreContent(content));
-                            },
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed: onShowVersionHistory == null
+                        ? null
+                        : () {
+                            final currentContent =
+                                state.blocks.map((b) => b.content).join('\n\n');
+                            // P1 修复 (P1-3): 通过回调注入而非直接构造 VersionHistoryPage
+                            onShowVersionHistory!(
+                              context,
+                              state.noteId,
+                              currentContent,
+                              (content) {
+                                context
+                                    .read<EditorBloc>()
+                                    .add(RestoreContent(content));
+                              },
+                            );
+                          },
                   ),
                 );
               },
@@ -693,19 +725,15 @@ class _EditorViewState extends State<_EditorView> {
   }
 
   /// 分享笔记：打开分享对话框，生成公开链接（支持密码保护和有效期）
+  /// P1 修复 (P1-3): 通过回调注入而非直接构造 ShareNoteDialog
   Future<void> _shareNote(EditorLoaded state) async {
     final content = state.blocks.map((b) => b.content).join('\n\n');
     final title = _titleController.text.trim().isEmpty
         ? '无标题'
         : _titleController.text.trim();
-    await showDialog(
-      context: context,
-      builder: (context) => ShareNoteDialog(
-        noteId: state.noteId,
-        title: title,
-        content: content,
-      ),
-    );
+    if (onShareNote != null) {
+      onShareNote!(context, state.noteId, title, content);
+    }
   }
 
   Future<void> _confirmDeleteNote(EditorLoaded state) async {

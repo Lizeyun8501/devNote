@@ -6,6 +6,9 @@ import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
+// P1 修复 (P1-3): 通过 NoteBlockCreationPort 接口依赖 editor 实现，
+// 不再直接 import editor 模块，打破 notes ↔ editor 循环依赖。
+import 'package:devnote/core/services/note_block_creation_port.dart';
 import 'package:devnote/features/notes/bloc/notes_bloc.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/folder_bloc.dart';
@@ -15,6 +18,7 @@ import 'package:devnote/features/notes/widgets/folder_tree.dart';
 import 'package:devnote/features/notes/widgets/note_list.dart';
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_settings_service.dart';
 import 'package:devnote/features/sync/sync_status_widget.dart';
 import 'package:devnote/features/templates/template_picker_page.dart';
 
@@ -33,10 +37,19 @@ class NotesPage extends StatelessWidget {
           create: (_) => FolderBloc(SqliteFolderRepository(dbHelper))..add(const LoadFolders()),
         ),
         BlocProvider(
-          create: (_) => NotesBloc(SqliteNoteRepository(dbHelper)),
+          // P1 修复 (P1-5): 注入 FolderRepository 和 NoteBlockCreationPort
+          // P1 修复 (P1-3): 通过接口注入，不依赖 editor 具体类
+          create: (_) => NotesBloc(
+            SqliteNoteRepository(dbHelper),
+            SqliteFolderRepository(dbHelper),
+            getIt<NoteBlockCreationPort>(),
+          ),
         ),
         BlocProvider(
-          create: (_) => SyncBloc(getIt<SyncService>()),
+          create: (_) => SyncBloc(
+            getIt<SyncService>(),
+            getIt<SyncSettingsService>(),
+          ),
         ),
       ],
       child: Scaffold(

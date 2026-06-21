@@ -17,13 +17,18 @@ import 'dart:convert';
 import 'dart:developer';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:math' show Random;
-import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart' hide Utf16Pointer;
-import 'package:pointycastle/export.dart';
 
 import 'ffi_response.dart';
+import 'mixins/git_mixin.dart';
+import 'mixins/knowledge_mixin.dart';
+import 'mixins/p2p_mixin.dart';
+import 'mixins/vault_mixin.dart';
+
+// P1 修复 (P1-2): 重新导出 VaultEncryptedData，保持向后兼容
+// vault_service.dart 等调用方仍可通过 ffi_bridge.dart 导入该类型
+export 'mixins/vault_mixin.dart' show VaultEncryptedData;
 
 // ============================================================
 // C ABI 函数类型定义
@@ -104,43 +109,8 @@ class TranscriptSegmentFfi {
   });
 }
 
-/// Vault 加密数据
-class VaultEncryptedData {
-  final String ciphertext;
-  final String salt;
-  final String nonce;
-  final int memoryCost;
-  final int timeCost;
-  final int parallelism;
-
-  VaultEncryptedData({
-    required this.ciphertext,
-    required this.salt,
-    required this.nonce,
-    required this.memoryCost,
-    required this.timeCost,
-    required this.parallelism,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'ciphertext': ciphertext,
-    'salt': salt,
-    'nonce': nonce,
-    'memory_cost': memoryCost,
-    'time_cost': timeCost,
-    'parallelism': parallelism,
-  };
-
-  factory VaultEncryptedData.fromJson(Map<String, dynamic> json) =>
-      VaultEncryptedData(
-        ciphertext: json['ciphertext'] as String,
-        salt: json['salt'] as String,
-        nonce: json['nonce'] as String,
-        memoryCost: (json['memory_cost'] as num).toInt(),
-        timeCost: (json['time_cost'] as num).toInt(),
-        parallelism: (json['parallelism'] as num).toInt(),
-      );
-}
+// P1 修复 (P1-2): VaultEncryptedData 已迁移至 mixins/vault_mixin.dart
+// 并通过本文件顶部的 export 语句重新导出，保持向后兼容。
 
 // ============================================================
 // FFI 错误
@@ -162,7 +132,13 @@ class FfiException implements Exception {
 // FFIBridge —— Flutter 与 Rust 核心通信桥接
 // ============================================================
 
-class FFIBridge {
+// P1 修复 (P1-2): 应用领域 Mixin 拆分 God Class
+// - VaultMixin: 纯 Dart 加密实现，无 C ABI 依赖
+// - GitMixin: 全 stub，Rust 端无 handler
+// - P2PMixin: 全 stub，P2P 在 Dart 端独立实现
+// - KnowledgeMixin: 全 stub，KnowledgeService 走 sqflite 兜底
+// 对外 API 完全不变，所有调用方零改动。
+class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin {
   FFIBridge();
 
   bool _isAvailable = false;
@@ -712,39 +688,10 @@ class FFIBridge {
     });
   }
 
-  // ============================================================
-  // Git API —— 无对应 C ABI handler
-  // P0 修复: 返回错误 JSON 而非抛异常，调用方应使用 Dart 端 process_runner 兜底
-  // ============================================================
-
-  Future<String> gitInit({required String repoPath}) async => '{"success":false,"error":"git FFI not available"}';
-  Future<String> gitStatus({required String repoPath}) async => '{"success":false,"error":"git FFI not available"}';
-  Future<String> gitCommit({required String repoPath, required String message}) async => '{"success":false,"error":"git FFI not available"}';
-  Future<String> gitLog({required String repoPath, required int limit}) async => '{"commits":[]}';
-  Future<String> gitBranch({required String repoPath}) async => '{"branches":[]}';
-  Future<String> gitCheckout({required String repoPath, required String branch}) async => '{"success":false,"error":"git FFI not available"}';
-  Future<String> gitDiff({required String repoPath}) async => '{"diff":""}';
-
-  // ============================================================
-  // P2P API —— 无对应 C ABI handler（P2P 在 Dart 端独立实现）
-  // P0 修复: 返回降级结果而非抛异常，P2P 服务应检测返回值并使用 Dart 兜底实现
-  // ============================================================
-
-  Future<void> p2pStart({required String peerId}) async {}
-  Future<void> p2pStop() async {}
-  Future<String> p2pGetPeers() async => '{"peers":[]}';
-  Future<void> p2pConnectPeer({required String peerId, required String multiaddr}) async {}
-  Future<void> p2pDisconnectPeer({required String peerId}) async {}
-  Future<String> p2pGetStatus() async => '{"running":false,"peer_count":0}';
-
-  // ============================================================
-  // Knowledge API —— 无对应 C ABI handler
-  // P0 修复: 返回空 JSON 而非抛异常，KnowledgeService 应使用 Dart 端 sqflite 兜底
-  // ============================================================
-
-  Future<String> getKnowledgeMap({required String noteId}) async => '{"nodes":[],"edges":[]}';
-  Future<String> getLearningStats({required String noteId}) async => '{"total_notes":0,"reviewed_notes":0,"streak_days":0}';
-  Future<String> getDashboard() async => '{"stats":{},"recent_notes":[]}';
+  // P1 修复 (P1-2): Git/P2P/Knowledge API 已迁移至 Mixin
+  // - GitMixin (mixins/git_mixin.dart)
+  // - P2PMixin (mixins/p2p_mixin.dart)
+  // - KnowledgeMixin (mixins/knowledge_mixin.dart)
 
   // ============================================================
   // 格式 API
@@ -813,81 +760,11 @@ class FFIBridge {
     });
   }
 
-  // ============================================================
-  // Vault API —— Dart 端实现（Rust 端无对应 C ABI handler）
-  // 使用 AES-256-GCM + PBKDF2-HMAC-SHA256（与 CryptoService 一致）
-  // VaultEncryptedData 中的 memoryCost/timeCost/parallelism 保留用于
-  // 未来 Argon2id 迁移，当前 PBKDF2 使用固定迭代次数
-  // ============================================================
-
-  // P0 修复: PBKDF2 迭代次数从 100,000 提升至 600,000
-  // 符合 OWASP 2023 Password Storage Cheat Sheet 建议
-  // (PBKDF2-HMAC-SHA256 至少 600,000 次迭代)
-  static const int _vaultPbkdf2Iterations = 600000;
-
-  Future<VaultEncryptedData> vaultEncrypt({
-    required String password,
-    required String plaintext,
-  }) async {
-    final salt = _generateSecureRandom(32);
-    final nonce = _generateSecureRandom(12);
-    final key = _deriveVaultKey(password, salt);
-
-    final cipher = GCMBlockCipher(AESEngine())
-      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
-    final ciphertextWithTag = cipher.process(Uint8List.fromList(utf8.encode(plaintext)));
-
-    return VaultEncryptedData(
-      ciphertext: base64Encode(ciphertextWithTag),
-      salt: base64Encode(salt),
-      nonce: base64Encode(nonce),
-      memoryCost: 0,
-      timeCost: _vaultPbkdf2Iterations,
-      parallelism: 1,
-    );
-  }
-
-  Future<String> vaultDecrypt({
-    required String password,
-    required VaultEncryptedData encrypted,
-  }) async {
-    final salt = base64Decode(encrypted.salt);
-    final nonce = base64Decode(encrypted.nonce);
-    final ciphertextWithTag = base64Decode(encrypted.ciphertext);
-    final key = _deriveVaultKey(password, salt);
-
-    final cipher = GCMBlockCipher(AESEngine())
-      ..init(false, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
-    final plaintext = cipher.process(ciphertextWithTag);
-    return utf8.decode(plaintext);
-  }
-
-  Future<bool> vaultVerifyPassword({
-    required String password,
-    required VaultEncryptedData encrypted,
-  }) async {
-    try {
-      await vaultDecrypt(password: password, encrypted: encrypted);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Uint8List _generateSecureRandom(int length) {
-    final random = Random.secure();
-    final bytes = Uint8List(length);
-    for (var i = 0; i < length; i++) {
-      bytes[i] = random.nextInt(256);
-    }
-    return bytes;
-  }
-
-  Uint8List _deriveVaultKey(String password, Uint8List salt) {
-    final derivator = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
-      ..init(Pbkdf2Parameters(salt, _vaultPbkdf2Iterations, 32));
-    return derivator.process(Uint8List.fromList(utf8.encode(password)));
-  }
+  // P1 修复 (P1-2): Vault API 已迁移至 mixins/vault_mixin.dart (VaultMixin)
+  // - vaultEncrypt / vaultDecrypt / vaultVerifyPassword
+  // - _generateSecureRandom / _deriveVaultKey
+  // - VaultEncryptedData 数据类
+  // 通过本文件顶部的 export 语句重新导出 VaultEncryptedData。
 
   // ============================================================
   // 工具方法

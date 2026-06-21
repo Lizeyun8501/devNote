@@ -18,6 +18,8 @@ import 'package:devnote/core/router/route_registry.dart';
 import 'package:devnote/features/notes/notes_page.dart';
 import 'package:devnote/features/notes/daily_notes_page.dart';
 import 'package:devnote/features/editor/editor_page.dart';
+import 'package:devnote/features/notes/version_history_page.dart';
+import 'package:devnote/features/notes/widgets/share_note_dialog.dart';
 import 'package:devnote/features/settings/settings_page.dart';
 import 'package:devnote/features/settings/language_settings_page.dart';
 import 'package:devnote/features/settings/daily_notes_settings_page.dart';
@@ -27,6 +29,7 @@ import 'package:devnote/features/settings/import_export/onenote_import_page.dart
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_settings_service.dart';
 import 'package:devnote/features/sync/sync_settings_page.dart';
 import 'package:devnote/features/sync/conflict_resolution_page.dart';
 import 'package:devnote/features/canvas/canvas_page.dart';
@@ -75,8 +78,37 @@ void registerFeatureRoutes() {
     GoRoute(
       path: '/notes/:id',
       pageBuilder: (context, state) => NoTransitionPage(
+        // P1 修复 (P1-3): 通过回调注入 VersionHistoryPage 和 ShareNoteDialog，
+        // 打破 editor → notes 循环依赖。组合根（本文件）可合法依赖两个模块。
         child: EditorPage(
           noteId: state.pathParameters['id'] ?? '',
+          onShowVersionHistory: (
+            context,
+            noteId,
+            currentContent,
+            onRestore,
+          ) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => VersionHistoryPage(
+                  noteId: noteId,
+                  currentContent: currentContent,
+                  onRestore: onRestore,
+                ),
+              ),
+            );
+          },
+          onShareNote: (context, noteId, title, content) {
+            showDialog(
+              context: context,
+              builder: (context) => ShareNoteDialog(
+                noteId: noteId,
+                title: title,
+                content: content,
+              ),
+            );
+          },
         ),
       ),
     ),
@@ -137,7 +169,8 @@ void registerFeatureRoutes() {
       pageBuilder: (context, state) => NoTransitionPage(
         child: BlocProvider(
           create: (_) =>
-              SyncBloc(getIt<SyncService>())..add(const StartSync()),
+              SyncBloc(getIt<SyncService>(), getIt<SyncSettingsService>())
+                ..add(const StartSync()),
           child: const SyncSettingsPage(),
         ),
       ),
@@ -146,7 +179,8 @@ void registerFeatureRoutes() {
       path: '/sync/conflicts',
       pageBuilder: (context, state) => NoTransitionPage(
         child: BlocProvider(
-          create: (_) => SyncBloc(getIt<SyncService>()),
+          create: (_) =>
+              SyncBloc(getIt<SyncService>(), getIt<SyncSettingsService>()),
           child: const ConflictResolutionPage(),
         ),
       ),
