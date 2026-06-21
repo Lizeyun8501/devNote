@@ -45,6 +45,8 @@ class EditorService {
     required String content,
     required int position,
   }) async {
+    // P1 架构修复: 添加 createBlockFromString 便捷方法以解耦 notes_bloc
+    // 避免外部模块为映射字符串而 import BlockType enum
     final now = DateTime.now();
     final block = BlockModel(
       id: _uuid.v4(),
@@ -82,6 +84,27 @@ class EditorService {
     }
     cached.add(block);
     return block;
+  }
+
+  /// P1 架构修复: 通过字符串类型名创建 block，避免外部模块 import BlockType enum
+  /// 模板类型名与 BlockType.name 一一对应（paragraph/heading1/codeBlock 等），
+  /// 未知类型回退为 paragraph。
+  Future<BlockModel> createBlockFromString({
+    required String noteId,
+    required String blockTypeName,
+    required String content,
+    required int position,
+  }) {
+    final blockType = BlockType.values.firstWhere(
+      (e) => e.name == blockTypeName,
+      orElse: () => BlockType.paragraph,
+    );
+    return createBlock(
+      noteId: noteId,
+      blockType: blockType,
+      content: content,
+      position: position,
+    );
   }
 
   Future<BlockModel?> getBlock(String blockId) async {

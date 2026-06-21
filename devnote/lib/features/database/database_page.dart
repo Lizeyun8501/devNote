@@ -48,6 +48,16 @@ class _DatabaseViewState extends State<_DatabaseView> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: BlocBuilder<DatabaseBloc, DatabaseState>(
+          // P2-4: 仅在 state 类型变化或数据库名称变化时重建标题，
+          // 避免 rows/columns 等高频变化字段触发 AppBar 标题重建。
+          buildWhen: (previous, current) {
+            if (previous.runtimeType != current.runtimeType) return true;
+            if (previous is DatabaseDetailLoaded &&
+                current is DatabaseDetailLoaded) {
+              return previous.database.name != current.database.name;
+            }
+            return false;
+          },
           builder: (context, state) {
             if (state is DatabaseDetailLoaded) {
               return Text(state.database.name);

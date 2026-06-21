@@ -9,7 +9,9 @@ import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/di/injection.dart';
-import 'package:devnote/features/editor/models/block_model.dart';
+// P1 架构修复: 移除对 features/editor/models/block_model.dart 的直接依赖，
+// 消除 notes ↔ editor 循环依赖。BlockType 映射逻辑已移至
+// EditorService.createBlockFromString，由 editor 模块内部处理。
 import 'package:devnote/features/editor/services/editor_service.dart';
 
 class NotesBloc extends Bloc<NotesEvent, NotesState> {
@@ -93,9 +95,10 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       final editorService = getIt<EditorService>();
       final blocks = event.template.blocks;
       for (var i = 0; i < blocks.length; i++) {
-        await editorService.createBlock(
+        // P1 架构修复: 使用 createBlockFromString 避免依赖 BlockType enum
+        await editorService.createBlockFromString(
           noteId: created.id,
-          blockType: _blockTypeFromName(blocks[i].type),
+          blockTypeName: blocks[i].type,
           content: blocks[i].content,
           position: i,
         );
@@ -113,15 +116,8 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     }
   }
 
-  /// 将模板的块类型字符串映射为编辑器 BlockType 枚举。
-  /// 模板类型名与 BlockType.name 一一对应（paragraph/heading1/codeBlock 等），
-  /// 未知类型回退为 paragraph。
-  BlockType _blockTypeFromName(String name) {
-    return BlockType.values.firstWhere(
-      (e) => e.name == name,
-      orElse: () => BlockType.paragraph,
-    );
-  }
+  /// P1 架构修复: _blockTypeFromName 已移至 EditorService.createBlockFromString
+  /// 消除 notes ↔ editor 循环依赖（notes_bloc 不再 import BlockType enum）
 
   /// P2-4: 创建 Daily Note —— 通过文件夹名称解析 folderId（不存在则创建），
   /// 再创建笔记并应用模板块。与 _onCreateNoteFromTemplate 的区别：
@@ -148,9 +144,10 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       if (event.templateBlocks.isNotEmpty) {
         final editorService = getIt<EditorService>();
         for (var i = 0; i < event.templateBlocks.length; i++) {
-          await editorService.createBlock(
+          // P1 架构修复: 使用 createBlockFromString 避免依赖 BlockType enum
+          await editorService.createBlockFromString(
             noteId: created.id,
-            blockType: _blockTypeFromName(event.templateBlocks[i].type),
+            blockTypeName: event.templateBlocks[i].type,
             content: event.templateBlocks[i].content,
             position: i,
           );
@@ -235,14 +232,13 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
       }
       // 修复(P2): 原实现用内存 contains 过滤，性能差且不支持中文分词。
       // DatabaseHelper 已实现 FTS5 全文搜索（searchNotesFTS），现改用 FTS5。
-      // FTS5 支持 MATCH 语法、unicode61 分词、按相关性排序（rank）。
+      // P1 架构修复: 通过 NoteRepository.searchNotes 调用，避免直接操作 DatabaseHelper
       try {
-        final ftsResults = await _dbHelper.searchNotesFTS(event.query);
-        final notes = ftsResults.map((json) => NoteModel.fromJson(json)).toList();
+        final notes = await _noteRepository.searchNotes(event.query);
         emit(currentState.copyWith(searchQuery: event.query, notes: _sortNotes(notes, currentState.sortBy)));
       } catch (e) {
         // FTS5 不可用时回退到内存过滤（兼容旧数据库未迁移到 v6 的场景）
-        developer.log('FTS5 search failed, falling back to in-memory filter: $e', level: 900);
+        developer.log('searchNotes failed, falling back to in-memory filter: $e', level: 900);
         try {
           final folderId = currentState.filterFolderId;
           final allNotes = folderId != null
@@ -267,8 +263,8 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
 
     // 修复(P1-7): 原实现仅 copyWith(filterTagId) 而不实际过滤 notes 列表，
     // 导致 UI 仍显示全部笔记。现根据 tagId 过滤 notes。
-    // NoteModel 无 tags 字段，TagRepository 也无 getNoteIdsByTag 方法，
-    // 故直接查询 note_tags 关联表获取带该标签的笔记 ID。
+    // P1 架构修复: 通过 NoteRepository.getNoteIdsByTag 调用，
+    // 避免直接操作 DatabaseHelper 和 note_tags 表
     if (event.tagId.isEmpty) {
       // 清除标签过滤：从数据库重新加载原始列表（保留 folder 过滤）
       try {
@@ -287,14 +283,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     }
 
     try {
-      final db = await _dbHelper.database;
-      final rows = await db.query(
-        'note_tags',
-        columns: ['note_id'],
-        where: 'tag_id = ?',
-        whereArgs: [event.tagId],
-      );
-      final noteIds = rows.map((r) => r['note_id'] as String).toSet();
+      final noteIds = (await _noteRepository.getNoteIdsByTag(event.tagId)).toSet();
       final filteredNotes = currentState.notes
           .where((n) => noteIds.contains(n.id))
           .toList();

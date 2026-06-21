@@ -88,6 +88,15 @@ class _PluginMarketplacePageState extends State<PluginMarketplacePage> {
 
   Widget _buildPluginList() {
     return BlocBuilder<PluginBloc, PluginsState>(
+      // P2-4: 仅在 state 类型变化或 marketplacePlugins 列表变化时重建，
+      // 避免 plugins（已安装列表）变化触发市场列表重建。
+      buildWhen: (previous, current) {
+        if (previous.runtimeType != current.runtimeType) return true;
+        if (previous is PluginsLoaded && current is PluginsLoaded) {
+          return previous.marketplacePlugins != current.marketplacePlugins;
+        }
+        return false;
+      },
       builder: (context, state) {
         if (state is PluginsLoaded) {
           var plugins = state.marketplacePlugins;

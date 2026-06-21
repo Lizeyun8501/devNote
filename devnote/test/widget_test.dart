@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/router/app_router.dart';
+import 'package:devnote/core/router/route_registry.dart';
 import 'package:devnote/core/theme/app_theme.dart';
 
 void main() {
@@ -24,7 +25,13 @@ void main() {
   });
 
   test('App router exposes initial location', () {
-    expect(appRouter.routerDelegate, isNotNull);
+    // P2-2: buildAppRouter 要求先注册 Shell builder。
+    // 测试场景下注册一个最小 Shell，验证路由器可正常构建。
+    RouteRegistry.reset();
+    RouteRegistry.registerShell((context, state, child) => Scaffold(body: child));
+    final router = buildAppRouter();
+    expect(router.routerDelegate, isNotNull);
+    RouteRegistry.reset();
   });
 
   test('App theme exposes light and dark variants', () {

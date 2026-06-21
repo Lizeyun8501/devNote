@@ -6,6 +6,8 @@ import 'package:devnote/features/knowledge/knowledge_map/knowledge_map_service.d
 
 class KnowledgeService {
   final Dispatch _dispatch = getIt<Dispatch>();
+  final LearningStatsService _statsService = getIt<LearningStatsService>();
+  final KnowledgeMapService _mapService = getIt<KnowledgeMapService>();
 
   Future<Map<String, dynamic>> getKnowledgeOverview() async {
     final responseStr = await _dispatch.getDashboard();
@@ -21,13 +23,11 @@ class KnowledgeService {
   }
 
   Future<LearningStatsSummary> getLearningStats() async {
-    final service = LearningStatsService();
-    return service.getStatsSummary();
+    return _statsService.getStatsSummary();
   }
 
   Future<KnowledgeMapData> getKnowledgeMap() async {
-    final service = KnowledgeMapService();
-    return service.getKnowledgeMap();
+    return _mapService.getKnowledgeMap();
   }
 
   Future<Map<String, dynamic>> generateReport({required String period}) async {

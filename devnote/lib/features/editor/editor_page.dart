@@ -109,6 +109,10 @@ class _EditorViewState extends State<_EditorView> {
             ),
           ),
           title: BlocBuilder<EditorBloc, EditorState>(
+            // P2-4: 仅在 state 类型变化时重建标题（EditorLoaded ↔ 其他），
+            // 避免 blocks 内容编辑时频繁重建 AppBar 标题。
+            buildWhen: (previous, current) =>
+                previous.runtimeType != current.runtimeType,
             builder: (context, state) {
               final title = state is EditorLoaded ? '编辑笔记' : '新建笔记';
               return Text(title);
@@ -116,6 +120,15 @@ class _EditorViewState extends State<_EditorView> {
           ),
           actions: [
             BlocBuilder<EditorBloc, EditorState>(
+              // P2-4: 仅在 state 类型变化或 blocks 数量变化时重建版本历史按钮，
+              // 避免 blocks 内容编辑时频繁重建整个 actions 区域。
+              buildWhen: (previous, current) {
+                if (previous.runtimeType != current.runtimeType) return true;
+                if (previous is EditorLoaded && current is EditorLoaded) {
+                  return previous.blocks.length != current.blocks.length;
+                }
+                return false;
+              },
               builder: (context, state) {
                 if (state is! EditorLoaded) {
                   return const SizedBox.shrink();

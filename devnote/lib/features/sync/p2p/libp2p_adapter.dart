@@ -256,7 +256,9 @@ class IceServerConfig {
 /// - webrtc_datachannel_send: 通过 DataChannel 发送数据
 /// - webrtc_peerconnection_close: 关闭 PeerConnection
 /// - webrtc_datachannel_close: 关闭 DataChannel
-abstract class FFIBridge {
+/// P0 修复: 原 abstract class FFIBridge 与 core/bridge/ffi_bridge.dart 的 FFIBridge
+/// 类型系统冲突。重命名为 WebRtcFFIInterface 以消除歧义。
+abstract class WebRtcFFIInterface {
   /// 调用 Rust FFI 函数
   ///
   /// [method] - FFI 函数名（如 'webrtc_create_offer'）
@@ -327,7 +329,7 @@ class LibP2PAdapter {
   StreamSubscription? _signalingSubscription;
 
   /// FFI 桥接实例 —— 用于调用 Rust WebRTC 实现
-  final FFIBridge? _ffiBridge;
+  final WebRtcFFIInterface? _ffiBridge;
 
   /// 发送缓冲区 —— 背压支持，防止数据发送过快导致内存溢出
   final Map<String, Queue<Uint8List>> _sendBuffers = {};
@@ -371,7 +373,7 @@ class LibP2PAdapter {
   LibP2PAdapter({
     List<IceServerConfig>? iceServers,
     String? signalingUrl,
-    FFIBridge? ffiBridge,
+    WebRtcFFIInterface? ffiBridge,
   })  : _iceServers = iceServers ?? IceServerConfig.defaultServers,
         _signalingUrl = signalingUrl ?? 'https://signal.devnote.app',
         _ffiBridge = ffiBridge;

@@ -133,6 +133,38 @@ class AppLogger {
 
   // ---------- 内部实现 ----------
 
+  // P2 质量提升: 日志脱敏正则模式
+  // 匹配 password/token/secret/authorization 等敏感字段及其值
+  static final _sensitivePatterns = [
+    // JSON 格式: "password":"xxx" / "token":"xxx" / "secret":"xxx"
+    RegExp(r'("(?:password|passwd|token|secret|authorization|api_key|apikey|access_token|refresh_token)"\s*:\s*")([^"]*)(")', caseSensitive: false),
+    // URL 参数: password=xxx / token=xxx
+    RegExp(r'((?:password|passwd|token|secret|api_key|apikey|access_token|refresh_token)=)([^&\s]+)', caseSensitive: false),
+    // Bearer token: Bearer xxx
+    RegExp(r'(Bearer\s+)([A-Za-z0-9\-._~+/]+=*)', caseSensitive: false),
+  ];
+
+  /// P2 质量提升: 对日志消息进行脱敏，防止密码/token 等敏感信息泄漏到日志
+  String _sanitize(String input) {
+    var result = input;
+    for (final pattern in _sensitivePatterns) {
+      if (pattern.pattern.contains('(') && pattern.pattern.contains(')')) {
+        // 对于带捕获组的正则，用 *** 替换敏感值
+        result = result.replaceAllMapped(pattern, (m) {
+          if (m.groupCount >= 3) {
+            // JSON 格式: 保留 key 和引号，替换 value
+            return '${m.group(1)}***${m.group(3)}';
+          } else if (m.groupCount >= 2) {
+            // URL 参数或 Bearer: 保留前缀，替换值
+            return '${m.group(1)}***';
+          }
+          return m.group(0) ?? '';
+        });
+      }
+    }
+    return result;
+  }
+
   void _log(
     AppLogLevel level,
     String tag,
@@ -143,10 +175,14 @@ class AppLogger {
     // 级别过滤
     if (level.value < _minLevel.value) return;
 
+    // P2 质量提升: 对消息和 error 进行脱敏
+    final sanitizedMessage = _sanitize(message);
+    final sanitizedError = error != null ? _sanitize(error.toString()) : null;
+
     // 构造完整消息，便于一次性查看
-    final buffer = StringBuffer(message);
-    if (error != null) {
-      buffer.write(' | error=$error');
+    final buffer = StringBuffer(sanitizedMessage);
+    if (sanitizedError != null) {
+      buffer.write(' | error=$sanitizedError');
     }
     if (stackTrace != null) {
       buffer.write('\n$stackTrace');
@@ -158,19 +194,17 @@ class AppLogger {
       fullMessage,
       name: tag,
       level: level.value,
-      error: error,
+      error: sanitizedError != null ? Exception(sanitizedError) : null,
       stackTrace: stackTrace,
     );
 
-    // Release 模式补充: 同步输出到 print，方便 adb logcat 抓取
-    if (!kDebugMode) {
-      // ignore: avoid_print
-      print('[${level.label}/$tag] $fullMessage');
-    }
+    // P2 质量提升: Release 模式移除 print 输出
+    // 原实现用 print 输出到 stdout/logcat，可能被其他应用读取（Android logcat 全局可读）
+    // Release 模式仅依赖 dart:developer 和 Sentry，不使用 print
 
     // error 级别自动上报 Sentry
     if (level == AppLogLevel.error && _sentryEnabled) {
-      _reportToSentry(tag, message, error, stackTrace);
+      _reportToSentry(tag, sanitizedMessage, error, stackTrace);
     }
   }
 

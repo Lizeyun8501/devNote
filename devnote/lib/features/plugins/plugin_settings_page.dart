@@ -27,6 +27,15 @@ class _PluginSettingsPageState extends State<PluginSettingsPage> {
         title: const Text('插件管理'),
       ),
       body: BlocBuilder<PluginBloc, PluginsState>(
+        // P2-4: 仅在 state 类型变化或 plugins（已安装列表）变化时重建，
+        // 避免 marketplacePlugins 变化触发已安装列表重建。
+        buildWhen: (previous, current) {
+          if (previous.runtimeType != current.runtimeType) return true;
+          if (previous is PluginsLoaded && current is PluginsLoaded) {
+            return previous.plugins != current.plugins;
+          }
+          return false;
+        },
         builder: (context, state) {
           if (state is PluginsLoaded) {
             if (state.plugins.isEmpty) {

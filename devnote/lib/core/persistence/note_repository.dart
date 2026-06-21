@@ -23,6 +23,10 @@ abstract class NoteRepository {
   // 借鉴内容: 基于 limit/offset 的分页查询，避免全量加载导致内存溢出
   // ============================================================
   Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0});
+  // P1 架构修复: 将 FTS 搜索和按标签查询封装到 Repository，
+  // 消除 NotesBloc 直接操作 DatabaseHelper 的跨层访问
+  Future<List<NoteModel>> searchNotes(String query);
+  Future<List<String>> getNoteIdsByTag(String tagId);
 }
 
 class SqliteNoteRepository implements NoteRepository {
@@ -142,5 +146,40 @@ class SqliteNoteRepository implements NoteRepository {
       offset: offset,
     );
     return results.map((json) => NoteModel.fromJson(json)).toList();
+  }
+
+  /// P1 架构修复: FTS5 全文搜索，封装到 Repository 避免跨层访问
+  /// FTS5 不可用时回退到内存过滤
+  @override
+  Future<List<NoteModel>> searchNotes(String query) async {
+    final db = await _dbHelper.database;
+    try {
+      final ftsResults = await _dbHelper.searchNotesFTS(query);
+      return ftsResults.map((json) => NoteModel.fromJson(json)).toList();
+    } catch (e) {
+      developer.log('FTS5 search failed, falling back to in-memory filter: $e', level: 900);
+      // 回退：全量加载后内存过滤
+      final all = await db.query('notes', orderBy: 'updated_at DESC');
+      final lowerQuery = query.toLowerCase();
+      return all
+          .where((json) =>
+              (json['title'] as String?)?.toLowerCase().contains(lowerQuery) == true ||
+              (json['content'] as String?)?.toLowerCase().contains(lowerQuery) == true)
+          .map((json) => NoteModel.fromJson(json))
+          .toList();
+    }
+  }
+
+  /// P1 架构修复: 按标签查询笔记 ID，封装到 Repository 避免跨层访问
+  @override
+  Future<List<String>> getNoteIdsByTag(String tagId) async {
+    final db = await _dbHelper.database;
+    final rows = await db.query(
+      'note_tags',
+      columns: ['note_id'],
+      where: 'tag_id = ?',
+      whereArgs: [tagId],
+    );
+    return rows.map((r) => r['note_id'] as String).toList();
   }
 }

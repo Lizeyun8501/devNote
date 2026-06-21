@@ -35,6 +35,15 @@ class _DeckListView extends StatelessWidget {
         ],
       ),
       body: BlocBuilder<FlashcardBloc, FlashcardState>(
+        // P2-4: 仅在 state 类型变化或 decks 列表变化时重建，
+        // 避免 cards/stats 等其他子状态变化触发牌组列表重建。
+        buildWhen: (previous, current) {
+          if (previous.runtimeType != current.runtimeType) return true;
+          if (previous is DecksLoaded && current is DecksLoaded) {
+            return previous.decks != current.decks;
+          }
+          return false;
+        },
         builder: (context, state) {
           if (state is FlashcardLoading) {
             return const Center(child: CircularProgressIndicator());

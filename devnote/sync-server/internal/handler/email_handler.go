@@ -1,6 +1,11 @@
 package handler
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"net/http"
 
 	"github.com/devnote/sync-server/internal/service"
@@ -10,7 +15,7 @@ import (
 // EmailHandler 处理邮件转笔记相关的 HTTP 请求
 type EmailHandler struct {
 	emailService  *service.EmailService
-	webhookSecret string // Webhook 验证密钥
+	webhookSecret string // Webhook HMAC 验证密钥
 }
 
 func NewEmailHandler(emailService *service.EmailService, webhookSecret string) *EmailHandler {
@@ -21,12 +26,40 @@ func NewEmailHandler(emailService *service.EmailService, webhookSecret string) *
 }
 
 // IncomingEmailWebhook 接收邮件 Webhook（来自 SendGrid/Mailgun/SES 等）
+//
+// P0 修复: 原实现直接比较请求头值与密钥本身（signature != webhookSecret），
+// 这意味着密钥以明文形式在请求头中传输，完全失去签名意义。
+// 现改为标准 HMAC-SHA256 验证：客户端用密钥对请求体做 HMAC，将结果
+// 放入 X-Webhook-Signature 头（十六进制编码）；服务端用同一密钥对
+// 请求体重新计算 HMAC 并用 hmac.Equal 常量时间比较。
 func (h *EmailHandler) IncomingEmailWebhook(c *gin.Context) {
-	// 验证 Webhook 签名（根据邮件服务商不同）
-	signature := c.GetHeader("X-Webhook-Signature")
-	if h.webhookSecret != "" && signature != h.webhookSecret {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
-		return
+	if h.webhookSecret != "" {
+		signature := c.GetHeader("X-Webhook-Signature")
+		if signature == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing signature"})
+			return
+		}
+
+		// 读取请求体用于 HMAC 计算
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+			return
+		}
+
+		// 计算期望的 HMAC-SHA256 签名
+		mac := hmac.New(sha256.New, []byte(h.webhookSecret))
+		mac.Write(body)
+		expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+		// 常量时间比较防止时序攻击
+		if !hmac.Equal([]byte(signature), []byte(expectedSig)) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+			return
+		}
+
+		// 将 body 重新放回 c.Request.Body 供后续 ShouldBindJSON 使用
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
 	var req struct {

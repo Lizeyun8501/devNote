@@ -312,6 +312,7 @@ impl SqliteNoteRepository {
             id: Uuid::parse_str(&id_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             title,
+            content: content.clone(),
             folder_id: Uuid::parse_str(&folder_id_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             blocks,
@@ -519,6 +520,7 @@ impl SqliteNoteRepository {
         Ok(Note {
             id,
             title: title.to_string(),
+            content: content.to_string(),
             folder_id: *folder_id,
             blocks: Vec::new(),
             tags: Vec::new(),

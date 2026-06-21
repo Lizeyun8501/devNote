@@ -193,12 +193,18 @@ class FFIBridge {
 
       // 调用 devnote_init 注册所有事件处理器并初始化引擎
       final responsePtr = _devnoteInit();
-      final code = responsePtr.ref.code;
-      final message = responsePtr.ref.message.toDartString();
-      _devnoteDestroy(responsePtr);
-
-      if (code != 0) {
-        throw StateError('FFI init failed ($code): $message');
+      try {
+        if (responsePtr == nullptr) {
+          throw StateError('devnote_init returned null pointer');
+        }
+        final code = responsePtr.ref.code;
+        final message = responsePtr.ref.message.toDartString();
+        if (code != 0) {
+          throw StateError('FFI init failed ($code): $message');
+        }
+      } finally {
+        // P0 修复: 无论 toDartString 是否抛异常都释放 responsePtr
+        _devnoteDestroy(responsePtr);
       }
 
       _isAvailable = true;
@@ -252,18 +258,22 @@ class FFIBridge {
         throw StateError('FFI dispatch returned null for event: $event');
       }
 
-      final responseJson = responsePtr.toDartString();
-      _devnoteFreeString(responsePtr);
+      try {
+        final responseJson = responsePtr.toDartString();
+        final response = jsonDecode(responseJson) as Map<String, dynamic>;
+        final code = (response['code'] as num).toInt();
+        if (code != 0) {
+          throw FfiException(event, code, response['message'] as String? ?? 'Unknown error');
+        }
 
-      final response = jsonDecode(responseJson) as Map<String, dynamic>;
-      final code = (response['code'] as num).toInt();
-      if (code != 0) {
-        throw FfiException(event, code, response['message'] as String? ?? 'Unknown error');
+        final data = response['data'] as String?;
+        if (data == null || data.isEmpty) return null;
+        return jsonDecode(data);
+      } finally {
+        // P0 修复: 无论 toDartString/jsonDecode 是否抛异常都释放 responsePtr
+        // 避免 Rust 端 CString::into_raw() 分配的内存泄漏
+        _devnoteFreeString(responsePtr);
       }
-
-      final data = response['data'] as String?;
-      if (data == null || data.isEmpty) return null;
-      return jsonDecode(data);
     } finally {
       malloc.free(requestPtr);
     }
@@ -803,7 +813,10 @@ class FFIBridge {
   // 未来 Argon2id 迁移，当前 PBKDF2 使用固定迭代次数
   // ============================================================
 
-  static const int _vaultPbkdf2Iterations = 100000;
+  // P0 修复: PBKDF2 迭代次数从 100,000 提升至 600,000
+  // 符合 OWASP 2023 Password Storage Cheat Sheet 建议
+  // (PBKDF2-HMAC-SHA256 至少 600,000 次迭代)
+  static const int _vaultPbkdf2Iterations = 600000;
 
   Future<VaultEncryptedData> vaultEncrypt({
     required String password,

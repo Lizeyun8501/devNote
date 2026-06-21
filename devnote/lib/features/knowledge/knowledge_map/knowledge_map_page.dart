@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/knowledge/knowledge_map/knowledge_map_service.dart';
 
 class KnowledgeMapPage extends StatefulWidget {
@@ -9,7 +10,7 @@ class KnowledgeMapPage extends StatefulWidget {
 }
 
 class _KnowledgeMapPageState extends State<KnowledgeMapPage> {
-  final KnowledgeMapService _service = KnowledgeMapService();
+  final KnowledgeMapService _service = getIt<KnowledgeMapService>();
   KnowledgeMapData? _data;
   bool _loading = true;
 

@@ -17,17 +17,20 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:go_router/go_router.dart';
 import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/theme/app_theme.dart';
 import 'package:devnote/core/router/app_router.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/router/route_registry.dart';
 import 'package:devnote/core/observability/sentry_config.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
 import 'package:devnote/core/platform/platform_channel.dart';
 import 'package:devnote/core/services/locale_service.dart';
+import 'package:devnote/features/feature_routes.dart';
 
 // 修复(P1): features 层依赖注册从 core/di 迁移至各 feature 模块自注册，
 // 消除 core → features 的反向依赖。
@@ -54,6 +57,10 @@ import 'package:devnote/features/todo/todo_module.dart';
 import 'package:devnote/features/todo/services/notification_service.dart';
 // P2-6: 手绘画布白板（Excalidraw 风格）
 import 'package:devnote/features/whiteboard/whiteboard_module.dart';
+// P2-3: 补全缺失模块的 module.dart（freeform/knowledge/object）
+import 'package:devnote/features/freeform/freeform_module.dart';
+import 'package:devnote/features/knowledge/knowledge_module.dart';
+import 'package:devnote/features/object/object_module.dart';
 
 void main() {
   // 全局错误边界：捕获同步异常和 Flutter 框架异常
@@ -92,6 +99,16 @@ Future<void> _initializeApp() async {
   // 修复: Sentry 初始化提前到所有 feature 注册之前，确保注册过程中的异常能被捕获
   await setupSentry();
 
+  // P1 架构修复: FFIBridge.init() 提前到 feature 模块注册之前。
+  // 原问题: 多个 feature service（OcrService/VaultService/SpeechToTextService/MathInkService）
+  // 依赖 FFIBridge，但 init() 在 feature 注册之后才调用，若注册过程中触发 FFI 调用
+  // 会因 isAvailable=false 而失败。
+  try {
+    await getIt<FFIBridge>().init();
+  } catch (e) {
+    debugPrint('Warning: FFI bridge initialization failed: $e');
+  }
+
   // features 层依赖由各自模块注册，消除 core → features 反向依赖
   await registerPluginsDependencies();
   await registerSettingsDependencies();
@@ -110,19 +127,16 @@ Future<void> _initializeApp() async {
   await registerVaultDependencies();
   await registerTodoDependencies();
   await registerWhiteboardDependencies();
+  // P2-3: 补全缺失模块注册
+  await registerFreeformDependencies();
+  await registerKnowledgeDependencies();
+  await registerObjectDependencies();
 
   // P2-5: 初始化本地通知服务（失败时降级为无通知模式，不阻断启动）
   try {
     await getIt<NotificationService>().init();
   } catch (e) {
     debugPrint('Warning: Notification service initialization failed: $e');
-  }
-
-  // Initialize Rust FFI bridge (failure → graceful degradation to sqflite)
-  try {
-    await getIt<FFIBridge>().init();
-  } catch (e) {
-    debugPrint('Warning: FFI bridge initialization failed: $e');
   }
 
   // Initialize platform channel
@@ -145,6 +159,10 @@ Future<void> _initializeApp() async {
 
   // Set memory limit
   getIt<MemoryManager>().setMemoryLimit(100 * 1024 * 1024);
+
+  // P2-2: 路由注册表模式 —— 所有 feature 依赖注册完成后，注册路由配置。
+  // 必须在 buildAppRouter() 之前完成，部分路由依赖 getIt 中的服务（SyncBloc/PluginBloc）。
+  registerFeatureRoutes();
 }
 
 class DevNoteApp extends StatefulWidget {
@@ -166,10 +184,15 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
   /// 避免第二次 getIt.reset() 抛 StateError。
   Future<void>? _disposeFuture;
 
+  /// P2-2: 路由器在 initState 中构建，确保 RouteRegistry 已完成注册。
+  /// （_initializeApp 在 runApp 之前完成，initState 在 runApp 之后触发）
+  late final GoRouter _appRouter;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _appRouter = buildAppRouter();
   }
 
   @override
@@ -205,6 +228,10 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
     disposeTodoModule();
     // P2-6: 白板模块（无外部资源，仅占位）
     disposeWhiteboardModule();
+    // P2-3: 新增模块释放（逆序）
+    disposeObjectModule();
+    disposeKnowledgeModule();
+    disposeFreeformModule();
     // P1-7: Vault 保险库最后注册，故最先释放（锁定以清除内存中的密码）
     disposeVaultModule();
     // P1-3: 模板系统
@@ -221,6 +248,8 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
     disposeWorkflowModule();
     disposeSyncModule();
     await disposeCore();
+    // P2-2: 清空路由注册表，避免热重载时重复注册
+    RouteRegistry.reset();
     getIt.reset();
   }
 
@@ -235,7 +264,7 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: ThemeMode.system,
-          routerConfig: appRouter,
+          routerConfig: _appRouter,
           locale: locale,
           supportedLocales: LocaleProvider.supportedLocales,
           localizationsDelegates: const [

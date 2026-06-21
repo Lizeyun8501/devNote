@@ -95,6 +95,8 @@ func main() {
 		Metrics: metrics,
 	}))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	// P1 安全修复: 添加安全响应头中间件（原完全缺失）
+	r.Use(middleware.SecurityHeaders())
 	// 修复(P0): 注册 API 版本控制中间件（原已实现但未挂载，为死代码）
 	r.Use(middleware.APIVersionMiddleware(middleware.APIVersionConfig{
 		Required:      false,
@@ -137,18 +139,24 @@ func main() {
 		}
 
 		// Sync routes (protected)
-		sync := api.Group("/sync")
-		sync.Use(middleware.JWTAuth(authService))
-		{
-			sync.POST("/push", syncHandler.Push)
-			sync.POST("/pull", syncHandler.Pull)
-			sync.GET("/status", syncHandler.Status)
-			sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
+	sync := api.Group("/sync")
+	sync.Use(middleware.JWTAuth(authService))
+	// P1 架构修复: 挂载 Idempotency 中间件，防止客户端重试导致重复 Push
+	// 创建多条 SyncRecord 和 NoteSnapshot（原已实现但未挂载，为死代码）
+	sync.Use(middleware.IdempotencyMiddleware(middleware.IdempotencyConfig{
+		Cache:      middleware.NewIdempotencyCache(24*time.Hour, 10000),
+		HeaderName: "Idempotency-Key",
+	}))
+	{
+		sync.POST("/push", syncHandler.Push)
+		sync.POST("/pull", syncHandler.Pull)
+		sync.GET("/status", syncHandler.Status)
+		sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
 
-			// 版本历史
-			sync.GET("/notes/:noteId/history", syncHandler.GetNoteHistory)
-			sync.GET("/notes/:noteId/versions/:version", syncHandler.GetNoteVersion)
-		}
+		// 版本历史
+		sync.GET("/notes/:noteId/history", syncHandler.GetNoteHistory)
+		sync.GET("/notes/:noteId/versions/:version", syncHandler.GetNoteVersion)
+	}
 
 		// Clipper API (protected) —— 网页剪藏扩展入口
 		notes := api.Group("/notes")

@@ -194,6 +194,19 @@ class IncrementalSyncService {
     Uint8List newData, {
     bool encrypt = true,
   }) async {
+    // P0 修复: 服务端未实现增量同步端点（/sync/signatures, /delta, /chunk,
+    // /commit, /abort），调用必然返回 404。在此明确返回失败，避免误导用户。
+    // 后续应在 sync-server 实现这些端点后移除此检查。
+    return const IncrementalSyncResult(
+      success: false,
+      error: '增量同步暂不可用：服务端未实现相关端点，请使用全量同步',
+    );
+  }
+
+  Future<IncrementalSyncResult> _pushIncrementalImpl(
+    Uint8List newData, {
+    bool encrypt = true,
+  }) async {
     try {
       // 加密数据（在增量计算前加密，确保端到端加密语义）
       Uint8List dataToSync;

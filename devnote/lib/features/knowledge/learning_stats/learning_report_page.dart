@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/knowledge/learning_stats/learning_stats_service.dart';
 import 'package:devnote/features/knowledge/learning_stats/widgets/stats_card.dart';
 import 'package:devnote/features/knowledge/learning_stats/widgets/trend_chart.dart';
@@ -11,7 +12,7 @@ class LearningReportPage extends StatefulWidget {
 }
 
 class _LearningReportPageState extends State<LearningReportPage> {
-  final LearningStatsService _service = LearningStatsService();
+  final LearningStatsService _service = getIt<LearningStatsService>();
   LearningStatsSummary? _summary;
   bool _loading = true;
   String _period = 'monthly';

@@ -257,18 +257,21 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 
 // generateToken 签发 HS256 JWT
 //
-// 借鉴 1Password 的"短生命周期 access token"策略：有效期 72 小时。
-// 修复(P0): 在 RegisteredClaims 中设置 Subject = user.ID，
-// 使 business-server 通过标准 JWT "sub" 字段获取用户 ID 成为可能。
-// 同时保留自定义 user_id/username 字段以兼容 sync-server 内部使用。
+// 借鉴 1Password 的"短生命周期 access token"策略。
+// P0 修复: 原有效期 72 小时过长（行业标准 15-30 分钟），一旦泄露攻击窗口巨大。
+// 现改为 30 分钟，依赖 refresh token 续期。
+// 同时添加 iss/aud/jti 声明，支持签发方/受众校验和 token 吊销。
 func (s *AuthService) generateToken(user *model.User) (string, error) {
 	claims := &model.Claims{
 		UserID:   user.ID,
 		Username: user.Username,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(72 * time.Hour)),
+			Issuer:    "devnote-sync-server",
+			Audience:  []string{"devnote-client", "devnote-business-server"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        uuid.New().String(),
 		},
 	}
 
@@ -276,14 +279,15 @@ func (s *AuthService) generateToken(user *model.User) (string, error) {
 	return token.SignedString([]byte(s.cfg.JWTSecret))
 }
 
-// ValidateToken 校验 JWT 签名与有效期
+// ValidateToken 校验 JWT 签名、有效期与受众
+// P0 修复: 增加 iss/aud 校验，防止跨服务 token 重用
 func (s *AuthService) ValidateToken(tokenStr string) (*model.Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &model.Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return []byte(s.cfg.JWTSecret), nil
-	})
+	}, jwt.WithIssuer("devnote-sync-server"), jwt.WithAudience("devnote-client"))
 	if err != nil {
 		return nil, err
 	}
@@ -329,15 +333,18 @@ func generateRandomToken(length int) (string, error) {
 //
 // 借鉴 1Password 的"长生命周期 refresh token"策略：30 天有效期，
 // 同时记录 Revoked 标志位以便主动吊销。
+// P0 修复: 原实现明文存储 token，数据库泄露后可直接使用。
+// 现改为存储 SHA-256 哈希，查询时哈希后比对。
 func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 	token, err := generateRandomToken(32)
 	if err != nil {
 		return "", err
 	}
+	tokenHash := hashToken(token)
 	refreshToken := &model.RefreshToken{
 		ID:        uuid.New().String(),
 		UserID:    userID,
-		Token:     token,
+		Token:     tokenHash,
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour), // 30 days
 		CreatedAt: time.Now(),
 		Revoked:   false,
@@ -348,6 +355,13 @@ func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 	return token, nil
 }
 
+// hashToken 计算 token 的 SHA-256 十六进制哈希
+// P0 修复: Refresh Token 不再明文存储
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
 // RefreshAccessToken 刷新 access token
 //
 // 借鉴 1Password 的"refresh token 轮转（rotation）"：每次刷新都立刻
@@ -355,7 +369,8 @@ func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 // 限制在单次刷新间隔内。
 func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, error) {
 	var rt model.RefreshToken
-	if err := s.db.Where("token = ?", refreshToken).First(&rt).Error; err != nil {
+	// P0 修复: 使用哈希查询，不暴露明文 token
+	if err := s.db.Where("token = ?", hashToken(refreshToken)).First(&rt).Error; err != nil {
 		return "", "", errors.New("invalid refresh token")
 	}
 

@@ -1,5 +1,5 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:get_it/get_it.dart';
+import 'package:devnote/core/di/injection.dart';
 import '../models/todo_model.dart';
 import '../services/todo_service.dart';
 import 'todo_event.dart';
@@ -43,34 +43,55 @@ class TodoBloc extends Bloc<TodoEvent, TodoState> {
   }
 
   Future<void> _onAdd(AddTodoEvent event, Emitter<TodoState> emit) async {
-    await _todoService.addTodo(
-      title: event.title,
-      description: event.description,
-      dueDate: event.dueDate,
-      reminderTime: event.reminderTime,
-      priority: event.priority,
-      repeat: event.repeat,
-    );
-    add(LoadTodos());
+    // P1 架构修复: 添加 try-catch，失败时 emit TodoError 让 UI 感知
+    try {
+      await _todoService.addTodo(
+        title: event.title,
+        description: event.description,
+        dueDate: event.dueDate,
+        reminderTime: event.reminderTime,
+        priority: event.priority,
+        repeat: event.repeat,
+      );
+      add(LoadTodos());
+    } catch (e) {
+      emit(TodoError(e.toString()));
+    }
   }
 
   Future<void> _onUpdate(UpdateTodoEvent event, Emitter<TodoState> emit) async {
-    await _todoService.updateTodo(event.todo);
-    add(LoadTodos());
+    try {
+      await _todoService.updateTodo(event.todo);
+      add(LoadTodos());
+    } catch (e) {
+      emit(TodoError(e.toString()));
+    }
   }
 
   Future<void> _onComplete(CompleteTodo event, Emitter<TodoState> emit) async {
-    await _todoService.completeTodo(event.todoId);
-    add(LoadTodos());
+    try {
+      await _todoService.completeTodo(event.todoId);
+      add(LoadTodos());
+    } catch (e) {
+      emit(TodoError(e.toString()));
+    }
   }
 
   Future<void> _onUncomplete(UncompleteTodo event, Emitter<TodoState> emit) async {
-    await _todoService.uncompleteTodo(event.todoId);
-    add(LoadTodos());
+    try {
+      await _todoService.uncompleteTodo(event.todoId);
+      add(LoadTodos());
+    } catch (e) {
+      emit(TodoError(e.toString()));
+    }
   }
 
   Future<void> _onDelete(DeleteTodo event, Emitter<TodoState> emit) async {
-    await _todoService.deleteTodo(event.todoId);
-    add(LoadTodos());
+    try {
+      await _todoService.deleteTodo(event.todoId);
+      add(LoadTodos());
+    } catch (e) {
+      emit(TodoError(e.toString()));
+    }
   }
 }

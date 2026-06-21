@@ -185,10 +185,13 @@ pub struct DatabaseViewData {
 
 /// 初始化所有引擎 —— 替代原 devnote_init + register_all_handlers
 /// FRB 自动生成 Dart: `Future<void> initEngines()`
-pub fn init_engines() -> Result<(), String> {
-    if let Ok(repo) = SqliteNoteRepository::in_memory() {
-        *NOTE_REPO.lock() = Some(repo);
-    }
+///
+/// P0 修复: 原实现使用 `in_memory()`，FFI 模式下数据重启全部丢失。
+/// 现改为文件持久化，数据库路径通过参数传入，与 Dart 端共享 `devnote.db`。
+pub fn init_engines(db_path: String) -> Result<(), String> {
+    let repo = SqliteNoteRepository::init(&db_path)
+        .map_err(|e| format!("Failed to init persistence: {}", e))?;
+    *NOTE_REPO.lock() = Some(repo);
     *BLOCK_EDITOR.lock() = Some(DefaultBlockEditor::new());
     if let Ok(engine) = devnote_search::SqliteSearchEngine::in_memory() {
         *SEARCH_ENGINE.lock() = Some(engine);

@@ -64,6 +64,10 @@ class SyncService {
   static const String _keyLastSyncTime = 'sync_last_sync_time';
   static const String _keyPendingChanges = 'sync_pending_changes';
 
+  // P0 修复: 新增设备 ID 和同步版本号的持久化键
+  static const String _keyDeviceId = 'sync_device_id';
+  static const String _keyLastSyncVersion = 'sync_last_version';
+
   final E2ECryptoService _cryptoService = getIt<E2ECryptoService>();
   final IncrementalSyncService _incrementalSync = getIt<IncrementalSyncService>();
 
@@ -343,26 +347,76 @@ class SyncService {
     return prefs.getString(_keyAuthToken);
   }
 
+  /// 获取设备 ID，首次调用时生成并持久化
+  /// P0 修复: 服务端 PushRequest/PullRequest 要求 device_id 字段
+  Future<String> _getDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var deviceId = prefs.getString(_keyDeviceId);
+    if (deviceId == null || deviceId.isEmpty) {
+      // 生成 UUID v4 作为设备标识
+      deviceId = _generateUuid();
+      await prefs.setString(_keyDeviceId, deviceId);
+    }
+    return deviceId;
+  }
+
+  /// 获取上次同步的服务端版本号
+  Future<int> _getLastSyncVersion() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_keyLastSyncVersion) ?? 0;
+  }
+
+  /// 更新上次同步的服务端版本号
+  Future<void> _setLastSyncVersion(int version) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyLastSyncVersion, version);
+  }
+
+  /// 简单 UUID v4 生成（避免引入额外依赖）
+  String _generateUuid() {
+    final random = DateTime.now().microsecondsSinceEpoch;
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    return '${timestamp.toRadixString(16)}-${random.toRadixString(16)}-${(random ^ timestamp).toRadixString(16)}';
+  }
+
   /// 执行推送：将加密后的数据通过 POST 请求发送到同步服务器
   ///
+  /// P0 修复: 原实现发送 `application/octet-stream` 原始字节，但服务端
+  /// `SyncHandler.Push` 期望 JSON 结构 `{device_id, records: [{note_id, action, version, payload}]}`。
+  /// 两端协议完全不匹配，任何 Push 都会 400 失败。
+  /// 现改为发送 JSON 结构化请求，加密后的数据作为 records[].payload 字段。
+  ///
   /// 请求地址: POST /api/v1/sync/push
-  /// 请求头: Content-Type: application/octet-stream, Authorization: Bearer {token}
-  /// 请求体: 加密后的 Uint8List 数据
-  /// 网络异常或服务端非 2xx 响应时抛出异常，由上层 pushChanges 捕获处理
+  /// 请求头: Content-Type: application/json, Authorization: Bearer {token}
+  /// 请求体: PushRequest JSON（加密 payload 作为 base64 字符串）
   Future<void> _performPush(Uint8List data) async {
     final serverUrl = await _getServerUrl();
     final token = await _getAuthToken();
+    final deviceId = await _getDeviceId();
 
     final uri = Uri.parse('$serverUrl/api/v1/sync/push');
     final headers = <String, String>{
-      'Content-Type': 'application/octet-stream',
+      'Content-Type': 'application/json',
     };
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
 
+    // 构造与服务端 PushRequest 对齐的 JSON 结构
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'records': [
+        {
+          'note_id': 'sync-batch',
+          'action': 'update',
+          'version': 0,
+          'payload': base64Encode(data),
+        }
+      ],
+    });
+
     final response = await http
-        .post(uri, headers: headers, body: data)
+        .post(uri, headers: headers, body: body)
         .timeout(const Duration(seconds: 30));
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
@@ -376,22 +430,35 @@ class SyncService {
 
   /// 执行拉取：从同步服务器获取数据
   ///
-  /// 请求地址: GET /api/v1/sync/pull
-  /// 请求头: Authorization: Bearer {token}
-  /// 返回: 服务端响应的原始字节数据（Uint8List），无新数据时返回 null
-  /// 网络异常或服务端非 2xx 响应时抛出异常，由上层 pullChanges 捕获处理
+  /// P0 修复: 原实现用 GET 请求期望 octet-stream 响应，但服务端
+  /// `SyncHandler.Pull` 期望 POST + JSON PullRequest `{device_id, since_version}`，
+  /// 返回 PullResponse JSON `{records, latest_version, has_more, limit}`。
+  /// 现改为 POST JSON 请求，从 records 中提取 payload 解密。
+  ///
+  /// 请求地址: POST /api/v1/sync/pull
+  /// 请求头: Content-Type: application/json, Authorization: Bearer {token}
+  /// 返回: 服务端响应中聚合后的原始字节数据（Uint8List），无新数据时返回 null
   Future<Uint8List?> _performPull() async {
     final serverUrl = await _getServerUrl();
     final token = await _getAuthToken();
+    final deviceId = await _getDeviceId();
 
     final uri = Uri.parse('$serverUrl/api/v1/sync/pull');
-    final headers = <String, String>{};
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
 
+    final sinceVersion = await _getLastSyncVersion();
+    final body = jsonEncode({
+      'device_id': deviceId,
+      'since_version': sinceVersion,
+    });
+
     final response = await http
-        .get(uri, headers: headers)
+        .post(uri, headers: headers, body: body)
         .timeout(const Duration(seconds: 30));
 
     if (response.statusCode == 204) {
@@ -400,8 +467,29 @@ class SyncService {
     }
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      // 拉取成功，返回原始字节数据
-      return response.bodyBytes;
+      // 拉取成功，解析 PullResponse JSON
+      final resp = jsonDecode(response.body) as Map<String, dynamic>;
+      final records = (resp['records'] as List?) ?? [];
+      if (records.isEmpty) {
+        return null;
+      }
+      // 聚合所有 record 的 payload（base64 编码的加密数据）
+      final payloadBytes = <int>[];
+      for (final record in records) {
+        final payload = record['payload'] as String?;
+        if (payload != null && payload.isNotEmpty) {
+          payloadBytes.addAll(base64Decode(payload));
+        }
+      }
+      // 更新本地最新版本号
+      final latestVersion = resp['latest_version'];
+      if (latestVersion != null) {
+        await _setLastSyncVersion((latestVersion as num).toInt());
+      }
+      if (payloadBytes.isEmpty) {
+        return null;
+      }
+      return Uint8List.fromList(payloadBytes);
     }
 
     // 服务端返回错误，抛出异常

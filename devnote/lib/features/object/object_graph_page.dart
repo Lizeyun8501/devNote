@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/object/object_service.dart';
 import 'package:devnote/features/object/widgets/object_node_widget.dart';
 import 'package:devnote/features/object/widgets/object_edge_widget.dart';
@@ -11,7 +12,7 @@ class ObjectGraphPage extends StatefulWidget {
 }
 
 class _ObjectGraphPageState extends State<ObjectGraphPage> {
-  final ObjectService _service = ObjectService();
+  final ObjectService _service = getIt<ObjectService>();
   List<ObjectTypeModel> _objectTypes = [];
   List<ObjectModel> _objects = [];
   String? _selectedTypeId;
