@@ -70,21 +70,25 @@ class SqliteFolderRepository implements FolderRepository {
 
   @override
   Future<void> deleteFolder(String id) async {
-    final db = await _dbHelper.database;
-    // 修复：无论 FFI 是否可用，都先执行级联删除逻辑
-    // 原代码 FFI 路径只调用 _dispatch.delete，不收集子文件夹和笔记，
-    // 导致 FFI 模式下删除文件夹时子文件夹和笔记成为孤儿数据
-    // 现在统一：先递归收集所有子文件夹 → 删除所有关联笔记 → 删除所有文件夹
-    final allFolderIds = await _collectSubfolderIds(db, id);
-    allFolderIds.add(id);
-
-    // 删除所有关联文件夹中的笔记
-    for (final folderId in allFolderIds) {
-      await db.delete('notes', where: 'folder_id = ?', whereArgs: [folderId]);
-    }
-
+    // Phase 2 架构修复: 消除跨库操作。
+    // 原问题: 无论 FFI 是否可用，都先用 sqflite 收集子文件夹和删除笔记，
+    // 再用 FFI 删除文件夹。FFI 模式下文件夹在 Rust DB，sqflite 查不到子文件夹，
+    // 导致孤儿数据和关联笔记未被清理。
+    // 修复: FFI 模式下全部操作走 Rust 持久层；sqflite 模式下全部走 Dart 持久层。
     if (_useFFI) {
-      // FFI 路径：逐个删除文件夹（按最深层优先避免 FK 冲突）
+      final allFolderIds = await _collectSubfolderIdsViaFFI(id);
+      allFolderIds.add(id);
+
+      // 删除每个文件夹中的笔记（FFI 路径）
+      for (final folderId in allFolderIds) {
+        final notes = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
+        for (final note in notes) {
+          final noteId = note['id'] as String;
+          await _dispatch.delete(entity: 'note', id: noteId);
+        }
+      }
+
+      // 删除所有文件夹（按最深层优先避免 FK 冲突）
       for (final folderId in allFolderIds.reversed) {
         await _dispatch.delete(entity: 'folder', id: folderId);
       }
@@ -92,7 +96,16 @@ class SqliteFolderRepository implements FolderRepository {
     }
 
     developer.log('FFI not available, falling back to sqflite for deleteFolder', level: 900);
-    // SQLite 路径：批量删除所有文件夹
+    final db = await _dbHelper.database;
+    final allFolderIds = await _collectSubfolderIdsViaSqflite(db, id);
+    allFolderIds.add(id);
+
+    // 删除所有关联文件夹中的笔记
+    for (final folderId in allFolderIds) {
+      await db.delete('notes', where: 'folder_id = ?', whereArgs: [folderId]);
+    }
+
+    // 批量删除所有文件夹
     await db.delete(
       'folders',
       where: 'id IN (${List.filled(allFolderIds.length, '?').join(',')})',
@@ -100,8 +113,20 @@ class SqliteFolderRepository implements FolderRepository {
     );
   }
 
-  /// 递归收集指定文件夹的所有子文件夹 ID
-  Future<List<String>> _collectSubfolderIds(dynamic db, String parentId) async {
+  /// 通过 FFI 递归收集指定文件夹的所有子文件夹 ID
+  Future<List<String>> _collectSubfolderIdsViaFFI(String parentId) async {
+    final children = await _dispatch.list(entity: 'folder', filter: {'parent_id': parentId});
+    final ids = <String>[];
+    for (final child in children) {
+      final childId = child['id'] as String;
+      ids.add(childId);
+      ids.addAll(await _collectSubfolderIdsViaFFI(childId));
+    }
+    return ids;
+  }
+
+  /// 通过 sqflite 递归收集指定文件夹的所有子文件夹 ID
+  Future<List<String>> _collectSubfolderIdsViaSqflite(dynamic db, String parentId) async {
     final children = await db.query(
       'folders',
       columns: ['id'],
@@ -112,7 +137,7 @@ class SqliteFolderRepository implements FolderRepository {
     for (final row in children) {
       final childId = row['id'] as String;
       ids.add(childId);
-      ids.addAll(await _collectSubfolderIds(db, childId));
+      ids.addAll(await _collectSubfolderIdsViaSqflite(db, childId));
     }
     return ids;
   }
@@ -125,8 +150,11 @@ class SqliteFolderRepository implements FolderRepository {
       if (folder.parentId == folder.id) {
         throw ArgumentError('不能将文件夹的父级设为其自身');
       }
-      final db = await _dbHelper.database;
-      final childIds = await _collectSubfolderIds(db, folder.id);
+      // Phase 2 架构修复: 循环引用检查必须与更新操作使用同一持久层，
+      // 否则 FFI 模式下 sqflite 查不到 Rust DB 中的子文件夹，检查失效。
+      final childIds = _useFFI
+          ? await _collectSubfolderIdsViaFFI(folder.id)
+          : await _collectSubfolderIdsViaSqflite(await _dbHelper.database, folder.id);
       if (childIds.contains(folder.parentId)) {
         throw ArgumentError('不能将文件夹移动到其子文件夹中，这会造成循环引用');
       }

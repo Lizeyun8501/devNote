@@ -837,7 +837,9 @@ class RealtimeCollabService {
             _presences[state.deviceId] = state;
             _presenceController.add(state);
           }
-        } catch (_) {}
+        } catch (e) {
+          AppLogger.w(_tag, '解析 peer presence 数据失败，跳过: $e');
+        }
       }
     }
     _updateStatus(RealtimeCollabStatus.connected);

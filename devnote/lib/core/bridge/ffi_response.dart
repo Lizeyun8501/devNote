@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
+
 /// FFI C 结构体 —— 用于 native 库返回的响应
 ///
 /// 字段顺序与 Rust 端 `devnote-ffi/src/lib.rs` 的 `#[repr(C)] FFIResponse`

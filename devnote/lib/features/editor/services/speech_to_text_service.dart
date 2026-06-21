@@ -9,7 +9,7 @@ import 'package:devnote/core/di/injection.dart';
 /// 优先通过 FFI 调用 Rust 端 whisper-rs 进行本地转写；
 /// FFI 不可用时降级为平台原生 API（Android SpeechRecognizer / iOS SFSpeechRecognizer）。
 class SpeechToTextService {
-  final FfiBridge _ffiBridge = getIt<FfiBridge>();
+  final FFIBridge _ffiBridge = getIt<FFIBridge>();
 
   /// 将音频文件转写为文字
   ///

@@ -2,8 +2,6 @@ import 'package:get_it/get_it.dart';
 
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/grpc_bridge.dart';
-import 'package:devnote/core/bridge/websocket_bridge.dart';
 import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
@@ -15,6 +13,8 @@ import 'package:devnote/core/services/locale_service.dart';
 /// core 层仅注册 core 层依赖。
 /// features 层依赖由各自的 *_module.dart register 函数注册，由 main.dart 调用。
 /// 此文件不导入任何 features/* 路径，确保 core → features 无反向依赖。
+///
+/// Phase 1 死代码清理: 移除 GrpcBridge/WebSocketBridge（注册但从未被业务代码调用）。
 
 final GetIt getIt = GetIt.instance;
 
@@ -23,8 +23,6 @@ final GetIt getIt = GetIt.instance;
 Future<void> setupDependencies() async {
   // Core bridges (eager singletons)
   getIt.registerSingleton<FFIBridge>(FFIBridge());
-  getIt.registerSingleton<GrpcBridge>(GrpcBridge());
-  getIt.registerSingleton<WebSocketBridge>(WebSocketBridge());
 
   // Dispatch (depends on bridges)
   getIt.registerSingleton<Dispatch>(Dispatch());
@@ -73,9 +71,6 @@ Future<void> disposeCore() async {
   // 释放核心桥接层（逆序）
   if (getIt.isRegistered<Dispatch>()) {
     getIt<Dispatch>().dispose();
-  }
-  if (getIt.isRegistered<WebSocketBridge>()) {
-    getIt<WebSocketBridge>().dispose();
   }
   if (getIt.isRegistered<FFIBridge>()) {
     getIt<FFIBridge>().dispose();
