@@ -10,18 +10,24 @@ import (
 
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // EmailHandler 处理邮件转笔记相关的 HTTP 请求
 type EmailHandler struct {
 	emailService  *service.EmailService
 	webhookSecret string // Webhook HMAC 验证密钥
+	logger        *zap.Logger
 }
 
-func NewEmailHandler(emailService *service.EmailService, webhookSecret string) *EmailHandler {
+func NewEmailHandler(emailService *service.EmailService, webhookSecret string, logger *zap.Logger) *EmailHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &EmailHandler{
 		emailService:  emailService,
 		webhookSecret: webhookSecret,
+		logger:        logger,
 	}
 }
 
@@ -76,7 +82,7 @@ func (h *EmailHandler) IncomingEmailWebhook(c *gin.Context) {
 	}
 
 	if err := h.emailService.ProcessIncomingEmail(req.To, req.From, req.Subject, req.TextBody, req.HTMLBody); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -92,7 +98,7 @@ func (h *EmailHandler) GetUserAlias(c *gin.Context) {
 		// 别名不存在，创建新别名
 		newAlias, err := h.emailService.GenerateAlias(userID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			respondInternalError(c, h.logger, "internal server error", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -123,7 +129,7 @@ func (h *EmailHandler) RegenerateAlias(c *gin.Context) {
 	// 生成新别名
 	newAlias, err := h.emailService.GenerateAlias(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 

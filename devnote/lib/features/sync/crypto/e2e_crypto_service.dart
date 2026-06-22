@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/security/secure_key_storage.dart';
 
 enum E2ECryptoStatus {
@@ -356,7 +357,8 @@ class E2ECryptoService {
       );
 
       return true;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.w('E2ECryptoService', 'Failed to restore E2E crypto backup', error: e);
       return false;
     }
   }
@@ -438,7 +440,8 @@ class E2ECryptoService {
       final cipher = GCMBlockCipher(AESEngine())
         ..init(false, AEADParameters(KeyParameter(key), 128, nonce, null));
       return cipher.process(ciphertextWithTag);
-    } catch (_) {
+    } catch (e) {
+      AppLogger.w('E2ECryptoService', 'Failed to decrypt data with key', error: e);
       return null;
     }
   }
@@ -490,8 +493,9 @@ class E2ECryptoService {
       input.add(scalar);
       input.add(point);
       return digest.process(input.toBytes());
-    } catch (_) {
+    } catch (e) {
       // 兜底：返回私钥的 SHA-256 作为伪公钥
+      AppLogger.w('E2ECryptoService', 'X25519 public key derivation failed, falling back to scalar hash', error: e);
       final digest = SHA256Digest();
       return digest.process(scalar);
     }

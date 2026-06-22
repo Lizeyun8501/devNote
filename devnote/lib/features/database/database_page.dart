@@ -232,36 +232,40 @@ class _DatabaseViewState extends State<_DatabaseView> {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SafeArea(
-        child: ListView(
+        child: ListView.builder(
           shrinkWrap: true,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                '选择记录查看评论',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const Divider(height: 1),
-            ...database.rows.map((row) {
-              String title = '未命名';
-              if (titleField != null) {
-                final cell = row.cells
-                    .where((c) => c.fieldId == titleField.id)
-                    .firstOrNull;
-                title = cell?.value?.toString() ?? '未命名';
-              }
-              return ListTile(
-                leading: const Icon(Icons.note),
-                title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: const Icon(Icons.comment),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  _showCommentPanel(context, row.id);
-                },
+          itemCount: database.rows.length + 2,
+          itemBuilder: (ctx, index) {
+            if (index == 0) {
+              return const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  '选择记录查看评论',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
               );
-            }),
-          ],
+            }
+            if (index == 1) {
+              return const Divider(height: 1);
+            }
+            final row = database.rows[index - 2];
+            String title = '未命名';
+            if (titleField != null) {
+              final cell = row.cells
+                  .where((c) => c.fieldId == titleField.id)
+                  .firstOrNull;
+              title = cell?.value?.toString() ?? '未命名';
+            }
+            return ListTile(
+              leading: const Icon(Icons.note),
+              title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              trailing: const Icon(Icons.comment),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _showCommentPanel(context, row.id);
+              },
+            );
+          },
         ),
       ),
     );

@@ -70,7 +70,11 @@ func (s *TagService) Update(userID string, tag *model.TagMeta) (*model.TagMeta, 
 	if err != nil {
 		return nil, fmt.Errorf("update tag: %w", err)
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return nil, fmt.Errorf("tag not found: %s", tag.ID)
 	}
 	tag.UserID = userID

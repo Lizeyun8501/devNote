@@ -42,8 +42,8 @@ func Load() *Config {
 		// 可被预测伪造 token。现改为每次启动生成随机密钥（仅开发环境）。
 		// 注意：随机密钥会导致重启后所有 token 失效，开发环境可接受。
 		jwtSecret = generateRandomSecret(32)
-		log.Println("WARNING: Generated random JWT_SECRET for development. "
-			+ "Set JWT_SECRET env var for consistent sessions.")
+		log.Println("WARNING: Generated random JWT_SECRET for development. " +
+			"Set JWT_SECRET env var for consistent sessions.")
 	}
 
 	// P1 修复 (SEC-06): 校验密钥长度至少 32 字节

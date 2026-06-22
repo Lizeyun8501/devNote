@@ -37,7 +37,7 @@ func (h *FolderHandler) Create(c *gin.Context) {
 	result, err := h.svc.Create(userID, &req)
 	if err != nil {
 		h.logger.Error("create folder failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusCreated, model.SuccessResponse{Data: result})
@@ -79,7 +79,7 @@ func (h *FolderHandler) Update(c *gin.Context) {
 	result, err := h.svc.Update(userID, &req)
 	if err != nil {
 		h.logger.Error("update folder failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -97,7 +97,7 @@ func (h *FolderHandler) Delete(c *gin.Context) {
 	cascade, _ := strconv.ParseBool(c.DefaultQuery("cascade", "false"))
 	if err := h.svc.Delete(userID, id, cascade); err != nil {
 		h.logger.Error("delete folder failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": id}})
@@ -115,7 +115,7 @@ func (h *FolderHandler) List(c *gin.Context) {
 	result, err := h.svc.List(userID, parentID)
 	if err != nil {
 		h.logger.Error("list folders failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -133,7 +133,7 @@ func (h *FolderHandler) GetTree(c *gin.Context) {
 	tree, err := h.svc.GetTree(userID, parentID)
 	if err != nil {
 		h.logger.Error("get folder tree failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: tree})
@@ -161,7 +161,7 @@ func (h *FolderHandler) MoveFolder(c *gin.Context) {
 	}
 	if err := h.svc.MoveFolder(userID, id, req.NewParentID); err != nil {
 		h.logger.Error("move folder failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"moved": true}})
@@ -186,7 +186,7 @@ func (h *FolderHandler) CopyFolder(c *gin.Context) {
 	result, err := h.svc.CopyFolder(userID, id, req.NewParentID)
 	if err != nil {
 		h.logger.Error("copy folder failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -208,7 +208,7 @@ func (h *FolderHandler) ResolvePath(c *gin.Context) {
 	path, err := h.svc.ResolvePath(userID, id)
 	if err != nil {
 		h.logger.Error("resolve path failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"path": path}})
@@ -233,7 +233,7 @@ func (h *FolderHandler) GetNotesByFolder(c *gin.Context) {
 	result, err := h.svc.GetNotesByFolder(userID, id, page, pageSize)
 	if err != nil {
 		h.logger.Error("get notes by folder failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, result)

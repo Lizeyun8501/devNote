@@ -7,14 +7,19 @@ import (
 
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type SyncHandler struct {
 	syncService *service.SyncService
+	logger      *zap.Logger
 }
 
-func NewSyncHandler(syncService *service.SyncService) *SyncHandler {
-	return &SyncHandler{syncService: syncService}
+func NewSyncHandler(syncService *service.SyncService, logger *zap.Logger) *SyncHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &SyncHandler{syncService: syncService, logger: logger}
 }
 
 func (h *SyncHandler) Push(c *gin.Context) {
@@ -32,7 +37,7 @@ func (h *SyncHandler) Push(c *gin.Context) {
 
 	resp, err := h.syncService.Push(userID, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -52,14 +57,20 @@ func (h *SyncHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	if limit <= 0 || limit > 1000 {
-		limit = 100 // Default page size
+	limitStr := c.Query("limit")
+	limit := 100 // Default page size
+	if limitStr != "" {
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil || parsed <= 0 || parsed > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = parsed
 	}
 
 	resp, err := h.syncService.Pull(userID, &req, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -80,7 +91,7 @@ func (h *SyncHandler) Status(c *gin.Context) {
 
 	status, err := h.syncService.GetStatus(userID, deviceID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -101,7 +112,7 @@ func (h *SyncHandler) ResolveConflict(c *gin.Context) {
 	}
 
 	if err := h.syncService.ResolveConflict(userID, &resolution); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -118,11 +129,15 @@ func (h *SyncHandler) GetNoteHistory(c *gin.Context) {
 	noteID := c.Param("noteId")
 
 	limitStr := c.DefaultQuery("limit", "50")
-	limit, _ := strconv.Atoi(limitStr)
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 || limit > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+		return
+	}
 
 	snapshots, err := h.syncService.GetNoteHistory(userID, noteID, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -156,7 +171,11 @@ func (h *SyncHandler) GetNoteVersion(c *gin.Context) {
 	}
 	noteID := c.Param("noteId")
 	versionStr := c.Param("version")
-	version, _ := strconv.ParseInt(versionStr, 10, 64)
+	version, err := strconv.ParseInt(versionStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version"})
+		return
+	}
 
 	snapshot, err := h.syncService.GetNoteVersion(userID, noteID, version)
 	if err != nil {

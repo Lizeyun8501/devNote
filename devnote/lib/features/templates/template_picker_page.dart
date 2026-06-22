@@ -68,14 +68,16 @@ class _TemplatePickerPageState extends State<TemplatePickerPage> {
                 Container(
                   height: 48,
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: ListView(
+                  child: ListView.builder(
                     scrollDirection: Axis.horizontal,
-                    children: [
-                      _buildCategoryChip(null, '全部'),
-                      ...TemplateCategory.values.map(
-                        (cat) => _buildCategoryChip(cat, cat.displayName),
-                      ),
-                    ],
+                    itemCount: TemplateCategory.values.length + 1,
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return _buildCategoryChip(null, '全部');
+                      }
+                      final cat = TemplateCategory.values[index - 1];
+                      return _buildCategoryChip(cat, cat.displayName);
+                    },
                   ),
                 ),
                 // 模板列表

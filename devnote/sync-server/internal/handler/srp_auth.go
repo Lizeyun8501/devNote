@@ -6,16 +6,21 @@ import (
 
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // SRPAuthHandler handles SRP zero-knowledge authentication endpoints.
 type SRPAuthHandler struct {
 	authService *service.AuthService
+	logger      *zap.Logger
 }
 
 // NewSRPAuthHandler creates a new SRP auth handler.
-func NewSRPAuthHandler(authService *service.AuthService) *SRPAuthHandler {
-	return &SRPAuthHandler{authService: authService}
+func NewSRPAuthHandler(authService *service.AuthService, logger *zap.Logger) *SRPAuthHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &SRPAuthHandler{authService: authService, logger: logger}
 }
 
 // SRPRegisterRequest represents the request to register with SRP.
@@ -44,10 +49,10 @@ type SRPVerifyRequest struct {
 
 // SRPVerifyResponse represents the server's proof + session token.
 type SRPVerifyResponse struct {
-	M2          string `json:"M2"`
-	Token       string `json:"token"`
-	UserID      string `json:"user_id"`
-	Username    string `json:"username"`
+	M2       string `json:"M2"`
+	Token    string `json:"token"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
 }
 
 // Register handles SRP-based user registration.

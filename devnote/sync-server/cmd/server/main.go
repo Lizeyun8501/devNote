@@ -79,16 +79,16 @@ func main() {
 	}
 
 	// Initialize handlers
-	authHandler := handler.NewAuthHandler(authService)
-	srpAuthHandler := handler.NewSRPAuthHandler(authService)
-	syncHandler := handler.NewSyncHandler(syncService)
+	authHandler := handler.NewAuthHandler(authService, logger)
+	srpAuthHandler := handler.NewSRPAuthHandler(authService, logger)
+	syncHandler := handler.NewSyncHandler(syncService, logger)
 	healthHandler := handler.NewHealthHandler()
 	realtimeHandler := handler.NewRealtimeHandler(authService, logger)
 	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader
 	handler.SetupCheckOrigin(cfg.AllowedOrigins)
-	clipperHandler := handler.NewClipperHandler(syncService)
-	shareHandler := handler.NewShareHandler(shareService)
-	emailHandler := handler.NewEmailHandler(emailService, cfg.EmailWebhookSecret)
+	clipperHandler := handler.NewClipperHandler(syncService, logger)
+	shareHandler := handler.NewShareHandler(shareService, logger)
+	emailHandler := handler.NewEmailHandler(emailService, cfg.EmailWebhookSecret, logger)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -145,24 +145,24 @@ func main() {
 		}
 
 		// Sync routes (protected)
-	sync := api.Group("/sync")
-	sync.Use(middleware.JWTAuth(authService))
-	// P1 架构修复: 挂载 Idempotency 中间件，防止客户端重试导致重复 Push
-	// 创建多条 SyncRecord 和 NoteSnapshot（原已实现但未挂载，为死代码）
-	sync.Use(middleware.IdempotencyMiddleware(middleware.IdempotencyConfig{
-		Cache:      middleware.NewIdempotencyCache(24*time.Hour, 10000),
-		HeaderName: "Idempotency-Key",
-	}))
-	{
-		sync.POST("/push", syncHandler.Push)
-		sync.POST("/pull", syncHandler.Pull)
-		sync.GET("/status", syncHandler.Status)
-		sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
+		sync := api.Group("/sync")
+		sync.Use(middleware.JWTAuth(authService))
+		// P1 架构修复: 挂载 Idempotency 中间件，防止客户端重试导致重复 Push
+		// 创建多条 SyncRecord 和 NoteSnapshot（原已实现但未挂载，为死代码）
+		sync.Use(middleware.IdempotencyMiddleware(middleware.IdempotencyConfig{
+			Cache:      middleware.NewIdempotencyCache(24*time.Hour, 10000),
+			HeaderName: "Idempotency-Key",
+		}))
+		{
+			sync.POST("/push", syncHandler.Push)
+			sync.POST("/pull", syncHandler.Pull)
+			sync.GET("/status", syncHandler.Status)
+			sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
 
-		// 版本历史
-		sync.GET("/notes/:noteId/history", syncHandler.GetNoteHistory)
-		sync.GET("/notes/:noteId/versions/:version", syncHandler.GetNoteVersion)
-	}
+			// 版本历史
+			sync.GET("/notes/:noteId/history", syncHandler.GetNoteHistory)
+			sync.GET("/notes/:noteId/versions/:version", syncHandler.GetNoteVersion)
+		}
 
 		// Clipper API (protected) —— 网页剪藏扩展入口
 		notes := api.Group("/notes")

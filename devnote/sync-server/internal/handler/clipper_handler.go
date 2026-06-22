@@ -8,15 +8,20 @@ import (
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // ClipperHandler 处理网页剪藏扩展发起的剪藏请求。
 type ClipperHandler struct {
 	syncService *service.SyncService
+	logger      *zap.Logger
 }
 
-func NewClipperHandler(syncService *service.SyncService) *ClipperHandler {
-	return &ClipperHandler{syncService: syncService}
+func NewClipperHandler(syncService *service.SyncService, logger *zap.Logger) *ClipperHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &ClipperHandler{syncService: syncService, logger: logger}
 }
 
 // ClipRequest 剪藏请求
@@ -65,7 +70,7 @@ func (h *ClipperHandler) Clip(c *gin.Context) {
 	}
 	contentJSON, err := json.Marshal(noteContent)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode note content: " + err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -83,14 +88,14 @@ func (h *ClipperHandler) Clip(c *gin.Context) {
 	}
 
 	if _, err := h.syncService.Push(userID, pushReq); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save clip: " + err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
 	// PushResponse 不返回每条 record 的版本号，因此查询实际分配到的版本。
 	version, err := h.syncService.GetNoteLatestVersion(userID, noteID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query clip version: " + err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 

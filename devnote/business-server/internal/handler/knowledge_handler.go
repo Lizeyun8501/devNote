@@ -48,7 +48,7 @@ func (h *KnowledgeHandler) CreateRelation(c *gin.Context) {
 	result, err := h.svc.CreateRelation(userID, req.SourceNoteID, req.TargetNoteID, req.RelationType, req.Weight)
 	if err != nil {
 		h.logger.Error("create knowledge relation failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusCreated, model.SuccessResponse{Data: result})
@@ -64,7 +64,7 @@ func (h *KnowledgeHandler) DeleteRelation(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.svc.DeleteRelation(userID, id); err != nil {
 		h.logger.Error("delete knowledge relation failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": id}})
@@ -81,7 +81,7 @@ func (h *KnowledgeHandler) GetRelations(c *gin.Context) {
 	relations, err := h.svc.GetRelations(userID, noteID)
 	if err != nil {
 		h.logger.Error("get relations failed", zap.String("note_id", noteID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: relations})
@@ -101,7 +101,7 @@ func (h *KnowledgeHandler) ComputeEdges(c *gin.Context) {
 	edges, err := h.svc.ComputeGraphEdges(userID)
 	if err != nil {
 		h.logger.Error("compute graph edges failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: edges})
@@ -117,7 +117,7 @@ func (h *KnowledgeHandler) ComputeMetrics(c *gin.Context) {
 	metrics, err := h.svc.ComputeMetrics(userID)
 	if err != nil {
 		h.logger.Error("compute graph metrics failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: metrics})
@@ -134,7 +134,7 @@ func (h *KnowledgeHandler) FindOrphans(c *gin.Context) {
 	orphans, err := h.svc.FindOrphanNotes(userID)
 	if err != nil {
 		h.logger.Error("find orphan notes failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: orphans})
@@ -150,7 +150,7 @@ func (h *KnowledgeHandler) ComputeCoverage(c *gin.Context) {
 	cov, err := h.svc.ComputeCoverage(userID)
 	if err != nil {
 		h.logger.Error("compute coverage failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: cov})
@@ -173,7 +173,7 @@ func (h *KnowledgeHandler) SuggestRelated(c *gin.Context) {
 	suggestions, err := h.svc.SuggestRelatedNotes(userID, noteID, limit)
 	if err != nil {
 		h.logger.Error("suggest related failed", zap.String("note_id", noteID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: suggestions})

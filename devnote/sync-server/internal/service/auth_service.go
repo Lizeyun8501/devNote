@@ -105,6 +105,9 @@ func (s *AuthService) Register(username, password string) (*model.User, error) {
 	}
 
 	if err := s.db.Create(user).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, errors.New("username already exists")
+		}
 		return nil, err
 	}
 
@@ -141,6 +144,9 @@ func (s *AuthService) RegisterWithSRP(username, password string) (*model.User, e
 	}
 
 	if err := s.db.Create(user).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, errors.New("username already exists")
+		}
 		return nil, err
 	}
 

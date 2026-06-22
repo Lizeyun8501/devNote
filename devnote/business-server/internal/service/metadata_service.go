@@ -87,7 +87,11 @@ func (s *MetadataService) Update(userID string, meta *model.NoteMeta) (*model.No
 	if err != nil {
 		return nil, fmt.Errorf("update note meta: %w", err)
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return nil, fmt.Errorf("note meta not found: %s", meta.ID)
 	}
 	meta.UserID = userID

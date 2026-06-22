@@ -6,14 +6,19 @@ import (
 
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type ShareHandler struct {
 	shareService *service.ShareService
+	logger       *zap.Logger
 }
 
-func NewShareHandler(shareService *service.ShareService) *ShareHandler {
-	return &ShareHandler{shareService: shareService}
+func NewShareHandler(shareService *service.ShareService, logger *zap.Logger) *ShareHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &ShareHandler{shareService: shareService, logger: logger}
 }
 
 type CreateShareRequest struct {
@@ -46,7 +51,7 @@ func (h *ShareHandler) CreateShare(c *gin.Context) {
 
 	share, err := h.shareService.CreateShare(userID, req.NoteID, req.Title, req.Content, req.Password, expiresAt)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -70,7 +75,7 @@ func (h *ShareHandler) ListShares(c *gin.Context) {
 
 	shares, err := h.shareService.ListUserShares(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"shares": shares})
@@ -86,7 +91,7 @@ func (h *ShareHandler) DeleteShare(c *gin.Context) {
 	shareID := c.Param("shareId")
 
 	if err := h.shareService.DeleteShare(userID, shareID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
