@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'rust-core/**'
+      - 'devnote/rust-core/**'
       - '.github/workflows/rust-ci.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'rust-core/**'
+      - 'devnote/rust-core/**'
       - '.github/workflows/rust-ci.yml'
 
 env:
@@ -22,7 +22,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: rust-core
+        working-directory: devnote/rust-core
 
     steps:
       - name: Checkout repository
@@ -36,7 +36,7 @@ jobs:
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust-core
+          workspaces: devnote/rust-core
 
       - name: Check formatting
         run: cargo fmt --all -- --check

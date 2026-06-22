@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'sync-server/**'
-      - 'business-server/**'
+      - 'devnote/sync-server/**'
+      - 'devnote/business-server/**'
       - '.github/workflows/go-ci.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'sync-server/**'
-      - 'business-server/**'
+      - 'devnote/sync-server/**'
+      - 'devnote/business-server/**'
       - '.github/workflows/go-ci.yml'
 
 jobs:
@@ -21,8 +21,8 @@ jobs:
     strategy:
       matrix:
         dir:
-          - sync-server
-          - business-server
+          - devnote/sync-server
+          - devnote/business-server
 
     defaults:
       run:

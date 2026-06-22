@@ -4,24 +4,27 @@ on:
   push:
     branches: [main]
     paths:
-      - 'lib/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'analysis_options.yaml'
+      - 'devnote/lib/**'
+      - 'devnote/pubspec.yaml'
+      - 'devnote/pubspec.lock'
+      - 'devnote/analysis_options.yaml'
       - '.github/workflows/flutter-ci.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'lib/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'analysis_options.yaml'
+      - 'devnote/lib/**'
+      - 'devnote/pubspec.yaml'
+      - 'devnote/pubspec.lock'
+      - 'devnote/analysis_options.yaml'
       - '.github/workflows/flutter-ci.yml'
 
 jobs:
   build:
     name: Flutter CI
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: devnote
 
     steps:
       - name: Checkout repository
