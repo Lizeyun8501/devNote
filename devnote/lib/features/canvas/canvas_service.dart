@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:uuid/uuid.dart';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/features/canvas/models/ink_stroke.dart';
 
-enum NodeType { note, image, file, link, group }
+enum NodeType { note, image, file, link, group, ink }
 
 enum LayoutType { grid, force, hierarchical }
 
@@ -156,8 +157,13 @@ class CanvasEdgeModel {
 class CanvasData {
   final List<CanvasNodeModel> nodes;
   final List<CanvasEdgeModel> edges;
+  final List<InkStroke> inkStrokes;
 
-  const CanvasData({required this.nodes, required this.edges});
+  const CanvasData({
+    required this.nodes,
+    required this.edges,
+    this.inkStrokes = const [],
+  });
 
   factory CanvasData.fromJson(Map<String, dynamic> json) {
     return CanvasData(
@@ -167,6 +173,10 @@ class CanvasData {
       edges: (json['edges'] as List<dynamic>)
           .map((e) => CanvasEdgeModel.fromJson(e as Map<String, dynamic>))
           .toList(),
+      inkStrokes: (json['inkStrokes'] as List<dynamic>?)
+              ?.map((e) => InkStroke.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          const [],
     );
   }
 
@@ -174,6 +184,8 @@ class CanvasData {
     return {
       'nodes': nodes.map((e) => e.toJson()).toList(),
       'edges': edges.map((e) => e.toJson()).toList(),
+      if (inkStrokes.isNotEmpty)
+        'inkStrokes': inkStrokes.map((e) => e.toJson()).toList(),
     };
   }
 }

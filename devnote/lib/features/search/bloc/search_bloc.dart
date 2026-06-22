@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/ai/semantic_search_service.dart';
 import 'package:devnote/features/search/bloc/search_event.dart';
 import 'package:devnote/features/search/bloc/search_state.dart';
@@ -15,9 +14,9 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
   /// 语义搜索开关状态（内存态，由 UI 切换）
   bool _semanticEnabled = false;
 
-  SearchBloc(this._searchService)
-      : _semanticSearchService = getIt<SemanticSearchService>(),
-        super(const SearchInitial()) {
+  // P1 修复 (P1-5): SemanticSearchService 改为构造函数注入，替代 getIt
+  SearchBloc(this._searchService, this._semanticSearchService)
+      : super(const SearchInitial()) {
     on<SearchQueryChanged>(_onQueryChanged);
     on<SearchSubmitted>(_onSubmitted);
     on<SearchFilterChanged>(_onFilterChanged);

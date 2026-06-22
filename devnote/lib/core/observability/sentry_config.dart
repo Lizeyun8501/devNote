@@ -66,7 +66,9 @@ class SentryConfig {
         await Sentry.configureScope((scope) {
           scope.setTag('consent', 'granted');
         });
-      } catch (_) {}
+      } catch (_) {
+        // Sentry 未初始化时静默忽略
+      }
     }
   }
 

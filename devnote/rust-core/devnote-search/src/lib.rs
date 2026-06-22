@@ -192,21 +192,23 @@ impl SqliteSearchEngine {
         tags: &[String],
         updated_at: &DateTime<Utc>,
     ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
+        let mut conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let note_id_str = note_id.to_string();
         let folder_id_str = folder_id.to_string();
         let tags_str = tags.join(",");
         let updated_at_str = updated_at.to_rfc3339();
 
-        conn.execute(
+        // P1 修复 (P1-7): DELETE + INSERT 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM notes_search_content WHERE note_id = ?1",
             params![note_id_str],
         )?;
-
-        conn.execute(
+        tx.execute(
             "INSERT INTO notes_search_content (note_id, title, content, folder_id, tags, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![note_id_str, title, content, folder_id_str, tags_str, updated_at_str],
         )?;
+        tx.commit()?;
 
         Ok(())
     }
@@ -265,18 +267,21 @@ impl SqliteSearchEngine {
 
 impl SearchEngine for SqliteSearchEngine {
     fn index_note(&mut self, note_id: &Uuid, title: &str, content: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
+        let mut conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         let note_id_str = note_id.to_string();
 
-        conn.execute(
+        // P1 修复 (P1-7): DELETE + INSERT 包裹在事务中，
+        // 避免 DELETE 成功但 INSERT 失败时搜索索引数据丢失
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM notes_search_content WHERE note_id = ?1",
             params![note_id_str],
         )?;
-
-        conn.execute(
+        tx.execute(
             "INSERT INTO notes_search_content (note_id, title, content, folder_id, tags, updated_at) VALUES (?1, ?2, ?3, '', '', '')",
             params![note_id_str, title, content],
         )?;
+        tx.commit()?;
 
         Ok(())
     }
@@ -428,6 +433,8 @@ impl SqliteSearchEngine {
 }
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod tests {
     use super::*;
 

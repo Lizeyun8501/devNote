@@ -50,15 +50,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
         event.wasmBytes,
         event.manifest,
       );
-      final plugins = _pluginService.listPlugins();
-      final currentState = state;
-      final marketplacePlugins = currentState is PluginsLoaded
-          ? currentState.marketplacePlugins
-          : <MarketplacePlugin>[];
-      emit(PluginsLoaded(
-        plugins: plugins,
-        marketplacePlugins: marketplacePlugins,
-      ));
+      _reloadAndEmit(emit);
     } catch (e) {
       emit(PluginError(e.toString()));
     }
@@ -70,15 +62,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
   ) async {
     try {
       await _pluginService.uninstallPlugin(event.id);
-      final plugins = _pluginService.listPlugins();
-      final currentState = state;
-      final marketplacePlugins = currentState is PluginsLoaded
-          ? currentState.marketplacePlugins
-          : <MarketplacePlugin>[];
-      emit(PluginsLoaded(
-        plugins: plugins,
-        marketplacePlugins: marketplacePlugins,
-      ));
+      _reloadAndEmit(emit);
     } catch (e) {
       emit(PluginError(e.toString()));
     }
@@ -90,15 +74,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
   ) async {
     try {
       await _pluginService.enablePlugin(event.id);
-      final plugins = _pluginService.listPlugins();
-      final currentState = state;
-      final marketplacePlugins = currentState is PluginsLoaded
-          ? currentState.marketplacePlugins
-          : <MarketplacePlugin>[];
-      emit(PluginsLoaded(
-        plugins: plugins,
-        marketplacePlugins: marketplacePlugins,
-      ));
+      _reloadAndEmit(emit);
     } catch (e) {
       emit(PluginError(e.toString()));
     }
@@ -110,15 +86,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
   ) async {
     try {
       await _pluginService.disablePlugin(event.id);
-      final plugins = _pluginService.listPlugins();
-      final currentState = state;
-      final marketplacePlugins = currentState is PluginsLoaded
-          ? currentState.marketplacePlugins
-          : <MarketplacePlugin>[];
-      emit(PluginsLoaded(
-        plugins: plugins,
-        marketplacePlugins: marketplacePlugins,
-      ));
+      _reloadAndEmit(emit);
     } catch (e) {
       emit(PluginError(e.toString()));
     }
@@ -130,15 +98,7 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
   ) async {
     try {
       await _pluginService.grantPermission(event.id, event.permission);
-      final plugins = _pluginService.listPlugins();
-      final currentState = state;
-      final marketplacePlugins = currentState is PluginsLoaded
-          ? currentState.marketplacePlugins
-          : <MarketplacePlugin>[];
-      emit(PluginsLoaded(
-        plugins: plugins,
-        marketplacePlugins: marketplacePlugins,
-      ));
+      _reloadAndEmit(emit);
     } catch (e) {
       emit(PluginError(e.toString()));
     }
@@ -150,17 +110,23 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
   ) async {
     try {
       await _pluginService.revokePermission(event.id, event.permission);
-      final plugins = _pluginService.listPlugins();
-      final currentState = state;
-      final marketplacePlugins = currentState is PluginsLoaded
-          ? currentState.marketplacePlugins
-          : <MarketplacePlugin>[];
-      emit(PluginsLoaded(
-        plugins: plugins,
-        marketplacePlugins: marketplacePlugins,
-      ));
+      _reloadAndEmit(emit);
     } catch (e) {
       emit(PluginError(e.toString()));
     }
+  }
+
+  /// 修复(P2): 抽取公共方法，消除 6 个事件处理器中重复的
+  /// "listPlugins + 读取 marketplacePlugins + emit PluginsLoaded" 代码。
+  void _reloadAndEmit(Emitter<PluginsState> emit) {
+    final plugins = _pluginService.listPlugins();
+    final currentState = state;
+    final marketplacePlugins = currentState is PluginsLoaded
+        ? currentState.marketplacePlugins
+        : <MarketplacePlugin>[];
+    emit(PluginsLoaded(
+      plugins: plugins,
+      marketplacePlugins: marketplacePlugins,
+    ));
   }
 }

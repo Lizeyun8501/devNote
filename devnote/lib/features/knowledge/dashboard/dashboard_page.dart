@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/knowledge/dashboard/dashboard_service.dart';
 
 /// 数据库仪表盘页面
@@ -17,7 +18,7 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  final DashboardService _service = DashboardService();
+  final DashboardService _service = getIt<DashboardService>();
   DashboardStats? _stats;
   List<DashboardCardData> _cards = [];
   bool _loading = true;

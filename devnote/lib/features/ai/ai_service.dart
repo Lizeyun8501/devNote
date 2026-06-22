@@ -159,7 +159,7 @@ class AIService {
       return await _ollama.chat(prompt: prompt, system: system);
     } catch (e) {
       AppLogger.w('AIService', '对话失败', error: e);
-      return 'AI 对话失败: $e';
+      rethrow;
     }
   }
 
@@ -209,7 +209,7 @@ class AIService {
       );
     } catch (e) {
       AppLogger.w('AIService', '摘要失败', error: e);
-      return '摘要生成失败: $e';
+      rethrow;
     }
   }
 
@@ -228,7 +228,7 @@ class AIService {
       );
     } catch (e) {
       AppLogger.w('AIService', '改写失败', error: e);
-      return '改写失败: $e';
+      rethrow;
     }
   }
 
@@ -248,7 +248,7 @@ class AIService {
       return result.trim();
     } catch (e) {
       AppLogger.w('AIService', '补全失败', error: e);
-      return '';
+      rethrow;
     }
   }
 
@@ -269,7 +269,7 @@ class AIService {
       return _parseTags(result);
     } catch (e) {
       AppLogger.w('AIService', '标签推荐失败', error: e);
-      return const [];
+      rethrow;
     }
   }
 

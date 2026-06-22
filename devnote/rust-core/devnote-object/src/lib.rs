@@ -78,6 +78,8 @@ pub enum ObjectError {
     Sqlite(#[from] rusqlite::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("database error: {0}")]
+    DatabaseError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -186,7 +188,10 @@ impl SqliteObjectEngine {
             "SELECT name, icon FROM object_types WHERE id = ?1",
             params![type_id_str],
             |row| Ok((row.get(0)?, row.get(1)?)),
-        ).map_err(|_| ObjectError::TypeNotFound(*type_id))?;
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ObjectError::TypeNotFound(*type_id),
+            _ => ObjectError::DatabaseError(e.to_string()),
+        })?;
 
         let properties = self.load_type_properties(conn, type_id)?;
         let relations = self.load_type_relations(conn, type_id)?;
@@ -227,7 +232,8 @@ impl SqliteObjectEngine {
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
                 name,
                 property_type,
-                format: serde_json::from_str(&format_str).unwrap_or(serde_json::Value::Null),
+                format: serde_json::from_str(&format_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -273,7 +279,10 @@ impl SqliteObjectEngine {
             "SELECT object_type_id, properties, created_at, updated_at FROM objects WHERE id = ?1",
             params![object_id_str],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        ).map_err(|_| ObjectError::ObjectNotFound(*object_id))?;
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ObjectError::ObjectNotFound(*object_id),
+            _ => ObjectError::DatabaseError(e.to_string()),
+        })?;
 
         let mut rel_stmt = conn.prepare(
             "SELECT target_id FROM object_relations WHERE source_id = ?1"
@@ -287,11 +296,14 @@ impl SqliteObjectEngine {
         Ok(Object {
             id: *object_id,
             object_type_id: Uuid::parse_str(&type_id_str)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
-            properties: serde_json::from_str(&props_str).unwrap_or(serde_json::Value::Object(Default::default())),
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid object_type_id: {e}")))?,
+            properties: serde_json::from_str(&props_str)
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid properties JSON: {e}")))?,
             relations: rels,
-            created_at: created_str.parse().unwrap_or_else(|_| Utc::now()),
-            updated_at: updated_str.parse().unwrap_or_else(|_| Utc::now()),
+            created_at: created_str.parse()
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid created_at timestamp: {e}")))?,
+            updated_at: updated_str.parse()
+                .map_err(|e| ObjectError::DatabaseError(format!("invalid updated_at timestamp: {e}")))?,
         })
     }
 }
@@ -299,9 +311,12 @@ impl SqliteObjectEngine {
 impl ObjectEngine for SqliteObjectEngine {
     #[instrument(skip(self, properties))]
     fn create_object_type(&self, name: &str, icon: &str, properties: Vec<ObjectProperty>) -> Result<ObjectType, ObjectError> {
-        let conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| ObjectError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
-        conn.execute(
+
+        // P1 修复 (P1-7): INSERT 类型 + 循环 INSERT 属性包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO object_types (id, name, icon) VALUES (?1, ?2, ?3)",
             params![id.to_string(), name, icon],
         )?;
@@ -317,11 +332,12 @@ impl ObjectEngine for SqliteObjectEngine {
                 PropertyType::Checkbox => "Checkbox",
                 PropertyType::URL => "URL",
             };
-            conn.execute(
+            tx.execute(
                 "INSERT INTO object_type_properties (id, object_type_id, name, property_type, format) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![prop.id.to_string(), id.to_string(), prop.name, pt_str, prop.format.to_string()],
             )?;
         }
+        tx.commit()?;
 
         Ok(ObjectType {
             id,
@@ -553,6 +569,8 @@ impl ObjectEngine for SqliteObjectEngine {
 }
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod tests {
     use super::*;
 

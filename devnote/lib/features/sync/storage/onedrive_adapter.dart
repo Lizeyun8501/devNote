@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'package:devnote/core/observability/app_logger.dart';
 import 'storage_adapter.dart';
 
 class OneDriveConfig {
@@ -52,9 +53,10 @@ class OneDriveAdapter implements StorageAdapter {
 
       _configured = response.statusCode == 200;
       return _configured;
-    } catch (_) {
+    } catch (e) {
       _configured = false;
-      return false;
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -72,8 +74,9 @@ class OneDriveAdapter implements StorageAdapter {
       );
 
       return response.statusCode == 201 || response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -92,8 +95,9 @@ class OneDriveAdapter implements StorageAdapter {
         return response.bodyBytes;
       }
       return null;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -109,8 +113,9 @@ class OneDriveAdapter implements StorageAdapter {
       );
 
       return response.statusCode == 204 || response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -166,8 +171,9 @@ class OneDriveAdapter implements StorageAdapter {
       }
 
       return files;
-    } catch (_) {
-      return [];
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -190,8 +196,9 @@ class OneDriveAdapter implements StorageAdapter {
         }
       }
       return null;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -207,8 +214,9 @@ class OneDriveAdapter implements StorageAdapter {
       );
 
       return response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 }

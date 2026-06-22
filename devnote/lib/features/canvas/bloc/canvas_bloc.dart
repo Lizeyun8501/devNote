@@ -19,6 +19,10 @@ class CanvasBloc extends Bloc<CanvasEvent, CanvasState> {
     on<SelectNode>(_onSelectNode);
     on<AutoLayout>(_onAutoLayout);
     on<SaveCanvas>(_onSaveCanvas);
+    on<AddInkStroke>(_onAddInkStroke);
+    on<UndoInkStroke>(_onUndoInkStroke);
+    on<RedoInkStroke>(_onRedoInkStroke);
+    on<ClearInkStrokes>(_onClearInkStrokes);
   }
 
   Future<void> _onLoadCanvas(LoadCanvas event, Emitter<CanvasState> emit) async {
@@ -28,6 +32,8 @@ class CanvasBloc extends Bloc<CanvasEvent, CanvasState> {
         canvasId: event.canvasId,
         nodes: data.nodes,
         edges: data.edges,
+        inkStrokes: data.inkStrokes,
+        undoStack: data.inkStrokes,
       ));
     } catch (e) {
       emit(CanvasError(e.toString()));
@@ -164,6 +170,58 @@ class CanvasBloc extends Bloc<CanvasEvent, CanvasState> {
     } catch (e) {
       emit(CanvasError(e.toString()));
     }
+  }
+
+  // ============================================================
+  // Ink 手写笔触处理
+  // ============================================================
+
+  void _onAddInkStroke(AddInkStroke event, Emitter<CanvasState> emit) {
+    final currentState = state;
+    if (currentState is! CanvasLoaded) return;
+    emit(currentState.copyWith(
+      inkStrokes: [...currentState.inkStrokes, event.stroke],
+      undoStack: [...currentState.undoStack, event.stroke],
+      redoStack: const [],
+    ));
+  }
+
+  void _onUndoInkStroke(UndoInkStroke event, Emitter<CanvasState> emit) {
+    final currentState = state;
+    if (currentState is! CanvasLoaded) return;
+    if (currentState.undoStack.isEmpty) return;
+    final lastStroke = currentState.undoStack.last;
+    final newStrokes =
+        currentState.inkStrokes.where((s) => s.id != lastStroke.id).toList();
+    emit(currentState.copyWith(
+      inkStrokes: newStrokes,
+      undoStack:
+          currentState.undoStack.sublist(0, currentState.undoStack.length - 1),
+      redoStack: [...currentState.redoStack, lastStroke],
+    ));
+  }
+
+  void _onRedoInkStroke(RedoInkStroke event, Emitter<CanvasState> emit) {
+    final currentState = state;
+    if (currentState is! CanvasLoaded) return;
+    if (currentState.redoStack.isEmpty) return;
+    final stroke = currentState.redoStack.last;
+    emit(currentState.copyWith(
+      inkStrokes: [...currentState.inkStrokes, stroke],
+      undoStack: [...currentState.undoStack, stroke],
+      redoStack:
+          currentState.redoStack.sublist(0, currentState.redoStack.length - 1),
+    ));
+  }
+
+  void _onClearInkStrokes(ClearInkStrokes event, Emitter<CanvasState> emit) {
+    final currentState = state;
+    if (currentState is! CanvasLoaded) return;
+    emit(currentState.copyWith(
+      inkStrokes: const [],
+      undoStack: const [],
+      redoStack: const [],
+    ));
   }
 
   String generateId() => _uuid.v4();

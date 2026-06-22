@@ -46,9 +46,33 @@ pub enum FFIErrorCode {
 
 // ── Global state ──────────────────────────────────────────────────────────
 
-static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
-    tokio::runtime::Runtime::new().expect("Failed to create tokio runtime")
-});
+/// 修复(P1): 原 RUNTIME 使用 LazyLock<Runtime> + .expect()，若 tokio runtime 创建失败
+/// 会在首次访问时 panic。虽然外层有 catch_unwind，但每次调用都会重复尝试初始化并 panic，
+/// 性能差且日志噪声大。改为 OnceLock<Option<Runtime>>，初始化只执行一次，
+/// 失败后所有后续调用直接返回错误而非重复 panic。
+static RUNTIME: std::sync::OnceLock<Option<tokio::runtime::Runtime>> = std::sync::OnceLock::new();
+
+/// 获取全局 tokio runtime，若初始化失败则返回错误。
+/// 修复(P1): 替代原 `RUNTIME.block_on(...)` 直接调用，避免 .expect() panic。
+fn with_runtime<F, R>(f: F) -> Result<R, String>
+where
+    F: FnOnce(&tokio::runtime::Runtime) -> R,
+{
+    let runtime = RUNTIME.get_or_init(|| {
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                // 初始化失败只记录一次，后续调用直接返回错误
+                devnote_observe::error!("FFI: failed to create tokio runtime: {}", e);
+                None
+            }
+        }
+    });
+    match runtime {
+        Some(rt) => Ok(f(rt)),
+        None => Err("tokio runtime initialization failed".to_string()),
+    }
+}
 
 static GRPC_CLIENT: LazyLock<Mutex<Option<DevNoteGrpcClient>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -104,7 +128,6 @@ impl FFIResponse {
 #[derive(Deserialize)]
 struct DispatchRequest {
     event: String,
-    #[allow(dead_code)]
     payload: Option<String>,
 }
 
@@ -305,7 +328,7 @@ pub extern "C" fn devnote_grpc_connect(server_addr: *const c_char) -> *mut FFIRe
             }
         };
 
-        let result = RUNTIME.block_on(async {
+        let result = with_runtime(|rt| rt.block_on(async {
             let client = DevNoteGrpcClient::new(addr);
             match client.connect().await {
                 Ok(()) => {
@@ -315,10 +338,11 @@ pub extern "C" fn devnote_grpc_connect(server_addr: *const c_char) -> *mut FFIRe
                 }
                 Err(e) => Err(e.to_string()),
             }
-        });
+        }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));
@@ -332,14 +356,15 @@ pub extern "C" fn devnote_grpc_connect(server_addr: *const c_char) -> *mut FFIRe
 #[instrument]
 pub extern "C" fn devnote_grpc_disconnect() -> *mut FFIResponse {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        RUNTIME.block_on(async {
+        match with_runtime(|rt| rt.block_on(async {
             let mut guard = GRPC_CLIENT.lock();
             if let Some(client) = guard.take() {
                 client.disconnect().await;
             }
-        });
-
-        FFIResponse::success("{}")
+        })) {
+            Ok(()) => FFIResponse::success("{}"),
+            Err(e) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
+        }
     }));
     match result {
         Ok(response) => Box::into_raw(Box::new(response)),
@@ -378,7 +403,7 @@ pub extern "C" fn devnote_grpc_dispatch(
 
         let request_id = uuid::Uuid::new_v4().to_string();
 
-        let result = RUNTIME.block_on(async {
+        let result = with_runtime(|rt| rt.block_on(async {
             let guard = GRPC_CLIENT.lock();
             if let Some(ref client) = *guard {
                 match client.dispatch(method_str, payload_bytes, &request_id).await {
@@ -388,10 +413,10 @@ pub extern "C" fn devnote_grpc_dispatch(
             } else {
                 Err("gRPC client not connected".to_string())
             }
-        });
+        }));
 
         match result {
-            Ok(response) => {
+            Ok(Ok(response)) => {
                 let json = serde_json::json!({
                     "success": response.success,
                     "payload": if response.payload.is_empty() {
@@ -404,6 +429,7 @@ pub extern "C" fn devnote_grpc_dispatch(
                 });
                 FFIResponse::success(&json.to_string())
             }
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));
@@ -432,7 +458,7 @@ pub extern "C" fn devnote_ws_connect(url: *const c_char) -> *mut FFIResponse {
             }
         };
 
-        let result = RUNTIME.block_on(async {
+        let result = with_runtime(|rt| rt.block_on(async {
             let client = DevNoteWebSocketClient::new(url_str);
             match client.connect().await {
                 Ok(()) => {
@@ -442,10 +468,11 @@ pub extern "C" fn devnote_ws_connect(url: *const c_char) -> *mut FFIResponse {
                 }
                 Err(e) => Err(e.to_string()),
             }
-        });
+        }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));
@@ -459,7 +486,7 @@ pub extern "C" fn devnote_ws_connect(url: *const c_char) -> *mut FFIResponse {
 #[instrument]
 pub extern "C" fn devnote_ws_disconnect() -> *mut FFIResponse {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let result = RUNTIME.block_on(async {
+        let result = with_runtime(|rt| rt.block_on(async {
             let mut guard = WS_CLIENT.lock();
             if let Some(client) = guard.take() {
                 match client.disconnect().await {
@@ -469,10 +496,11 @@ pub extern "C" fn devnote_ws_disconnect() -> *mut FFIResponse {
             } else {
                 Ok(())
             }
-        });
+        }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
         }
     }));
@@ -497,7 +525,7 @@ pub extern "C" fn devnote_ws_send(message: *const c_char) -> *mut FFIResponse {
             Err(_) => return FFIResponse::error(FFIErrorCode::InvalidArgument as i32, "Invalid UTF-8 in message"),
         };
 
-        let result = RUNTIME.block_on(async {
+        let result = with_runtime(|rt| rt.block_on(async {
             let guard = WS_CLIENT.lock();
             if let Some(ref client) = *guard {
                 match client.send_text(msg_str).await {
@@ -507,10 +535,11 @@ pub extern "C" fn devnote_ws_send(message: *const c_char) -> *mut FFIResponse {
             } else {
                 Err("WebSocket client not connected".to_string())
             }
-        });
+        }));
 
         match result {
-            Ok(()) => FFIResponse::success("{}"),
+            Ok(Ok(())) => FFIResponse::success("{}"),
+            Ok(Err(e)) => FFIResponse::error(FFIErrorCode::InternalError as i32, &e),
             Err(e) => FFIResponse::error(FFIErrorCode::NotConnected as i32, &e),
         }
     }));

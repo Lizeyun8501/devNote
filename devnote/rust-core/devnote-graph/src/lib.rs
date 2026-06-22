@@ -109,6 +109,8 @@ pub enum GraphError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("serialization error: {0}")]
+    SerializationError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -233,9 +235,9 @@ impl SqliteGraphEngine {
             id: Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             title,
             node_type,
-            tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-            created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
-            updated_at: updated_at_str.parse().unwrap_or_else(|_| Utc::now()),
+            tags: serde_json::from_str(&tags_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            created_at: created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            updated_at: updated_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
         })
     }
 
@@ -260,7 +262,7 @@ impl SqliteGraphEngine {
             target_id: Uuid::parse_str(&target_id_str).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             edge_type,
             weight,
-            created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+            created_at: created_at_str.parse().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
         })
     }
 
@@ -321,7 +323,7 @@ impl SqliteGraphEngine {
             NodeType::Folder => "Folder",
             NodeType::Canvas => "Canvas",
         };
-        let tags_json = serde_json::to_string(&node.tags).unwrap_or_default();
+        let tags_json = serde_json::to_string(&node.tags).map_err(|e| GraphError::SerializationError(e.to_string()))?;
         let created_at_str = node.created_at.to_rfc3339();
         let updated_at_str = node.updated_at.to_rfc3339();
         conn.execute(
@@ -555,19 +557,23 @@ impl GraphEngine for SqliteGraphEngine {
         tag_relations: &[(Uuid, String)],
         reference_relations: &[(Uuid, Uuid)],
     ) -> Result<GraphData, GraphError> {
-        let conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
-        conn.execute("DELETE FROM graph_edges", [])?;
-        conn.execute("DELETE FROM graph_nodes", [])?;
+        let mut conn = self.conn.lock().map_err(|e| GraphError::Internal(e.to_string()))?;
+
+        // P1 修复 (P1-7): DELETE + 大量 INSERT 包裹在事务中，
+        // 确保图谱重建原子完成。若中途失败，事务回滚避免图数据被清空后未重建。
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM graph_edges", [])?;
+        tx.execute("DELETE FROM graph_nodes", [])?;
 
         let mut tag_map: HashMap<String, Uuid> = HashMap::new();
         let mut folder_set: HashSet<Uuid> = HashSet::new();
 
         for (id, title, tags, created_at, updated_at) in notes {
             let id_str = id.to_string();
-            let tags_json = serde_json::to_string(tags).unwrap_or_default();
+            let tags_json = serde_json::to_string(tags).map_err(|e| GraphError::SerializationError(e.to_string()))?;
             let created_at_str = created_at.to_rfc3339();
             let updated_at_str = updated_at.to_rfc3339();
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![id_str, title, "Note", tags_json, created_at_str, updated_at_str],
             )?;
@@ -583,7 +589,7 @@ impl GraphEngine for SqliteGraphEngine {
         for (_, folder_id) in folder_relations {
             if folder_set.insert(*folder_id) {
                 let folder_id_str = folder_id.to_string();
-                conn.execute(
+                tx.execute(
                     "INSERT OR IGNORE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![folder_id_str, format!("Folder-{}", &folder_id_str[..8]), "Folder", "[]", Utc::now().to_rfc3339(), Utc::now().to_rfc3339()],
                 )?;
@@ -592,7 +598,7 @@ impl GraphEngine for SqliteGraphEngine {
 
         for (tag_name, tag_id) in &tag_map {
             let tag_id_str = tag_id.to_string();
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO graph_nodes (id, title, node_type, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![tag_id_str, tag_name, "Tag", "[]", Utc::now().to_rfc3339(), Utc::now().to_rfc3339()],
             )?;
@@ -600,7 +606,7 @@ impl GraphEngine for SqliteGraphEngine {
 
         for (note_id, folder_id) in folder_relations {
             let edge_id = Uuid::new_v4().to_string();
-            conn.execute(
+            tx.execute(
                 "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![edge_id, note_id.to_string(), folder_id.to_string(), "Parent", 1.0, Utc::now().to_rfc3339()],
             )?;
@@ -609,7 +615,7 @@ impl GraphEngine for SqliteGraphEngine {
         for (note_id, tag_name) in tag_relations {
             if let Some(tag_id) = tag_map.get(tag_name) {
                 let edge_id = Uuid::new_v4().to_string();
-                conn.execute(
+                tx.execute(
                     "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![edge_id, note_id.to_string(), tag_id.to_string(), "Tag", 1.0, Utc::now().to_rfc3339()],
                 )?;
@@ -618,13 +624,14 @@ impl GraphEngine for SqliteGraphEngine {
 
         for (source_id, target_id) in reference_relations {
             let edge_id = Uuid::new_v4().to_string();
-            conn.execute(
+            tx.execute(
                 "INSERT INTO graph_edges (id, source_id, target_id, edge_type, weight, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![edge_id, source_id.to_string(), target_id.to_string(), "Reference", 1.0, Utc::now().to_rfc3339()],
             )?;
         }
-
+        tx.commit()?;
         drop(conn);
+
         self.invalidate_centrality_cache();
         let nodes = self.load_all_nodes()?;
         let edges = self.load_all_edges()?;
@@ -892,6 +899,8 @@ impl GraphEngine for SqliteGraphEngine {
 }
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod tests {
     use super::*;
 

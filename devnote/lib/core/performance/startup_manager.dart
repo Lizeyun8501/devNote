@@ -21,7 +21,6 @@
 library;
 
 import 'dart:async';
-import 'dart:developer' as developer;
 
 /// 启动管理器
 ///
@@ -99,18 +98,18 @@ class StartupManager {
       taskStopwatch.stop();
       // P1-2 修复: 记录关键启动任务耗时，便于性能基线建立与回归监控
       // 借鉴 Facebook 移动应用启动优化：对关键启动任务计时
-      developer.log('关键任务 [${task.name}] 耗时: ${taskStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
+      AppLogger.d('StartupManager', '关键任务 [${task.name}] 耗时: ${taskStopwatch.elapsedMilliseconds}ms');
     }
 
     for (final task in _normalTasks) {
       final taskStopwatch = Stopwatch()..start();
       await _runTask(task);
       taskStopwatch.stop();
-      developer.log('普通任务 [${task.name}] 耗时: ${taskStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
+      AppLogger.d('StartupManager', '普通任务 [${task.name}] 耗时: ${taskStopwatch.elapsedMilliseconds}ms');
     }
 
     totalStopwatch.stop();
-    developer.log('应用启动总耗时: ${totalStopwatch.elapsedMilliseconds}ms', name: 'StartupManager');
+    AppLogger.d('StartupManager', '应用启动总耗时: ${totalStopwatch.elapsedMilliseconds}ms');
 
     // 关键路径分析 —— 借鉴项目管理中的关键路径法(CPM)
     _analyzeCriticalPath();
@@ -208,10 +207,10 @@ class StartupManager {
 
     criticalPathTasks = criticalPathTasks.reversed.toList();
 
-    developer.log(
+    AppLogger.d(
+      'StartupManager',
       '关键路径分析: 总耗时=${criticalPathTotal.inMilliseconds}ms, '
       '路径=${criticalPathTasks.join(' → ')}',
-      name: 'StartupManager',
     );
   }
 

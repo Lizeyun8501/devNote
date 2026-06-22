@@ -7,6 +7,7 @@ require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/prometheus/client_golang v1.18.0
 	github.com/rs/zerolog v1.33.0

@@ -49,6 +49,7 @@ func (s *SQLiteStore) migrate() error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS note_meta (
 		id            TEXT PRIMARY KEY,
+		user_id       TEXT NOT NULL,
 		title         TEXT NOT NULL DEFAULT '',
 		author        TEXT NOT NULL DEFAULT '',
 		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -65,6 +66,7 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS folder_meta (
 		id          TEXT PRIMARY KEY,
+		user_id     TEXT NOT NULL,
 		name        TEXT NOT NULL DEFAULT '',
 		parent_id   TEXT NOT NULL DEFAULT '',
 		path        TEXT NOT NULL DEFAULT '',
@@ -80,6 +82,7 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS tag_meta (
 		id          TEXT PRIMARY KEY,
+		user_id     TEXT NOT NULL,
 		name        TEXT NOT NULL DEFAULT '',
 		parent_id   TEXT NOT NULL DEFAULT '',
 		color       TEXT NOT NULL DEFAULT '',
@@ -98,6 +101,7 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS knowledge_relation (
 		id               TEXT PRIMARY KEY,
+		user_id          TEXT NOT NULL,
 		source_note_id   TEXT NOT NULL,
 		target_note_id   TEXT NOT NULL,
 		weight           REAL NOT NULL DEFAULT 0.0,
@@ -107,8 +111,11 @@ func (s *SQLiteStore) migrate() error {
 		updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
+	-- P2 修复 (P2-5): validation_rule 和 business_rule 添加 user_id 列实现数据隔离
+	-- 原表无 user_id，所有用户共享规则，存在多租户数据泄漏风险
 	CREATE TABLE IF NOT EXISTS validation_rule (
 		id          TEXT PRIMARY KEY,
+		user_id     TEXT NOT NULL DEFAULT '',
 		name        TEXT NOT NULL DEFAULT '',
 		description TEXT NOT NULL DEFAULT '',
 		category    TEXT NOT NULL DEFAULT '',
@@ -122,6 +129,7 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS business_rule (
 		id         TEXT PRIMARY KEY,
+		user_id    TEXT NOT NULL DEFAULT '',
 		name       TEXT NOT NULL DEFAULT '',
 		expression TEXT NOT NULL DEFAULT '',
 		action     TEXT NOT NULL DEFAULT '',
@@ -133,12 +141,19 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_note_meta_title ON note_meta(title);
 	CREATE INDEX IF NOT EXISTS idx_note_meta_author ON note_meta(author);
+	CREATE INDEX IF NOT EXISTS idx_note_meta_user_id ON note_meta(user_id);
 	CREATE INDEX IF NOT EXISTS idx_folder_meta_parent ON folder_meta(parent_id);
+	CREATE INDEX IF NOT EXISTS idx_folder_meta_user_id ON folder_meta(user_id);
 	CREATE INDEX IF NOT EXISTS idx_tag_meta_parent ON tag_meta(parent_id);
+	CREATE INDEX IF NOT EXISTS idx_tag_meta_user_id ON tag_meta(user_id);
 	CREATE INDEX IF NOT EXISTS idx_tag_relation_tag ON tag_relation(tag_id);
 	CREATE INDEX IF NOT EXISTS idx_tag_relation_note ON tag_relation(note_id);
 	CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_relation(source_note_id);
 	CREATE INDEX IF NOT EXISTS idx_knowledge_target ON knowledge_relation(target_note_id);
+	CREATE INDEX IF NOT EXISTS idx_knowledge_relation_user_id ON knowledge_relation(user_id);
+	-- P2 修复 (P2-5): 为规则表添加 user_id 索引，加速按用户过滤查询
+	CREATE INDEX IF NOT EXISTS idx_validation_rule_user_id ON validation_rule(user_id);
+	CREATE INDEX IF NOT EXISTS idx_business_rule_user_id ON business_rule(user_id);
 	`
 
 	_, err := s.DB.Exec(schema)

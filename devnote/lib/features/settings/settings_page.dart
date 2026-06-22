@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/services/locale_service.dart';
 import 'package:devnote/features/settings/crypto/crypto_settings_page.dart';
 import 'package:devnote/features/sync/p2p/p2p_settings_page.dart';
 
@@ -26,6 +28,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _autoSave = true;
   double _fontSize = 14.0;
   String _defaultEditMode = 'rich';
+  String _currentLanguageName = '';
   List<Map<String, dynamic>> _featureFlags = [];
   bool _featureFlagsLoading = true;
   String? _featureFlagsError;
@@ -35,6 +38,22 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _loadDefaultEditMode();
     _loadFeatureFlags();
+    _loadCurrentLanguage();
+  }
+
+  Future<void> _loadCurrentLanguage() async {
+    final localeService = getIt<LocaleService>();
+    final locale = await localeService.getCurrentLocale();
+    final code = locale == null
+        ? 'en'
+        : (locale.countryCode != null && locale.countryCode!.isNotEmpty
+            ? '${locale.languageCode}_${locale.countryCode}'
+            : locale.languageCode);
+    final supported = localeService.findByCode(code);
+    if (!mounted) return;
+    setState(() {
+      _currentLanguageName = supported?.nativeName ?? 'English';
+    });
   }
 
   Future<void> _loadFeatureFlags() async {
@@ -47,24 +66,52 @@ class _SettingsPageState extends State<SettingsPage> {
       });
       return;
     }
-    // FFI 层尚未实现 FeatureFlagEvent.ListFlags，返回空列表
-    if (!mounted) return;
-    setState(() {
-      _featureFlags = [];
-      _featureFlagsLoading = false;
-      _featureFlagsError = 'Feature Flags 暂不可用';
-    });
+    // 修复(P1/R10-04): 调用 FFI 获取 Feature Flags，原为空壳返回空列表
+    try {
+      final flags = await bridge.listFeatureFlags();
+      if (!mounted) return;
+      setState(() {
+        _featureFlags = flags;
+        _featureFlagsLoading = false;
+        _featureFlagsError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _featureFlagsLoading = false;
+        _featureFlagsError = '加载 Feature Flags 失败: $e';
+      });
+    }
   }
 
   Future<void> _toggleFeatureFlag(String key, bool value) async {
-    // FFI 层尚未实现 FeatureFlagEvent.SetFlag，仅更新本地状态
-    if (!mounted) return;
-    setState(() {
-      final idx = _featureFlags.indexWhere((f) => f['key'] == key);
-      if (idx >= 0) {
-        _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
-      }
-    });
+    final bridge = getIt<FFIBridge>();
+    // 修复(P1/R10-04): 通过 FFI 持久化 Feature Flag 设置，原仅更新本地状态
+    try {
+      final existing = _featureFlags.firstWhere(
+        (f) => f['key'] == key,
+        orElse: () => {'key': key, 'description': ''},
+      );
+      await bridge.setFeatureFlag(
+        key: key,
+        enabled: value,
+        description: (existing['description'] as String?) ?? '',
+      );
+      if (!mounted) return;
+      setState(() {
+        final idx = _featureFlags.indexWhere((f) => f['key'] == key);
+        if (idx >= 0) {
+          _featureFlags[idx] = {..._featureFlags[idx], 'enabled': value};
+        } else {
+          _featureFlags.add({'key': key, 'enabled': value, 'description': ''});
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _featureFlagsError = '更新 Feature Flag 失败: $e';
+      });
+    }
   }
 
   Future<void> _loadDefaultEditMode() async {
@@ -136,16 +183,17 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('设置'),
+        title: Text(l10n.settings),
       ),
       body: ListView(
         children: [
-          _SettingsSection(title: '外观', children: [
+          _SettingsSection(title: l10n.appearance, children: [
             SwitchListTile(
-              title: const Text('深色模式'),
-              subtitle: const Text('切换深色/浅色主题'),
+              title: Text(l10n.darkMode),
+              subtitle: Text(l10n.darkModeSubtitle),
               value: _darkMode,
               onChanged: (value) {
                 setState(() {
@@ -154,7 +202,7 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             ListTile(
-              title: const Text('字体大小'),
+              title: Text(l10n.fontSize),
               subtitle: Text('${_fontSize.toInt()} px'),
               trailing: SizedBox(
                 width: 200,
@@ -171,6 +219,23 @@ class _SettingsPageState extends State<SettingsPage> {
                   },
                 ),
               ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.language),
+              title: const Text('语言 / Language'),
+              subtitle: Text(
+                _currentLanguageName.isEmpty
+                    ? 'English'
+                    : _currentLanguageName,
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await context.push('/settings/language');
+                // 返回后刷新当前语言显示（用户可能已切换语言）
+                if (mounted) {
+                  _loadCurrentLanguage();
+                }
+              },
             ),
           ]),
           _SettingsSection(title: '编辑器', children: [
@@ -220,6 +285,15 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           _SettingsSection(title: '数据', children: [
             ListTile(
+              leading: const Icon(Icons.calendar_today),
+              title: const Text('Daily Notes'),
+              subtitle: const Text('每日笔记设置（日期格式、文件夹、模板）'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/settings/daily-notes');
+              },
+            ),
+            ListTile(
               leading: Semantics(
                 label: 'AI 设置',
                 child: const Icon(Icons.smart_toy_outlined),
@@ -241,6 +315,15 @@ class _SettingsPageState extends State<SettingsPage> {
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 context.push('/settings/sync');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.alternate_email),
+              title: const Text('邮件转笔记'),
+              subtitle: const Text('通过专属邮箱转发邮件自动入库'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                context.push('/settings/email');
               },
             ),
             ListTile(

@@ -41,5 +41,6 @@ jobs:
         run: flutter analyze
 
       - name: Run tests
-        run: flutter test --no-pub || echo "No tests found or tests skipped"
-        continue-on-error: true
+        # 修复(P0): 移除 `|| echo` 兜底和 `continue-on-error: true`，
+        # 原配置会静默吞掉测试失败，导致 CI 无法阻断有 Bug 的代码合并。
+        run: flutter test --no-pub

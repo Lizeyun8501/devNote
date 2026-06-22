@@ -10,6 +10,7 @@
 //! 借鉴内容: 附件文件加密存储、SHA-256 完整性校验、EncryptedFileStorage 文件加密层
 
 use devnote_core::models::{Attachment, Folder, Note, Tag, Permission, ResourceACL, Workspace, WorkspaceMember};
+use devnote_core::{Block, BlockType};
 use devnote_observe::{instrument, warn};
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoEngine, DefaultCryptoEngine, CryptoConfig};
@@ -35,6 +36,8 @@ pub enum PersistenceError {
     ConstraintViolation(String),
     #[error("serialization error: {0}")]
     SerializationError(String),
+    #[error("deserialization error: {0}")]
+    DeserializationError(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,7 +59,7 @@ pub struct FeatureFlag {
     pub updated_at: i64,
 }
 
-const _DB_VERSION: i32 = 4;
+const _DB_VERSION: i32 = 5;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS notes (
@@ -192,6 +195,18 @@ CREATE TABLE IF NOT EXISTS feature_flags (
 );
 "#;
 
+// P1 修复 (P1-6): 跨端数据模型对齐
+// 为 notes 添加 is_pinned/is_encrypted 列（与 Rust Note 模型对齐）
+// 为 folders 添加 sort_order 列（与 Rust Folder 模型对齐）
+// 为 tags 添加 color 列（与 Rust Tag 模型对齐）
+// 注意: notes.blocks/tags 不添加列，因为它们由 blocks/note_tags 关联表管理
+const SCHEMA_V5: &str = r#"
+ALTER TABLE notes ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE notes ADD COLUMN is_encrypted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tags ADD COLUMN color TEXT;
+"#;
+
 pub struct SqliteNoteRepository {
     conn: Mutex<rusqlite::Connection>,
 }
@@ -232,7 +247,7 @@ impl SqliteNoteRepository {
     }
 
     fn run_migrations(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let current_version: i32 = conn
             .query_row(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
@@ -241,36 +256,28 @@ impl SqliteNoteRepository {
             )
             .unwrap_or(0);
 
-        if current_version < 1 {
-            conn.execute_batch(SCHEMA_V1)?;
-            conn.execute(
-                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
-                params![1],
-            )?;
-        }
+        // P1 修复 (P1-7): 每个迁移版本块用事务包裹，确保 schema 变更与版本记录原子提交。
+        // 若 execute_batch 成功但版本记录失败（或反之），事务回滚避免数据库处于
+        // 部分迁移的不一致状态。特别是 V5 的 ALTER TABLE ADD COLUMN 非幂等，
+        // 重复执行会报 "duplicate column name"，事务保护可避免此问题。
+        let migrations: [(i32, &str); 5] = [
+            (1, SCHEMA_V1),
+            (2, SCHEMA_V2),
+            (3, SCHEMA_V3),
+            (4, SCHEMA_V4),
+            (5, SCHEMA_V5),
+        ];
 
-        if current_version < 2 {
-            conn.execute_batch(SCHEMA_V2)?;
-            conn.execute(
-                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
-                params![2],
-            )?;
-        }
-
-        if current_version < 3 {
-            conn.execute_batch(SCHEMA_V3)?;
-            conn.execute(
-                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
-                params![3],
-            )?;
-        }
-
-        if current_version < 4 {
-            conn.execute_batch(SCHEMA_V4)?;
-            conn.execute(
-                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
-                params![4],
-            )?;
+        for (version, schema_sql) in &migrations {
+            if current_version < *version {
+                let tx = conn.transaction()?;
+                tx.execute_batch(schema_sql)?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
+                    params![*version],
+                )?;
+                tx.commit()?;
+            }
         }
 
         Ok(())
@@ -283,19 +290,42 @@ impl SqliteNoteRepository {
         let folder_id_str: String = row.get(3)?;
         let created_at_str: String = row.get(4)?;
         let updated_at_str: String = row.get(5)?;
+        // P1 修复 (P1-6): 读取 is_pinned/is_encrypted 列
+        let is_pinned: bool = row.get::<_, i64>(6).map(|v| v != 0).unwrap_or(false);
+        let is_encrypted: bool = row.get::<_, i64>(7).map(|v| v != 0).unwrap_or(false);
 
-        let blocks = serde_json::from_str(&content).unwrap_or_default();
+        let blocks = match serde_json::from_str::<Vec<Block>>(&content) {
+            Ok(blocks) => blocks,
+            Err(_) => {
+                // 兼容旧数据/纯文本 content：当 content 不是合法的 JSON blocks 数组时
+                // （例如 Dart 端 NoteModel 写入的纯文本），将其包装为单个 paragraph block，
+                // 避免 unwrap_or_default() 静默丢弃笔记内容。
+                let note_id = Uuid::parse_str(&id_str)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                vec![Block {
+                    id: Uuid::new_v4(),
+                    note_id,
+                    block_type: BlockType::Paragraph,
+                    content: content.clone(),
+                    position: 0,
+                    children: Vec::new(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                }]
+            }
+        };
 
         Ok(Note {
             id: Uuid::parse_str(&id_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             title,
+            content: content.clone(),
             folder_id: Uuid::parse_str(&folder_id_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             blocks,
             tags: Vec::new(),
-            is_pinned: false,
-            is_encrypted: false,
+            is_pinned,
+            is_encrypted,
             created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
                 .to_utc(),
@@ -311,6 +341,8 @@ impl SqliteNoteRepository {
         let parent_id_str: Option<String> = row.get(2)?;
         let created_at_str: String = row.get(3)?;
         let updated_at_str: String = row.get(4)?;
+        // P1 修复 (P1-6): 读取 sort_order 列
+        let sort_order: i32 = row.get::<_, i64>(5).map(|v| v as i32).unwrap_or(0);
 
         Ok(Folder {
             id: Uuid::parse_str(&id_str)
@@ -320,7 +352,7 @@ impl SqliteNoteRepository {
                 .map(|p| Uuid::parse_str(&p))
                 .transpose()
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
-            sort_order: 0,
+            sort_order,
             created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
                 .to_utc(),
@@ -334,12 +366,14 @@ impl SqliteNoteRepository {
         let id_str: String = row.get(0)?;
         let name: String = row.get(1)?;
         let created_at_str: String = row.get(2)?;
+        // P1 修复 (P1-6): 读取 color 列（可能不存在于旧数据，用 unwrap_or 兜底）
+        let color: Option<String> = row.get(3).unwrap_or(None);
 
         Ok(Tag {
             id: Uuid::parse_str(&id_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             name,
-            color: None,
+            color,
             created_at: chrono::DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
                 .to_utc(),
@@ -374,7 +408,8 @@ impl SqliteNoteRepository {
         let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         let mut stmt = conn.prepare(
-            "SELECT id, title, content, folder_id, created_at, updated_at FROM notes WHERE id = ?1",
+            // P1 修复 (P1-6): 读取 is_pinned/is_encrypted 列
+            "SELECT id, title, content, folder_id, created_at, updated_at, is_pinned, is_encrypted FROM notes WHERE id = ?1",
         )?;
 
         let result = stmt.query_row(params![id_str], Self::row_to_note);
@@ -409,7 +444,8 @@ impl SqliteNoteRepository {
             Some(fid) => {
                 let fid_str = fid.to_string();
                 let mut stmt = conn.prepare(
-                    "SELECT id, title, content, folder_id, created_at, updated_at FROM notes WHERE folder_id = ?1 ORDER BY updated_at DESC",
+                    // P1 修复 (P1-6): 读取 is_pinned/is_encrypted 列
+                    "SELECT id, title, content, folder_id, created_at, updated_at, is_pinned, is_encrypted FROM notes WHERE folder_id = ?1 ORDER BY updated_at DESC",
                 )?;
                 let result = stmt.query_map(params![fid_str], Self::row_to_note)?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -417,7 +453,8 @@ impl SqliteNoteRepository {
             }
             None => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, title, content, folder_id, created_at, updated_at FROM notes ORDER BY updated_at DESC",
+                    // P1 修复 (P1-6): 读取 is_pinned/is_encrypted 列
+                    "SELECT id, title, content, folder_id, created_at, updated_at, is_pinned, is_encrypted FROM notes ORDER BY updated_at DESC",
                 )?;
                 let result = stmt.query_map([], Self::row_to_note)?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -433,7 +470,8 @@ impl SqliteNoteRepository {
             Some(pid) => {
                 let pid_str = pid.to_string();
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, parent_id, created_at, updated_at FROM folders WHERE parent_id = ?1 ORDER BY name",
+                    // P1 修复 (P1-6): 读取 sort_order 列，按 sort_order, name 排序
+                    "SELECT id, name, parent_id, created_at, updated_at, sort_order FROM folders WHERE parent_id = ?1 ORDER BY sort_order, name",
                 )?;
                 let result = stmt.query_map(params![pid_str], Self::row_to_folder)?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -441,7 +479,8 @@ impl SqliteNoteRepository {
             }
             None => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, parent_id, created_at, updated_at FROM folders WHERE parent_id IS NULL ORDER BY name",
+                    // P1 修复 (P1-6): 读取 sort_order 列，按 sort_order, name 排序
+                    "SELECT id, name, parent_id, created_at, updated_at, sort_order FROM folders WHERE parent_id IS NULL ORDER BY sort_order, name",
                 )?;
                 let result = stmt.query_map([], Self::row_to_folder)?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -490,13 +529,15 @@ impl SqliteNoteRepository {
         let now_str = now.to_rfc3339();
 
         conn.execute(
-            "INSERT INTO notes (id, title, content, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            // P1 修复 (P1-6): 写入 is_pinned/is_encrypted 列（新建笔记默认 false）
+            "INSERT INTO notes (id, title, content, folder_id, is_pinned, is_encrypted, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, ?6)",
             params![id_str, title, content, folder_id_str, now_str, now_str],
         )?;
 
         Ok(Note {
             id,
             title: title.to_string(),
+            content: content.to_string(),
             folder_id: *folder_id,
             blocks: Vec::new(),
             tags: Vec::new(),
@@ -547,7 +588,8 @@ impl SqliteNoteRepository {
         let now_str = now.to_rfc3339();
 
         conn.execute(
-            "INSERT INTO folders (id, name, parent_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            // P1 修复 (P1-6): 写入 sort_order 列（新建文件夹默认 0）
+            "INSERT INTO folders (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?5)",
             params![id_str, name, parent_id_str, now_str, now_str],
         )?;
 
@@ -574,7 +616,8 @@ impl SqliteNoteRepository {
         let now_str = now.to_rfc3339();
 
         conn.execute(
-            "INSERT INTO tags (id, name, created_at) VALUES (?1, ?2, ?3)",
+            // P1 修复 (P1-6): 写入 color 列（新建标签默认 NULL）
+            "INSERT INTO tags (id, name, color, created_at) VALUES (?1, ?2, NULL, ?3)",
             params![id_str, name, now_str],
         )?;
 
@@ -724,25 +767,32 @@ impl SqliteNoteRepository {
 
 impl NoteRepository for SqliteNoteRepository {
     fn create_note(&mut self, note: Note) -> Result<Note> {
-        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let folder_id_str = note.folder_id.to_string();
         let content = serde_json::to_string(&note.blocks)?;
         let created_at_str = note.created_at.to_rfc3339();
         let updated_at_str = note.updated_at.to_rfc3339();
+        // P1 修复 (P1-6): 写入 is_pinned/is_encrypted
+        let is_pinned: i64 = if note.is_pinned { 1 } else { 0 };
+        let is_encrypted: i64 = if note.is_encrypted { 1 } else { 0 };
 
-        conn.execute(
-            "INSERT INTO notes (id, title, content, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id_str, note.title, content, folder_id_str, created_at_str, updated_at_str],
+        // P1 修复 (P1-7): INSERT notes + INSERT note_tags 包裹在事务中，
+        // 确保笔记创建和标签关联原子完成，避免部分失败导致数据不一致
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO notes (id, title, content, folder_id, is_pinned, is_encrypted, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id_str, note.title, content, folder_id_str, is_pinned, is_encrypted, created_at_str, updated_at_str],
         )?;
 
         for tag_id in &note.tags {
             let tag_id_str = tag_id.to_string();
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
                 params![id_str, tag_id_str],
             )?;
         }
+        tx.commit()?;
 
         Ok(note)
     }
@@ -756,10 +806,13 @@ impl NoteRepository for SqliteNoteRepository {
         let id_str = note.id.to_string();
         let content = serde_json::to_string(&note.blocks)?;
         let updated_at_str = note.updated_at.to_rfc3339();
+        // P1 修复 (P1-6): 写入 is_pinned/is_encrypted
+        let is_pinned: i64 = if note.is_pinned { 1 } else { 0 };
+        let is_encrypted: i64 = if note.is_encrypted { 1 } else { 0 };
 
         conn.execute(
-            "UPDATE notes SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
-            params![note.title, content, updated_at_str, id_str],
+            "UPDATE notes SET title = ?1, content = ?2, is_pinned = ?3, is_encrypted = ?4, updated_at = ?5 WHERE id = ?6",
+            params![note.title, content, is_pinned, is_encrypted, updated_at_str, id_str],
         )?;
 
         Ok(note)
@@ -779,10 +832,12 @@ impl NoteRepository for SqliteNoteRepository {
         let parent_id_str = folder.parent_id.map(|p| p.to_string());
         let created_at_str = folder.created_at.to_rfc3339();
         let updated_at_str = folder.updated_at.to_rfc3339();
+        // P1 修复 (P1-6): 写入 sort_order
+        let sort_order: i64 = folder.sort_order as i64;
 
         conn.execute(
-            "INSERT INTO folders (id, name, parent_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id_str, folder.name, parent_id_str, created_at_str, updated_at_str],
+            "INSERT INTO folders (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id_str, folder.name, parent_id_str, sort_order, created_at_str, updated_at_str],
         )?;
 
         Ok(folder)
@@ -792,7 +847,8 @@ impl NoteRepository for SqliteNoteRepository {
         let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = id.to_string();
         let mut stmt = conn.prepare(
-            "SELECT id, name, parent_id, created_at, updated_at FROM folders WHERE id = ?1",
+            // P1 修复 (P1-6): 读取 sort_order 列
+            "SELECT id, name, parent_id, created_at, updated_at, sort_order FROM folders WHERE id = ?1",
         )?;
 
         let result = stmt.query_row(params![id_str], Self::row_to_folder);
@@ -809,10 +865,12 @@ impl NoteRepository for SqliteNoteRepository {
         let id_str = folder.id.to_string();
         let parent_id_str = folder.parent_id.map(|p| p.to_string());
         let updated_at_str = folder.updated_at.to_rfc3339();
+        // P1 修复 (P1-6): 写入 sort_order
+        let sort_order: i64 = folder.sort_order as i64;
 
         conn.execute(
-            "UPDATE folders SET name = ?1, parent_id = ?2, updated_at = ?3 WHERE id = ?4",
-            params![folder.name, parent_id_str, updated_at_str, id_str],
+            "UPDATE folders SET name = ?1, parent_id = ?2, sort_order = ?3, updated_at = ?4 WHERE id = ?5",
+            params![folder.name, parent_id_str, sort_order, updated_at_str, id_str],
         )?;
 
         Ok(folder)
@@ -835,8 +893,9 @@ impl NoteRepository for SqliteNoteRepository {
         let created_at_str = tag.created_at.to_rfc3339();
 
         conn.execute(
-            "INSERT INTO tags (id, name, created_at) VALUES (?1, ?2, ?3)",
-            params![id_str, tag.name, created_at_str],
+            // P1 修复 (P1-6): 写入 color 列
+            "INSERT INTO tags (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![id_str, tag.name, tag.color, created_at_str],
         )?;
 
         Ok(tag)
@@ -852,7 +911,8 @@ impl NoteRepository for SqliteNoteRepository {
     fn list_tags(&self) -> Result<Vec<Tag>> {
         let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, created_at FROM tags ORDER BY name",
+            // P1 修复 (P1-6): 读取 color 列
+            "SELECT id, name, created_at, color FROM tags ORDER BY name",
         )?;
         let tags = stmt
             .query_map([], Self::row_to_tag)?
@@ -988,25 +1048,31 @@ impl NoteRepository for EncryptedNoteRepository {
         note.is_encrypted = true;
         note.blocks = Vec::new();
 
-        let inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
-        let conn = inner.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let mut conn = inner.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let folder_id_str = note.folder_id.to_string();
         let created_at_str = note.created_at.to_rfc3339();
         let updated_at_str = note.updated_at.to_rfc3339();
+        // P1 修复 (P1-6): 写入 is_pinned/is_encrypted
+        let is_pinned: i64 = if note.is_pinned { 1 } else { 0 };
+        let is_encrypted: i64 = if note.is_encrypted { 1 } else { 0 };
 
-        conn.execute(
-            "INSERT INTO notes (id, title, content, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id_str, note.title, encrypted, folder_id_str, created_at_str, updated_at_str],
+        // P1 修复 (P1-7): INSERT notes + INSERT note_tags 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO notes (id, title, content, folder_id, is_pinned, is_encrypted, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id_str, note.title, encrypted, folder_id_str, is_pinned, is_encrypted, created_at_str, updated_at_str],
         )?;
 
         for tag_id in &note.tags {
             let tag_id_str = tag_id.to_string();
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
                 params![id_str, tag_id_str],
             )?;
         }
+        tx.commit()?;
 
         Ok(note)
     }
@@ -1021,7 +1087,8 @@ impl NoteRepository for EncryptedNoteRepository {
                 if note.is_encrypted && self.is_unlocked() {
                     let content = serde_json::to_string(&note.blocks)?;
                     let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                    note.blocks = serde_json::from_str(&decrypted).unwrap_or_default();
+                    note.blocks = serde_json::from_str(&decrypted)
+                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
                 }
                 Ok(Some(note))
             }
@@ -1038,10 +1105,13 @@ impl NoteRepository for EncryptedNoteRepository {
         let conn = inner.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let id_str = note.id.to_string();
         let updated_at_str = note.updated_at.to_rfc3339();
+        // P1 修复 (P1-6): 写入 is_pinned/is_encrypted
+        let is_pinned: i64 = if note.is_pinned { 1 } else { 0 };
+        let is_encrypted: i64 = if note.is_encrypted { 1 } else { 0 };
 
         conn.execute(
-            "UPDATE notes SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
-            params![note.title, encrypted, updated_at_str, id_str],
+            "UPDATE notes SET title = ?1, content = ?2, is_pinned = ?3, is_encrypted = ?4, updated_at = ?5 WHERE id = ?6",
+            params![note.title, encrypted, is_pinned, is_encrypted, updated_at_str, id_str],
         )?;
 
         Ok(note)
@@ -1062,7 +1132,8 @@ impl NoteRepository for EncryptedNoteRepository {
             if note.is_encrypted && self.is_unlocked() {
                 let content = serde_json::to_string(&note.blocks)?;
                 let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                note.blocks = serde_json::from_str(&decrypted).unwrap_or_default();
+                note.blocks = serde_json::from_str(&decrypted)
+                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
             }
             result.push(note);
         }

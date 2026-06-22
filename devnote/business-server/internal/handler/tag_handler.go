@@ -23,12 +23,18 @@ func NewTagHandler(svc *service.TagService, logger *zap.Logger) *TagHandler {
 
 // Create handles POST /api/v1/tags
 func (h *TagHandler) Create(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	var req model.TagMeta
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "invalid request body", Detail: err.Error()})
 		return
 	}
-	result, err := h.svc.Create(&req)
+	result, err := h.svc.Create(userID, &req)
 	if err != nil {
 		h.logger.Error("create tag failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -39,8 +45,14 @@ func (h *TagHandler) Create(c *gin.Context) {
 
 // Get handles GET /api/v1/tags/:id
 func (h *TagHandler) Get(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	result, err := h.svc.Get(id)
+	result, err := h.svc.Get(userID, id)
 	if err != nil {
 		h.logger.Error("get tag failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusNotFound, model.ErrorResponse{Code: 404, Message: err.Error()})
@@ -51,6 +63,12 @@ func (h *TagHandler) Get(c *gin.Context) {
 
 // Update handles PUT /api/v1/tags/:id
 func (h *TagHandler) Update(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
 	var req model.TagMeta
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -58,7 +76,7 @@ func (h *TagHandler) Update(c *gin.Context) {
 		return
 	}
 	req.ID = id
-	result, err := h.svc.Update(&req)
+	result, err := h.svc.Update(userID, &req)
 	if err != nil {
 		h.logger.Error("update tag failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -69,8 +87,14 @@ func (h *TagHandler) Update(c *gin.Context) {
 
 // Delete handles DELETE /api/v1/tags/:id
 func (h *TagHandler) Delete(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	if err := h.svc.Delete(id); err != nil {
+	if err := h.svc.Delete(userID, id); err != nil {
 		h.logger.Error("delete tag failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
 		return
@@ -80,11 +104,17 @@ func (h *TagHandler) Delete(c *gin.Context) {
 
 // List handles GET /api/v1/tags
 func (h *TagHandler) List(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	search := c.Query("search")
 
-	result, err := h.svc.List(page, pageSize, search)
+	result, err := h.svc.List(userID, page, pageSize, search)
 	if err != nil {
 		h.logger.Error("list tags failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -95,8 +125,14 @@ func (h *TagHandler) List(c *gin.Context) {
 
 // GetChildren handles GET /api/v1/tags/:id/children
 func (h *TagHandler) GetChildren(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	children, err := h.svc.GetChildren(id)
+	children, err := h.svc.GetChildren(userID, id)
 	if err != nil {
 		h.logger.Error("get tag children failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -107,8 +143,14 @@ func (h *TagHandler) GetChildren(c *gin.Context) {
 
 // GetHierarchy handles GET /api/v1/tags/:id/hierarchy
 func (h *TagHandler) GetHierarchy(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	hierarchy, err := h.svc.GetHierarchy(id)
+	hierarchy, err := h.svc.GetHierarchy(userID, id)
 	if err != nil {
 		h.logger.Error("get tag hierarchy failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -123,9 +165,15 @@ func (h *TagHandler) GetHierarchy(c *gin.Context) {
 
 // LinkTag handles POST /api/v1/tags/:id/notes/:noteId
 func (h *TagHandler) LinkTag(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	tagID := c.Param("id")
 	noteID := c.Param("noteId")
-	result, err := h.svc.LinkTagToNote(tagID, noteID)
+	result, err := h.svc.LinkTagToNote(userID, tagID, noteID)
 	if err != nil {
 		h.logger.Error("link tag to note failed", zap.String("tag_id", tagID), zap.String("note_id", noteID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -136,9 +184,15 @@ func (h *TagHandler) LinkTag(c *gin.Context) {
 
 // UnlinkTag handles DELETE /api/v1/tags/:id/notes/:noteId
 func (h *TagHandler) UnlinkTag(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	tagID := c.Param("id")
 	noteID := c.Param("noteId")
-	if err := h.svc.UnlinkTagFromNote(tagID, noteID); err != nil {
+	if err := h.svc.UnlinkTagFromNote(userID, tagID, noteID); err != nil {
 		h.logger.Error("unlink tag failed", zap.String("tag_id", tagID), zap.String("note_id", noteID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
 		return
@@ -148,11 +202,17 @@ func (h *TagHandler) UnlinkTag(c *gin.Context) {
 
 // GetNotesByTag handles GET /api/v1/tags/:id/notes
 func (h *TagHandler) GetNotesByTag(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	tagID := c.Param("id")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
-	result, err := h.svc.GetNotesByTag(tagID, page, pageSize)
+	result, err := h.svc.GetNotesByTag(userID, tagID, page, pageSize)
 	if err != nil {
 		h.logger.Error("get notes by tag failed", zap.String("tag_id", tagID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -163,8 +223,14 @@ func (h *TagHandler) GetNotesByTag(c *gin.Context) {
 
 // GetTagsByNote handles GET /api/v1/tags/by-note/:noteId
 func (h *TagHandler) GetTagsByNote(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	noteID := c.Param("noteId")
-	tags, err := h.svc.GetTagsByNote(noteID)
+	tags, err := h.svc.GetTagsByNote(userID, noteID)
 	if err != nil {
 		h.logger.Error("get tags by note failed", zap.String("note_id", noteID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -179,6 +245,12 @@ func (h *TagHandler) GetTagsByNote(c *gin.Context) {
 
 // MergeTags handles POST /api/v1/tags/merge
 func (h *TagHandler) MergeTags(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	var req struct {
 		SourceTagID string `json:"source_tag_id"`
 		TargetTagID string `json:"target_tag_id"`
@@ -187,7 +259,7 @@ func (h *TagHandler) MergeTags(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "invalid request body", Detail: err.Error()})
 		return
 	}
-	if err := h.svc.MergeTags(req.SourceTagID, req.TargetTagID); err != nil {
+	if err := h.svc.MergeTags(userID, req.SourceTagID, req.TargetTagID); err != nil {
 		h.logger.Error("merge tags failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
 		return
@@ -197,6 +269,12 @@ func (h *TagHandler) MergeTags(c *gin.Context) {
 
 // SplitTag handles POST /api/v1/tags/split
 func (h *TagHandler) SplitTag(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	var req struct {
 		SourceTagID string   `json:"source_tag_id"`
 		NewTagName  string   `json:"new_tag_name"`
@@ -206,7 +284,7 @@ func (h *TagHandler) SplitTag(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Code: 400, Message: "invalid request body", Detail: err.Error()})
 		return
 	}
-	result, err := h.svc.SplitTag(req.SourceTagID, req.NewTagName, req.NoteIDs)
+	result, err := h.svc.SplitTag(userID, req.SourceTagID, req.NewTagName, req.NoteIDs)
 	if err != nil {
 		h.logger.Error("split tag failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -221,8 +299,14 @@ func (h *TagHandler) SplitTag(c *gin.Context) {
 
 // GetStats handles GET /api/v1/tags/:id/stats
 func (h *TagHandler) GetStats(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	id := c.Param("id")
-	stats, err := h.svc.GetStats(id)
+	stats, err := h.svc.GetStats(userID, id)
 	if err != nil {
 		h.logger.Error("get tag stats failed", zap.String("id", id), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
@@ -233,8 +317,14 @@ func (h *TagHandler) GetStats(c *gin.Context) {
 
 // GetTopTags handles GET /api/v1/tags/top
 func (h *TagHandler) GetTopTags(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{Code: 401, Message: "missing user identity"})
+		return
+	}
+
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	tags, err := h.svc.GetTopTags(limit)
+	tags, err := h.svc.GetTopTags(userID, limit)
 	if err != nil {
 		h.logger.Error("get top tags failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})

@@ -98,9 +98,20 @@ class PersistenceDispatch {
           content: data['content'] as String,
         );
         return result.toJson();
+      case 'folder':
+        // 修复: 补全 folder update 路径，原代码缺失此 case 导致 UnimplementedError
+        final result = await _dispatch.updateFolder(
+          id: id,
+          name: data['name'] as String,
+          parentId: data['parent_id'] as String?,
+        );
+        return result.toJson();
       case 'block':
         await _dispatch.updateBlock(id: id, content: data['content'] as String);
         return {'id': id};
+      case 'tag':
+        // Rust 端无 TagEvent.UpdateTag handler，tag 更新需走 sqflite 路径
+        throw UnimplementedError('Tag update not supported via FFI; use sqflite path');
       default:
         throw UnimplementedError('Entity not supported for update: $entity');
     }
@@ -134,6 +145,18 @@ class PersistenceDispatch {
       case 'note':
         final result = await _dispatch.getNote(id);
         return result?.toJson();
+      case 'folder':
+        // 修复(P0): 补全 folder get 路径，原缺失导致抛 UnimplementedError
+        final result = await _dispatch.getFolder(id);
+        return result?.toJson();
+      case 'block':
+        // Rust 端无 EditorEvent.GetBlock 单个查询 handler，通过 GetBlocks 取全部后过滤
+        final noteId = id; // 注意：block 的 get 语义为按 noteId 查询块列表
+        final blocks = await _dispatch.getBlocks(noteId);
+        return {'blocks': blocks.map((b) => b.toJson()).toList()};
+      case 'tag':
+        // Rust 端无 TagEvent.GetTag handler，tag 查询需走 sqflite 路径
+        throw UnimplementedError('Tag get not supported via FFI; use sqflite path');
       default:
         throw UnimplementedError('Entity not supported for get: $entity');
     }

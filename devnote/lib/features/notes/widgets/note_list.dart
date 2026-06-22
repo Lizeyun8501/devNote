@@ -5,7 +5,10 @@ import 'package:devnote/features/notes/bloc/notes_bloc.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/features/notes/widgets/note_card.dart';
+import 'package:devnote/features/notes/widgets/swipeable_note_card.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
+import 'package:devnote/core/widgets/virtual_list_view.dart';
+import 'package:devnote/core/utils/performance_utils.dart';
 
 class NoteList extends StatelessWidget {
   const NoteList({super.key});
@@ -38,6 +41,9 @@ class NoteList extends StatelessWidget {
   // 借鉴 Google 官方维护的 ScrollablePositionedList:
   // https://pub.dev/packages/scrollable_positioned_list
   // 优势：支持 scrollToIndex/jumpToIndex，性能经过大规模验证
+  //
+  // P1-8: 移动端体验打磨 —— 移动设备使用 SwipeableNoteCard + VirtualListView
+  // 左滑删除、右滑收藏，虚拟滚动提升长列表性能；桌面端保持原有实现不变
   Widget _buildListView(BuildContext context, List<NoteModel> notes, String? selectedNoteId) {
     if (notes.isEmpty) {
       return Semantics(
@@ -45,6 +51,33 @@ class NoteList extends StatelessWidget {
         child: const Center(child: Text('暂无笔记')),
       );
     }
+    // 移动端：滑动手势 + 虚拟滚动
+    if (PerformanceUtils.isMobile(context)) {
+      return Semantics(
+        label: '笔记列表',
+        child: VirtualListView<NoteModel>(
+          items: notes,
+          itemExtent: 100,
+          padding: const EdgeInsets.all(8),
+          itemBuilder: (context, note, index) {
+            return SwipeableNoteCard(
+              isFavorite: false, // NoteModel 暂无 isFavorite 字段，预留接口
+              onDelete: () => _confirmDeleteNote(context, note.id),
+              onToggleFavorite: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('收藏功能开发中')),
+                );
+              },
+              child: NoteCard(
+                note: note,
+                isSelected: note.id == selectedNoteId,
+              ),
+            );
+          },
+        ),
+      );
+    }
+    // 桌面端：保持原有 ScrollablePositionedList 实现
     return Semantics(
       label: '笔记列表',
       child: ScrollablePositionedList.builder(
@@ -55,6 +88,30 @@ class NoteList extends StatelessWidget {
             isSelected: notes[index].id == selectedNoteId,
           );
         },
+      ),
+    );
+  }
+
+  /// 移动端左滑删除确认对话框
+  void _confirmDeleteNote(BuildContext context, String noteId) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除笔记'),
+        content: const Text('确定要删除这篇笔记吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              context.read<NotesBloc>().add(DeleteNote(noteId));
+              Navigator.pop(dialogContext);
+            },
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
   }

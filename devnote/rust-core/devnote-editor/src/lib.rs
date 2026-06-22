@@ -25,6 +25,47 @@ pub enum BlockType {
     Image { url: String, alt: Option<String> },
     LatexBlock,
     TaskListBlock,
+    Audio {
+        url: String,
+        duration_ms: u64,
+        transcript: Option<String>,
+    },
+    Pdf {
+        url: String,
+        page_count: u32,
+        current_page: u32,
+        annotations: Vec<PdfAnnotation>,
+    },
+    /// 手绘画布白板 —— content 为元素 JSON（由 Dart 侧 WhiteboardSerializer 编码）
+    Whiteboard { elements_json: String },
+}
+
+/// PDF 标注类型 —— 与 Dart 侧 PdfAnnotationType 对齐
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PdfAnnotationType {
+    Highlight,
+    Underline,
+    Note,
+    Signature,
+    Drawing,
+}
+
+/// PDF 标注 —— 高亮 / 下划线 / 批注 / 签名 / 绘图
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PdfAnnotation {
+    pub id: String,
+    pub page_number: u32,
+    pub annotation_type: PdfAnnotationType,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub text: Option<String>,
+    pub color: u32,
+    pub points: Option<Vec<(f64, f64)>>,
+    pub user_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -877,6 +918,45 @@ impl MarkdownParser {
                         content: table_lines.join("\n"),
                     });
                 }
+            } else if line.trim() == ":::audio" {
+                flush_paragraph(&mut current_lines, &mut blocks);
+                let mut audio_lines = Vec::new();
+                while let Some(next) = lines.next() {
+                    if next.trim() == ":::" {
+                        break;
+                    }
+                    audio_lines.push(next.to_string());
+                }
+                let json_content = audio_lines.join("\n");
+                let block_type = if let Ok(value) =
+                    serde_json::from_str::<serde_json::Value>(&json_content)
+                {
+                    BlockType::Audio {
+                        url: value
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        duration_ms: value
+                            .get("duration_ms")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        transcript: value
+                            .get("transcript")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                    }
+                } else {
+                    BlockType::Audio {
+                        url: String::new(),
+                        duration_ms: 0,
+                        transcript: None,
+                    }
+                };
+                blocks.push(ParsedBlock {
+                    block_type,
+                    content: json_content,
+                });
             } else if line.starts_with("$$") {
                 flush_paragraph(&mut current_lines, &mut blocks);
                 let mut latex_lines = vec![line.to_string()];
@@ -953,6 +1033,8 @@ impl MarkdownParser {
 }
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod tests {
     use super::*;
 

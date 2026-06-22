@@ -1,9 +1,16 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/models/timeline_marker.dart';
+import 'package:devnote/features/editor/widgets/audio_block_widget.dart';
 import 'package:devnote/features/editor/widgets/code_block_widget.dart';
 import 'package:devnote/features/editor/widgets/latex_block_widget.dart';
+import 'package:devnote/features/editor/widgets/pdf_block_widget.dart';
 import 'package:devnote/features/editor/widgets/table_block_widget.dart';
 import 'package:devnote/features/editor/widgets/task_list_widget.dart';
+import 'package:devnote/features/editor/widgets/timeline_audio_player.dart';
 
 class BlockWidget extends StatefulWidget {
   final BlockModel block;
@@ -14,6 +21,9 @@ class BlockWidget extends StatefulWidget {
   final VoidCallback onEnterPressed;
   final VoidCallback onBackspaceAtStart;
 
+  /// 点击时间轴标记时回调，参数为关联的文本块 ID（用于滚动定位）
+  final ValueChanged<String>? onTimelineMarkerTap;
+
   const BlockWidget({
     super.key,
     required this.block,
@@ -23,6 +33,7 @@ class BlockWidget extends StatefulWidget {
     required this.onTypeChanged,
     required this.onEnterPressed,
     required this.onBackspaceAtStart,
+    this.onTimelineMarkerTap,
   });
 
   @override
@@ -196,6 +207,9 @@ class _BlockWidgetState extends State<BlockWidget> {
       case BlockType.latexBlock:
       case BlockType.tableBlock:
       case BlockType.taskListBlock:
+      case BlockType.audio:
+      case BlockType.pdf:
+      case BlockType.whiteboard:
         return true;
       default:
         return false;
@@ -225,9 +239,106 @@ class _BlockWidgetState extends State<BlockWidget> {
           content: widget.block.content,
           onContentChanged: widget.onContentChanged,
         );
+      case BlockType.audio:
+        return _buildAudioBlock();
+      case BlockType.pdf:
+        return PdfBlockWidget(
+          content: widget.block.content,
+          onContentChanged: widget.onContentChanged,
+        );
+      case BlockType.whiteboard:
+        return _buildWhiteboardBlock();
       default:
         return const SizedBox.shrink();
     }
+  }
+
+  /// 白板块渲染：显示缩略卡片，点击跳转到白板编辑页
+  /// content 字段存储白板 JSON（由 WhiteboardService 序列化）
+  Widget _buildWhiteboardBlock() {
+    int elementCount = 0;
+    try {
+      final decoded = jsonDecode(widget.block.content);
+      if (decoded is Map<String, dynamic>) {
+        final list = decoded['elements'];
+        if (list is List) elementCount = list.length;
+      }
+    } catch (_) {
+      // content 非合法 JSON 时按 0 元素处理
+    }
+    return InkWell(
+      onTap: () {
+        // 跳转到白板页面，noteId 作为参数传递
+        GoRouter.of(context).push(
+          '/whiteboard/${widget.block.noteId}',
+          extra: widget.block.noteId,
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.draw,
+              size: 36,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '白板',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  Text(
+                    '$elementCount 个元素 · 点击编辑',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 渲染音频块：若 content JSON 包含时间轴 markers，使用 TimelineAudioPlayer；
+  /// 否则回退到普通 AudioBlockWidget（向后兼容 P0-3 已有录音）
+  Widget _buildAudioBlock() {
+    Map<String, dynamic>? data;
+    try {
+      data = jsonDecode(widget.block.content) as Map<String, dynamic>;
+    } catch (_) {
+      data = null;
+    }
+    final markersJson = data?['markers'] as List?;
+    if (markersJson != null && markersJson.isNotEmpty) {
+      final markers = markersJson
+          .map((e) => TimelineMarker.fromJson(e as Map<String, dynamic>))
+          .toList();
+      return TimelineAudioPlayer(
+        audioPath: data?['url'] as String? ?? '',
+        durationMs: (data?['duration_ms'] as num?)?.toInt() ?? 0,
+        transcript: data?['transcript'] as String? ?? '',
+        markers: markers,
+        onMarkerTap: widget.onTimelineMarkerTap,
+      );
+    }
+    return AudioBlockWidget(
+      content: widget.block.content,
+      onContentChanged: widget.onContentChanged,
+    );
   }
 
   @override
@@ -363,6 +474,9 @@ class _BlockWidgetState extends State<BlockWidget> {
         const PopupMenuItem(value: BlockType.tableBlock, child: Text('Table')),
         const PopupMenuItem(value: BlockType.latexBlock, child: Text('LaTeX')),
         const PopupMenuItem(value: BlockType.taskListBlock, child: Text('Task List')),
+        const PopupMenuItem(value: BlockType.audio, child: Text('Audio')),
+        const PopupMenuItem(value: BlockType.pdf, child: Text('PDF')),
+        const PopupMenuItem(value: BlockType.whiteboard, child: Text('Whiteboard')),
       ],
     ).then((type) {
       if (type != null) {

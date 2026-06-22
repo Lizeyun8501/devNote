@@ -71,12 +71,24 @@ func main() {
 	// Initialize services
 	authService := service.NewAuthService(sqliteStore.DB, cfg)
 	syncService := service.NewSyncService(sqliteStore.DB, s3Store)
+	shareService := service.NewShareService(sqliteStore.DB)
+	// P3 修复 (P3-13): NewEmailService 现在返回 error，迁移失败时 fatal 退出
+	emailService, err := service.NewEmailService(sqliteStore.DB, syncService, cfg.EmailDomain)
+	if err != nil {
+		logger.Fatal("failed to init email service", zap.Error(err))
+	}
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	srpAuthHandler := handler.NewSRPAuthHandler(authService)
 	syncHandler := handler.NewSyncHandler(syncService)
 	healthHandler := handler.NewHealthHandler()
+	realtimeHandler := handler.NewRealtimeHandler(authService, logger)
+	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader
+	handler.SetupCheckOrigin(cfg.AllowedOrigins)
+	clipperHandler := handler.NewClipperHandler(syncService)
+	shareHandler := handler.NewShareHandler(shareService)
+	emailHandler := handler.NewEmailHandler(emailService, cfg.EmailWebhookSecret)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -89,6 +101,13 @@ func main() {
 		Metrics: metrics,
 	}))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	// P1 安全修复: 添加安全响应头中间件（原完全缺失）
+	r.Use(middleware.SecurityHeaders())
+	// 修复(P0): 注册 API 版本控制中间件（原已实现但未挂载，为死代码）
+	r.Use(middleware.APIVersionMiddleware(middleware.APIVersionConfig{
+		Required:      false,
+		LatestVersion: middleware.CurrentAPIVersion,
+	}))
 	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
 	r.Use(rateLimitHandler)
 	defer rateLimitStop()
@@ -98,6 +117,12 @@ func main() {
 
 	// Prometheus metrics endpoint
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// 实时协作 WebSocket
+	// 注册在根级别 /realtime，与客户端 wss://sync.devnote.app/realtime 对齐。
+	// 不经过 JWTAuth 中间件：WebSocket 升级时无法使用标准 Bearer header，
+	// 改为在 handler 内部从 query param 校验 JWT。
+	r.GET("/realtime", realtimeHandler.Connect)
 
 	// API v1 routes
 	api := r.Group("/api/v1")
@@ -120,15 +145,55 @@ func main() {
 		}
 
 		// Sync routes (protected)
-		sync := api.Group("/sync")
-		sync.Use(middleware.JWTAuth(authService))
+	sync := api.Group("/sync")
+	sync.Use(middleware.JWTAuth(authService))
+	// P1 架构修复: 挂载 Idempotency 中间件，防止客户端重试导致重复 Push
+	// 创建多条 SyncRecord 和 NoteSnapshot（原已实现但未挂载，为死代码）
+	sync.Use(middleware.IdempotencyMiddleware(middleware.IdempotencyConfig{
+		Cache:      middleware.NewIdempotencyCache(24*time.Hour, 10000),
+		HeaderName: "Idempotency-Key",
+	}))
+	{
+		sync.POST("/push", syncHandler.Push)
+		sync.POST("/pull", syncHandler.Pull)
+		sync.GET("/status", syncHandler.Status)
+		sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
+
+		// 版本历史
+		sync.GET("/notes/:noteId/history", syncHandler.GetNoteHistory)
+		sync.GET("/notes/:noteId/versions/:version", syncHandler.GetNoteVersion)
+	}
+
+		// Clipper API (protected) —— 网页剪藏扩展入口
+		notes := api.Group("/notes")
+		notes.Use(middleware.JWTAuth(authService))
 		{
-			sync.POST("/push", syncHandler.Push)
-			sync.POST("/pull", syncHandler.Pull)
-			sync.GET("/status", syncHandler.Status)
-			sync.POST("/resolve-conflict", syncHandler.ResolveConflict)
+			notes.POST("/clip", clipperHandler.Clip)
+		}
+
+		// 分享管理 API（需认证）—— 公开分享/发布笔记，对标 Obsidian Publish
+		shares := api.Group("/shares")
+		shares.Use(middleware.JWTAuth(authService))
+		{
+			shares.POST("", shareHandler.CreateShare)
+			shares.GET("", shareHandler.ListShares)
+			shares.DELETE("/:shareId", shareHandler.DeleteShare)
+		}
+
+		// 邮件转笔记管理 API（需认证）—— 获取/重新生成专属邮箱别名
+		email := api.Group("/email")
+		email.Use(middleware.JWTAuth(authService))
+		{
+			email.GET("/alias", emailHandler.GetUserAlias)
+			email.POST("/alias/regenerate", emailHandler.RegenerateAlias)
 		}
 	}
+
+	// 公开访问分享的笔记（无需认证）
+	r.GET("/s/:token", shareHandler.GetSharedNote)
+
+	// 邮件 Webhook（无需认证，通过签名验证）—— 接收 SendGrid/Mailgun/SES 等邮件入站
+	r.POST("/webhooks/email", emailHandler.IncomingEmailWebhook)
 
 	// Handle TLS / AutoCert
 	if cfg.EnableTLS && cfg.AutoCert {

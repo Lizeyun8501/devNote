@@ -3,7 +3,7 @@
 | 属性 | 值 |
 |------|------|
 | **标题** | 使用 WebAssembly（WASM）实现插件沙箱系统 |
-| **状态** | Accepted |
+| **状态** | Superseded（运行时从 Wasmtime 迁移至 extism，见下方"变更记录"） |
 | **日期** | 2025-03-10 |
 | **决策者** | DevNote 核心架构团队 |
 
@@ -150,3 +150,26 @@ let memory_type = MemoryType::new(1, Some(16));
 | 插件逃逸沙箱 | WASM 无法直接系统调用；所有 Host Function 参数严格验证 |
 | 恶意插件获取敏感数据 | 权限控制模型，仅注入授权后的 Host Function |
 | WASI 标准不兼容 | 使用 Wasmtime 稳定 API 版本；定期更新运行时 |
+
+## 变更记录
+
+### Superseded — 运行时从 Wasmtime 迁移至 extism
+
+**状态变更日期**：2026-06-19
+**新方案**：[extism](https://extism.org/)（通用 WASM 插件框架，底层仍基于 WASM 沙箱）
+
+本 ADR 记录的"直接使用 Wasmtime 运行时 + 手写 WASI Host Functions"方案已被 `extism` 取代。代码实际状态如下：
+
+- `rust-core/devnote-plugin/Cargo.toml` 依赖 `extism = { version = "1" }`（workspace 依赖），不再直接依赖 `wasmtime`。
+- `rust-core/Cargo.toml` workspace 依赖中声明 `extism = { version = "1" }`，注释明确标注"从自研 wasmtime 沙箱 → extism 通用插件框架"。
+
+**迁移原因**：
+
+1. **降低开发门槛**：extism 内置多语言插件开发支持（Rust/Go/Python/JS 等 16+ 语言），插件开发者无需直接对接 WASI 底层 API。
+2. **内置插件 API**：extism 提供 HTTP 请求、日志、缓存等开箱即用的 Host Function，减少手写 `PluginHost` trait 的工作量。
+3. **沙箱安全不变**：extism 底层仍基于 WASM 沙箱，本 ADR"安全模型"中的沙箱隔离、资源限制、权限控制等设计原则继续生效。
+4. **维护成本**：Wasmtime API 随版本演进较快，直接依赖需持续跟进；extism 封装了运行时细节，降低维护负担。
+
+**保留的设计**：本 ADR 的"安全模型"（沙箱隔离、资源限制、权限控制、签名验证、网络隔离）和"插件生命周期"设计仍然有效，extism 在这些方面提供等价或更完善的能力。仅"资源限制配置"中的 Wasmtime 特定 API（`Config::max_wasm_stack`、`Store::set_fuel` 等）不再适用，改用 extism 的 manifest 配置。
+
+本 ADR 的"决策"中关于"通过 Wasmtime 运行时"的部分仅作为历史记录保留，当前运行时为 extism。

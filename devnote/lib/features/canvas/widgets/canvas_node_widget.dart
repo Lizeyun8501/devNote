@@ -121,6 +121,8 @@ class CanvasNodeWidget extends StatelessWidget {
         return Theme.of(context).colorScheme.primaryContainer;
       case NodeType.group:
         return Theme.of(context).colorScheme.surfaceContainer.withValues(alpha: 0.5);
+      case NodeType.ink:
+        return Theme.of(context).colorScheme.surfaceContainerHighest;
     }
   }
 
@@ -170,6 +172,8 @@ class CanvasNodeWidget extends StatelessWidget {
         return Icons.link;
       case NodeType.group:
         return Icons.crop_free;
+      case NodeType.ink:
+        return Icons.draw;
     }
   }
 
@@ -185,6 +189,8 @@ class CanvasNodeWidget extends StatelessWidget {
         return node.content ?? '链接';
       case NodeType.group:
         return '分组';
+      case NodeType.ink:
+        return '手写';
     }
   }
 
@@ -223,6 +229,14 @@ class CanvasNodeWidget extends StatelessWidget {
         );
       case NodeType.group:
         return const SizedBox.shrink();
+      case NodeType.ink:
+        return Center(
+          child: Icon(
+            Icons.draw,
+            size: 48,
+            color: Theme.of(context).colorScheme.outline,
+          ),
+        );
     }
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/canvas/bloc/canvas_bloc.dart';
 import 'package:devnote/features/canvas/bloc/canvas_event.dart';
 import 'package:devnote/features/canvas/bloc/canvas_state.dart';
@@ -7,6 +8,7 @@ import 'package:devnote/features/canvas/canvas_service.dart';
 import 'package:devnote/features/canvas/widgets/canvas_node_widget.dart';
 import 'package:devnote/features/canvas/widgets/canvas_edge_widget.dart';
 import 'package:devnote/features/canvas/widgets/canvas_toolbar.dart';
+import 'package:devnote/features/canvas/widgets/ink_canvas_layer.dart';
 
 /// Canvas 无限画布组件
 /// 
@@ -24,7 +26,7 @@ class CanvasPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => CanvasBloc(CanvasService()),
+      create: (context) => CanvasBloc(getIt<CanvasService>()),
       child: const _CanvasView(),
     );
   }
@@ -89,7 +91,7 @@ class _CanvasViewState extends State<_CanvasView> {
 
   Future<void> _initCanvas() async {
     try {
-      final service = CanvasService();
+      final service = getIt<CanvasService>();
       final canvasId = await service.createCanvas();
       if (mounted) {
         context.read<CanvasBloc>().add(LoadCanvas(canvasId));
@@ -136,103 +138,123 @@ class _CanvasViewState extends State<_CanvasView> {
             return Center(child: Text('Error: ${state.message}'));
           }
           if (state is CanvasLoaded) {
-            return InteractiveViewer(
-              transformationController: _transformationController,
-              minScale: 0.1,
-              maxScale: 5.0,
-              onInteractionUpdate: (_) => _updateViewport(),
-              child: GestureDetector(
-                onTapUp: (details) {
-                  context.read<CanvasBloc>().add(const SelectNode(null));
-                },
-                child: Container(
-                  width: 10000,
-                  height: 10000,
-                  color: Theme.of(context).colorScheme.surface,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      CustomPaint(
-                        size: const Size(10000, 10000),
-                        painter: _GridPainter(
-                          color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.3),
-                        ),
-                      ),
-                      ...state.edges.map((edge) {
-                        final fromNode = state.nodes.where((n) => n.id == edge.fromNode);
-                        final toNode = state.nodes.where((n) => n.id == edge.toNode);
-                        if (fromNode.isEmpty || toNode.isEmpty) return const SizedBox.shrink();
-                        return CanvasEdgeWidget(
-                          edge: edge,
-                          fromNode: fromNode.first,
-                          toNode: toNode.first,
-                        );
-                      }),
-                      ...state.nodes.where(_isNodeVisible).map((node) {
-                        final isSelected = state.selectedNodeId == node.id;
-                        return CanvasNodeWidget(
-                          node: node,
-                          isSelected: isSelected,
-                          onTap: () {
-                            context.read<CanvasBloc>().add(SelectNode(node.id));
-                          },
-                          onDragStart: (offset) {
-                            setState(() {
-                              _draggingNodeId = node.id;
-                              _dragOffset = offset;
-                            });
-                          },
-                          onDragUpdate: (globalPosition) {
-                            if (_draggingNodeId == node.id) {
-                              final transform = _transformationController.value;
-                              final inverse = Matrix4.inverted(transform);
-                              final local = MatrixUtils.transformPoint(inverse, globalPosition);
-                              final dx = local.dx - _dragOffset.dx;
-                              final dy = local.dy - _dragOffset.dy;
-                              context.read<CanvasBloc>().add(MoveNode(
+            return Stack(
+              children: [
+                InteractiveViewer(
+                  transformationController: _transformationController,
+                  minScale: 0.1,
+                  maxScale: 5.0,
+                  onInteractionUpdate: (_) => _updateViewport(),
+                  child: GestureDetector(
+                    onTapUp: (details) {
+                      context.read<CanvasBloc>().add(const SelectNode(null));
+                    },
+                    child: Container(
+                      width: 10000,
+                      height: 10000,
+                      color: Theme.of(context).colorScheme.surface,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          CustomPaint(
+                            size: const Size(10000, 10000),
+                            painter: _GridPainter(
+                              color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          ...state.edges.map((edge) {
+                            final fromNode = state.nodes.where((n) => n.id == edge.fromNode);
+                            final toNode = state.nodes.where((n) => n.id == edge.toNode);
+                            if (fromNode.isEmpty || toNode.isEmpty) return const SizedBox.shrink();
+                            return CanvasEdgeWidget(
+                              edge: edge,
+                              fromNode: fromNode.first,
+                              toNode: toNode.first,
+                            );
+                          }),
+                          ...state.nodes.where(_isNodeVisible).map((node) {
+                            final isSelected = state.selectedNodeId == node.id;
+                            return CanvasNodeWidget(
+                              node: node,
+                              isSelected: isSelected,
+                              onTap: () {
+                                context.read<CanvasBloc>().add(SelectNode(node.id));
+                              },
+                              onDragStart: (offset) {
+                                setState(() {
+                                  _draggingNodeId = node.id;
+                                  _dragOffset = offset;
+                                });
+                              },
+                              onDragUpdate: (globalPosition) {
+                                if (_draggingNodeId == node.id) {
+                                  final transform = _transformationController.value;
+                                  final inverse = Matrix4.inverted(transform);
+                                  final local = MatrixUtils.transformPoint(inverse, globalPosition);
+                                  final dx = local.dx - _dragOffset.dx;
+                                  final dy = local.dy - _dragOffset.dy;
+                                  context.read<CanvasBloc>().add(MoveNode(
                                     nodeId: node.id,
                                     x: dx,
                                     y: dy,
                                   ));
-                            }
-                          },
-                          onDragEnd: () {
-                            setState(() {
-                              _draggingNodeId = null;
-                            });
-                          },
-                          onResizeStart: (globalPosition) {
-                            setState(() {
-                              _resizingNodeId = node.id;
-                              _resizeStartOffset = globalPosition;
-                              _resizeStartWidth = node.width;
-                              _resizeStartHeight = node.height;
-                            });
-                          },
-                          onResizeUpdate: (globalPosition) {
-                            if (_resizingNodeId == node.id) {
-                              final transform = _transformationController.value;
-                              final scale = transform.getMaxScaleOnAxis();
-                              final dx = (globalPosition.dx - _resizeStartOffset.dx) / scale;
-                              final dy = (globalPosition.dy - _resizeStartOffset.dy) / scale;
-                              context.read<CanvasBloc>().add(ResizeNode(
+                                }
+                              },
+                              onDragEnd: () {
+                                setState(() {
+                                  _draggingNodeId = null;
+                                });
+                              },
+                              onResizeStart: (globalPosition) {
+                                setState(() {
+                                  _resizingNodeId = node.id;
+                                  _resizeStartOffset = globalPosition;
+                                  _resizeStartWidth = node.width;
+                                  _resizeStartHeight = node.height;
+                                });
+                              },
+                              onResizeUpdate: (globalPosition) {
+                                if (_resizingNodeId == node.id) {
+                                  final transform = _transformationController.value;
+                                  final scale = transform.getMaxScaleOnAxis();
+                                  final dx = (globalPosition.dx - _resizeStartOffset.dx) / scale;
+                                  final dy = (globalPosition.dy - _resizeStartOffset.dy) / scale;
+                                  context.read<CanvasBloc>().add(ResizeNode(
                                     nodeId: node.id,
                                     width: (_resizeStartWidth + dx).clamp(100, 2000),
                                     height: (_resizeStartHeight + dy).clamp(60, 2000),
                                   ));
-                            }
-                          },
-                          onResizeEnd: () {
-                            setState(() {
-                              _resizingNodeId = null;
-                            });
-                          },
-                        );
-                      }),
-                    ],
+                                }
+                              },
+                              onResizeEnd: () {
+                                setState(() {
+                                  _resizingNodeId = null;
+                                });
+                              },
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                // Ink 手写绘制层（顶层覆盖）
+                // 借鉴 perfect_freehand 的手写绘图方案
+                Positioned.fill(
+                  child: InkCanvasLayer(
+                    strokes: state.inkStrokes,
+                    onStrokeAdded: (stroke) =>
+                        context.read<CanvasBloc>().add(AddInkStroke(stroke)),
+                    onUndo: () =>
+                        context.read<CanvasBloc>().add(const UndoInkStroke()),
+                    onRedo: () =>
+                        context.read<CanvasBloc>().add(const RedoInkStroke()),
+                    onClear: () =>
+                        context.read<CanvasBloc>().add(const ClearInkStrokes()),
+                    scale: _transformationController.value.getMaxScaleOnAxis(),
+                  ),
+                ),
+              ],
             );
           }
           return const Center(child: CircularProgressIndicator());

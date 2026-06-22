@@ -22,6 +22,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
 import 'package:devnote/features/sync/rdiff_service.dart';
@@ -151,9 +152,8 @@ class IncrementalSyncService {
 
   /// SharedPreferences 键名前缀
   static const String _keySession = 'incremental_sync_session';
-  static const String _keyServerUrl = 'sync_server_url';
-  static const String _keyAuthToken = 'sync_auth_token';
-  static const String _defaultServerUrl = 'https://sync.devnote.app';
+  static const String _keyServerUrl = syncServerUrlKey;
+  static const String _keyAuthToken = syncAuthTokenKey;
 
   /// 当前活跃的同步会话（从持久化存储恢复）
   SyncSession? _activeSession;
@@ -191,6 +191,19 @@ class IncrementalSyncService {
   /// 3. 分块上传 delta 数据，跳过已完成的块
   /// 4. 全部块上传完成后，通知服务端合并并清除会话
   Future<IncrementalSyncResult> pushIncremental(
+    Uint8List newData, {
+    bool encrypt = true,
+  }) async {
+    // P0 修复: 服务端未实现增量同步端点（/sync/signatures, /delta, /chunk,
+    // /commit, /abort），调用必然返回 404。在此明确返回失败，避免误导用户。
+    // 后续应在 sync-server 实现这些端点后移除此检查。
+    return const IncrementalSyncResult(
+      success: false,
+      error: '增量同步暂不可用：服务端未实现相关端点，请使用全量同步',
+    );
+  }
+
+  Future<IncrementalSyncResult> _pushIncrementalImpl(
     Uint8List newData, {
     bool encrypt = true,
   }) async {
@@ -447,7 +460,7 @@ class IncrementalSyncService {
 
   Future<String> _getServerUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyServerUrl) ?? _defaultServerUrl;
+    return prefs.getString(_keyServerUrl) ?? defaultSyncServerUrl;
   }
 
   Future<String?> _getAuthToken() async {

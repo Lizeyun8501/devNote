@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:devnote/core/observability/app_logger.dart';
 import 'storage_adapter.dart';
 
 class S3Config {
@@ -138,14 +140,12 @@ class S3Adapter implements StorageAdapter {
   }
 
   static String _sha256Hex(List<int> data) {
-    return data.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return sha256.convert(data).toString();
   }
 
   static List<int> _hmacSha256(List<int> key, List<int> data) {
-    // Simplified HMAC-SHA256 placeholder - in production use a crypto library
-    // For now, return a deterministic result based on key+data
-    final combined = [...key, ...data];
-    return combined.map((b) => b ^ 0x5c).toList();
+    final hmac = Hmac(sha256, key);
+    return hmac.convert(data).bytes;
   }
 
   static String _hmacSha256Hex(List<int> key, List<int> data) {
@@ -170,9 +170,10 @@ class S3Adapter implements StorageAdapter {
           response.statusCode == 204 ||
           response.statusCode == 404;
       return _configured;
-    } catch (_) {
+    } catch (e) {
       _configured = false;
-      return false;
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -200,8 +201,9 @@ class S3Adapter implements StorageAdapter {
       );
 
       return response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -313,8 +315,9 @@ class S3Adapter implements StorageAdapter {
         return response.bodyBytes;
       }
       return null;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -332,8 +335,9 @@ class S3Adapter implements StorageAdapter {
       );
 
       return response.statusCode == 204 || response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -369,8 +373,9 @@ class S3Adapter implements StorageAdapter {
         }
       }
       return keys;
-    } catch (_) {
-      return [];
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -394,8 +399,9 @@ class S3Adapter implements StorageAdapter {
         }
       }
       return null;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 
@@ -413,8 +419,9 @@ class S3Adapter implements StorageAdapter {
       );
 
       return response.statusCode == 200;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      AppLogger.w('StorageAdapter', '操作失败', error: e);
+      rethrow;
     }
   }
 

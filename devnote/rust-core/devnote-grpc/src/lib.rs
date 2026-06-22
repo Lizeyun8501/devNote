@@ -76,9 +76,7 @@ pub struct DevNoteGrpcClient {
     dispatch_client: RwLock<Option<DevNoteServiceClient<Channel>>>,
     sync_client: RwLock<Option<SyncServiceClient<Channel>>>,
     reconnect_enabled: RwLock<bool>,
-    #[allow(dead_code)]
     max_retries: u32,
-    #[allow(dead_code)]
     retry_delay_ms: u64,
 }
 
@@ -107,11 +105,19 @@ impl DevNoteGrpcClient {
     }
 
     pub fn with_tls(addr: String, tls: TlsConfig) -> Self {
-        let client = Self::new(addr);
-        let _ = futures_executor::block_on(async {
-            *client.tls_config.write().await = Some(tls);
-        });
-        client
+        // 直接在构造时设置 tls_config，避免使用 block_on。
+        // 原实现使用 futures_executor::block_on 在 tokio 运行时上下文中会
+        // panic 或死锁。直接以结构体字面量构造可完全避免异步锁写入。
+        Self {
+            addr: RwLock::new(addr),
+            tls_config: RwLock::new(Some(tls)),
+            state: RwLock::new(ConnectionState::Disconnected),
+            dispatch_client: RwLock::new(None),
+            sync_client: RwLock::new(None),
+            reconnect_enabled: RwLock::new(true),
+            max_retries: 5,
+            retry_delay_ms: 1000,
+        }
     }
 
     /// Get current connection state
@@ -398,14 +404,26 @@ impl DevNoteGrpcClient {
     fn handle_status_error_inner(status: &Status) {
         match status.code() {
             tonic::Code::Unauthenticated | tonic::Code::PermissionDenied => {
-                // Auth errors - don't reconnect
+                tracing::warn!(
+                    code = ?status.code(),
+                    "gRPC auth error, will not reconnect"
+                );
             }
             tonic::Code::Unavailable
             | tonic::Code::DeadlineExceeded
             | tonic::Code::Internal => {
-                // Transient errors - could trigger reconnection
+                tracing::warn!(
+                    code = ?status.code(),
+                    "gRPC transient error, reconnection may be triggered"
+                );
             }
-            _ => {}
+            _ => {
+                tracing::warn!(
+                    code = ?status.code(),
+                    "gRPC error: {}",
+                    status.message()
+                );
+            }
         }
     }
 }
@@ -561,13 +579,13 @@ impl SyncService for SyncServiceHandlerImpl {
         &self,
         request: Request<WatchRequest>,
     ) -> Result<Response<Self::WatchChangesStream>, Status> {
+        // 原实现创建一个容量为 1 的 mpsc channel 后立即丢弃 sender，
+        // 返回的 stream 永远不会产出任何 ChangeEvent，调用方收到 Ok 但
+        // 永远收不到变更通知（伪装成功）。改为返回明确的 unimplemented 错误。
         let _req = request.into_inner();
-
-        // Return an empty but properly-typed stream
-        let (_, rx) = tokio::sync::mpsc::channel::<Result<ChangeEvent, Status>>(1);
-        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-
-        Ok(Response::new(Box::pin(stream)))
+        Err(Status::unimplemented(
+            "watch_changes is not yet implemented",
+        ))
     }
 }
 
@@ -598,9 +616,11 @@ impl DevNoteGrpcServer {
     }
 
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
+        // 原实现使用 .expect("Handler must be set before serving")，在生产代码中
+        // 会 panic。改为返回错误，让调用方能够优雅处理。
         let handler = self
             .handler
-            .expect("Handler must be set before serving");
+            .ok_or("Handler must be set before serving")?;
 
         let devnote_svc = DevNoteServiceHandler {
             handler: handler.clone(),

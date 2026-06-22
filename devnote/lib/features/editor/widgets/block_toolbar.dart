@@ -6,6 +6,13 @@ class BlockToolbar extends StatelessWidget {
   final VoidCallback onInsertCodeBlock;
   final VoidCallback onInsertList;
   final VoidCallback onInsertQuote;
+  final VoidCallback onInsertAudio;
+  final VoidCallback onInsertPdf;
+  final VoidCallback onInsertWhiteboard;
+  final VoidCallback onTimelineRecord;
+  /// P2-9: 公式（手写）按钮 —— 直接弹出 MathInkDialog，插入时创建 latex block
+  final VoidCallback onInsertMathInk;
+  final bool isTimelineRecording;
 
   const BlockToolbar({
     super.key,
@@ -14,6 +21,12 @@ class BlockToolbar extends StatelessWidget {
     required this.onInsertCodeBlock,
     required this.onInsertList,
     required this.onInsertQuote,
+    required this.onInsertAudio,
+    required this.onInsertPdf,
+    required this.onInsertWhiteboard,
+    required this.onTimelineRecord,
+    required this.onInsertMathInk,
+    this.isTimelineRecording = false,
   });
 
   @override
@@ -66,6 +79,39 @@ class BlockToolbar extends StatelessWidget {
                 label: '插入引用',
                 onPressed: onInsertQuote,
               ),
+              _ToolbarButton(
+                icon: Icons.mic,
+                tooltip: 'Voice Recorder',
+                label: '语音速记',
+                onPressed: onInsertAudio,
+              ),
+              _ToolbarButton(
+                icon: Icons.picture_as_pdf,
+                tooltip: 'PDF',
+                label: '插入 PDF 标注',
+                onPressed: onInsertPdf,
+              ),
+              _ToolbarButton(
+                icon: Icons.draw,
+                tooltip: 'Whiteboard',
+                label: '插入白板',
+                onPressed: onInsertWhiteboard,
+              ),
+              _ToolbarButton(
+                icon: Icons.gesture,
+                tooltip: 'Formula (Handwriting)',
+                label: '公式（手写）',
+                onPressed: onInsertMathInk,
+              ),
+              _ToolbarButton(
+                icon: isTimelineRecording ? Icons.stop : Icons.timeline,
+                tooltip: isTimelineRecording ? 'Stop Timeline Recording' : 'Timeline Recording',
+                label: isTimelineRecording ? '停止时间轴录音' : '时间轴录音',
+                onPressed: onTimelineRecord,
+                color: isTimelineRecording
+                    ? Colors.red
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ],
           ),
         ),
@@ -79,12 +125,14 @@ class _ToolbarButton extends StatelessWidget {
   final String tooltip;
   final String label;
   final VoidCallback onPressed;
+  final Color? color;
 
   const _ToolbarButton({
     required this.icon,
     required this.tooltip,
     required this.label,
     required this.onPressed,
+    this.color,
   });
 
   @override
@@ -95,7 +143,7 @@ class _ToolbarButton extends StatelessWidget {
         icon: Icon(icon, size: 20),
         tooltip: tooltip,
         onPressed: onPressed,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
+        color: color ?? Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     );
   }

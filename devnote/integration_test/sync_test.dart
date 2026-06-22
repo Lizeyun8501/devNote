@@ -19,6 +19,7 @@ import 'package:devnote/features/sync/bloc/sync_bloc.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 import 'package:devnote/features/sync/bloc/sync_state.dart';
 import 'package:devnote/features/sync/sync_service.dart';
+import 'package:devnote/features/sync/sync_settings_service.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 
 /// Mock SyncService —— 模拟同步服务器行为
@@ -45,6 +46,7 @@ void main() {
 
   group('同步流程集成测试', () {
     late MockSyncService mockSyncService;
+    late SyncSettingsService settingsService;
     late ConflictResolver conflictResolver;
 
     setUpAll(() {
@@ -59,6 +61,7 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       conflictResolver = ConflictResolver();
       mockSyncService = MockSyncService();
+      settingsService = SyncSettingsService();
 
       // 默认 Mock 配置 —— 模拟空闲状态的服务器
       when(() => mockSyncService.stateStream)
@@ -72,7 +75,7 @@ void main() {
     });
 
     testWidgets('完整同步流程：启动 → 拉取 → 完成', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
 
       // 配置 Mock：initialize 成功，pullChanges 返回 null（无新数据）
       when(() => mockSyncService.pullChanges()).thenAnswer((_) async => null);
@@ -96,7 +99,7 @@ void main() {
     });
 
     testWidgets('推送变更流程：推送 → 完成', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 配置 Mock：pushChanges 返回 synced 状态
@@ -120,7 +123,7 @@ void main() {
     });
 
     testWidgets('拉取变更流程：拉取 → 完成', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 配置 Mock：pullChanges 返回远端数据
@@ -143,7 +146,7 @@ void main() {
     });
 
     testWidgets('冲突解决流程：拉取冲突 → 解决 → 完成', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 配置 Mock：pullChanges 返回冲突状态
@@ -186,7 +189,7 @@ void main() {
     });
 
     testWidgets('自动同步开关持久化', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 开启自动同步
@@ -211,7 +214,7 @@ void main() {
     });
 
     testWidgets('同步间隔修改持久化', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 修改同步间隔为 10 分钟
@@ -230,7 +233,7 @@ void main() {
     });
 
     testWidgets('停止同步切换到空闲状态', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 先开启自动同步
@@ -250,7 +253,7 @@ void main() {
     });
 
     testWidgets('同步初始化失败进入错误状态', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
 
       // 配置 Mock：initialize 抛出 401 错误（不可重试，避免重试超时）
       when(() => mockSyncService.initialize())
@@ -266,7 +269,7 @@ void main() {
     });
 
     testWidgets('推送失败进入错误状态', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 配置 Mock：pushChanges 抛出 403 错误（不可重试）
@@ -283,7 +286,7 @@ void main() {
     });
 
     testWidgets('拉取失败进入错误状态', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 配置 Mock：pullChanges 抛出 401 错误（不可重试）
@@ -300,7 +303,7 @@ void main() {
     });
 
     testWidgets('完整同步生命周期：启动 → 推送 → 停止', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
 
       // Step 1: 启动同步
       when(() => mockSyncService.pullChanges()).thenAnswer((_) async => null);
@@ -339,7 +342,7 @@ void main() {
     });
 
     testWidgets('多个冲突依次解决', (tester) async {
-      final bloc = SyncBloc(mockSyncService);
+      final bloc = SyncBloc(mockSyncService, settingsService);
       await tester.pumpAndSettle();
 
       // 配置两个冲突

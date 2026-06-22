@@ -32,20 +32,54 @@ type AuthService struct {
 	db          *gorm.DB
 	cfg         *config.Config
 	srpParams   *auth.SRPParams
-	srpSessions map[string]*auth.SRPServer
+	srpSessions map[string]*srpSessionEntry
 	srpMu       sync.Mutex
 }
+
+// srpSessionEntry 包装 SRP 会话及其创建时间，用于实现 TTL 过期清理。
+type srpSessionEntry struct {
+	server    *auth.SRPServer
+	createdAt time.Time
+}
+
+// SRP 会话生命周期相关常量
+const (
+	// srpSessionTTL 单个 SRP 会话的最大有效时长，超过后 VerifySRP 将拒绝。
+	srpSessionTTL = 5 * time.Minute
+	// srpSessionCleanupInterval 后台清理 goroutine 的扫描间隔。
+	srpSessionCleanupInterval = 5 * time.Minute
+	// srpSessionMaxAge 后台清理时删除超过此时长的会话。
+	srpSessionMaxAge = 10 * time.Minute
+)
 
 // NewAuthService 构造 AuthService
 //
 // 借鉴 1Password 的"认证上下文隔离"做法：每个 SRP 会话以 username 为 key
 // 独立存放，避免多用户并发登录时的状态串扰。
 func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
-	return &AuthService{
+	s := &AuthService{
 		db:          db,
 		cfg:         cfg,
 		srpParams:   auth.NewSRPParams(),
-		srpSessions: make(map[string]*auth.SRPServer),
+		srpSessions: make(map[string]*srpSessionEntry),
+	}
+	go s.cleanupSRPSessions()
+	return s
+}
+
+// cleanupSRPSessions 后台定期清理过期的 SRP 会话，防止 map 无限增长。
+func (s *AuthService) cleanupSRPSessions() {
+	ticker := time.NewTicker(srpSessionCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.srpMu.Lock()
+		now := time.Now()
+		for k, v := range s.srpSessions {
+			if now.Sub(v.createdAt) > srpSessionMaxAge {
+				delete(s.srpSessions, k)
+			}
+		}
+		s.srpMu.Unlock()
 	}
 }
 
@@ -131,13 +165,7 @@ func (s *AuthService) Login(username, password string) (*model.User, string, err
 			return nil, "", errors.New("invalid credentials")
 		}
 	} else if user.SRPEnabled {
-		// For SRP-enabled users, verify using the verifier directly
-		// 借鉴 SRP 协议：通过比较 v = g^x mod N 与存储的 verifier 是否一致来认证。
-		x := computeSRPX(username, password, user.SRPSalt)
-		v := new(big.Int).Exp(s.srpParams.G(), x, s.srpParams.N())
-		if v.Cmp(new(big.Int).SetBytes(user.SRPVerifier)) != 0 {
-			return nil, "", errors.New("invalid credentials")
-		}
+		return nil, "", errors.New("SRP-enabled accounts must use /auth/srp/init and /auth/srp/verify endpoints")
 	} else {
 		return nil, "", errors.New("invalid credentials")
 	}
@@ -176,7 +204,10 @@ func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err e
 	// 借鉴 1Password 的"会话隔离"：将 SRP 会话按 username 暂存，
 	// 完成 VerifySRP 后立即删除（一次性会话）。
 	s.srpMu.Lock()
-	s.srpSessions[username] = srv
+	s.srpSessions[username] = &srpSessionEntry{
+		server:    srv,
+		createdAt: time.Now(),
+	}
 	s.srpMu.Unlock()
 
 	return user.SRPSalt, B, nil
@@ -195,7 +226,7 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 	// 借鉴 1Password 的"一次性会话"模式：取出并立刻销毁会话，
 	// 避免重放攻击。
 	s.srpMu.Lock()
-	srv, ok := s.srpSessions[username]
+	entry, ok := s.srpSessions[username]
 	if ok {
 		delete(s.srpSessions, username)
 	}
@@ -205,6 +236,12 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 		return nil, "", errors.New("no active SRP session")
 	}
 
+	// 检查会话是否过期，防止陈旧会话被利用
+	if time.Since(entry.createdAt) > srpSessionTTL {
+		return nil, "", errors.New("session expired")
+	}
+
+	srv := entry.server
 	M2, err = srv.ProcessClientProof(username, user.SRPSalt, A, M1)
 	if err != nil {
 		return nil, "", err
@@ -220,14 +257,21 @@ func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token
 
 // generateToken 签发 HS256 JWT
 //
-// 借鉴 1Password 的"短生命周期 access token"策略：有效期 72 小时。
+// 借鉴 1Password 的"短生命周期 access token"策略。
+// P0 修复: 原有效期 72 小时过长（行业标准 15-30 分钟），一旦泄露攻击窗口巨大。
+// 现改为 30 分钟，依赖 refresh token 续期。
+// 同时添加 iss/aud/jti 声明，支持签发方/受众校验和 token 吊销。
 func (s *AuthService) generateToken(user *model.User) (string, error) {
 	claims := &model.Claims{
 		UserID:   user.ID,
 		Username: user.Username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(72 * time.Hour)),
+			Subject:   user.ID,
+			Issuer:    "devnote-sync-server",
+			Audience:  []string{"devnote-client", "devnote-business-server"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        uuid.New().String(),
 		},
 	}
 
@@ -235,11 +279,15 @@ func (s *AuthService) generateToken(user *model.User) (string, error) {
 	return token.SignedString([]byte(s.cfg.JWTSecret))
 }
 
-// ValidateToken 校验 JWT 签名与有效期
+// ValidateToken 校验 JWT 签名、有效期与受众
+// P0 修复: 增加 iss/aud 校验，防止跨服务 token 重用
 func (s *AuthService) ValidateToken(tokenStr string) (*model.Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &model.Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
 		return []byte(s.cfg.JWTSecret), nil
-	})
+	}, jwt.WithIssuer("devnote-sync-server"), jwt.WithAudience("devnote-client"))
 	if err != nil {
 		return nil, err
 	}
@@ -273,22 +321,30 @@ func computeSRPX(username, password string, salt []byte) *big.Int {
 }
 
 // generateRandomToken 生成十六进制编码的随机 token
-func generateRandomToken(length int) string {
+func generateRandomToken(length int) (string, error) {
 	b := make([]byte, length)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // GenerateRefreshToken 生成 refresh token
 //
 // 借鉴 1Password 的"长生命周期 refresh token"策略：30 天有效期，
 // 同时记录 Revoked 标志位以便主动吊销。
+// P0 修复: 原实现明文存储 token，数据库泄露后可直接使用。
+// 现改为存储 SHA-256 哈希，查询时哈希后比对。
 func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
-	token := generateRandomToken(32)
+	token, err := generateRandomToken(32)
+	if err != nil {
+		return "", err
+	}
+	tokenHash := hashToken(token)
 	refreshToken := &model.RefreshToken{
 		ID:        uuid.New().String(),
 		UserID:    userID,
-		Token:     token,
+		Token:     tokenHash,
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour), // 30 days
 		CreatedAt: time.Now(),
 		Revoked:   false,
@@ -299,6 +355,13 @@ func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 	return token, nil
 }
 
+// hashToken 计算 token 的 SHA-256 十六进制哈希
+// P0 修复: Refresh Token 不再明文存储
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
 // RefreshAccessToken 刷新 access token
 //
 // 借鉴 1Password 的"refresh token 轮转（rotation）"：每次刷新都立刻
@@ -306,7 +369,8 @@ func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 // 限制在单次刷新间隔内。
 func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, error) {
 	var rt model.RefreshToken
-	if err := s.db.Where("token = ?", refreshToken).First(&rt).Error; err != nil {
+	// P0 修复: 使用哈希查询，不暴露明文 token
+	if err := s.db.Where("token = ?", hashToken(refreshToken)).First(&rt).Error; err != nil {
 		return "", "", errors.New("invalid refresh token")
 	}
 
@@ -348,8 +412,22 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, e
 //
 // 借鉴 1Password 的"按设备吊销"能力：用户可在"已登录设备"列表中
 // 主动登出某个设备，底层实现就是吊销对应的 refresh token。
+//
+// P0 修复 (SEC-01): 原实现用明文 token 查询，但 GenerateRefreshToken
+// 存储的是 SHA-256 哈希，导致永远查不到记录，吊销静默失败。
+// 现改为哈希后查询，与存储逻辑一致。
 func (s *AuthService) RevokeRefreshToken(token string) error {
-	return s.db.Model(&model.RefreshToken{}).Where("token = ?", token).Update("revoked", true).Error
+	tokenHash := hashToken(token)
+	result := s.db.Model(&model.RefreshToken{}).Where("token = ?", tokenHash).Update("revoked", true)
+	if result.Error != nil {
+		return fmt.Errorf("revoke refresh token: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		// 未匹配到记录：token 已被吊销、已过期清理或输入错误
+		// 返回错误以便调用方知晓吊销未生效（避免静默失败）
+		return errors.New("refresh token not found or already revoked")
+	}
+	return nil
 }
 
 // RevokeAllUserTokens 吊销某个用户的所有未撤销 refresh token

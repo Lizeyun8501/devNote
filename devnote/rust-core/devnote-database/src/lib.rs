@@ -368,20 +368,23 @@ impl SqliteDatabaseEngine {
 impl DatabaseEngine for SqliteDatabaseEngine {
     #[instrument]
     fn create_database(&self, name: &str) -> Result<Database, DatabaseError> {
-        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let id = Uuid::new_v4();
         let id_str = id.to_string();
 
-        conn.execute(
+        // P1 修复 (P1-7): INSERT databases + INSERT views 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO databases (id, name) VALUES (?1, ?2)",
             params![id_str, name],
         )?;
 
         let default_view_id = Uuid::new_v4();
-        conn.execute(
+        tx.execute(
             "INSERT INTO database_views (id, database_id, name, view_type) VALUES (?1, ?2, ?3, ?4)",
             params![default_view_id.to_string(), id_str, "Table View", "Table"],
         )?;
+        tx.commit()?;
 
         Ok(Database {
             id,
@@ -516,7 +519,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn add_row(&self, db_id: &Uuid, cells: Vec<DatabaseCell>) -> Result<DatabaseRow, DatabaseError> {
-        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let db_id_str = db_id.to_string();
 
         let exists: bool = conn.query_row(
@@ -532,17 +535,20 @@ impl DatabaseEngine for SqliteDatabaseEngine {
         let now = Utc::now();
         let now_str = now.to_rfc3339();
 
-        conn.execute(
+        // P1 修复 (P1-7): INSERT row + INSERT cells 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO database_rows (id, database_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![id.to_string(), db_id_str, now_str, now_str],
         )?;
 
         for cell in &cells {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO database_cells (row_id, field_id, value) VALUES (?1, ?2, ?3)",
                 params![id.to_string(), cell.field_id.to_string(), cell.value.to_string()],
             )?;
         }
+        tx.commit()?;
 
         Ok(DatabaseRow {
             id,
@@ -553,7 +559,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn update_row(&self, db_id: &Uuid, row_id: &Uuid, cells: Vec<DatabaseCell>) -> Result<DatabaseRow, DatabaseError> {
-        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let row_id_str = row_id.to_string();
         let now = Utc::now();
 
@@ -566,17 +572,20 @@ impl DatabaseEngine for SqliteDatabaseEngine {
             return Err(DatabaseError::RowNotFound(*row_id));
         }
 
-        conn.execute(
+        // P1 修复 (P1-7): UPDATE row + INSERT OR REPLACE cells 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE database_rows SET updated_at = ?1 WHERE id = ?2",
             params![now.to_rfc3339(), row_id_str],
         )?;
 
         for cell in &cells {
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO database_cells (row_id, field_id, value) VALUES (?1, ?2, ?3)",
                 params![row_id_str, cell.field_id.to_string(), cell.value.to_string()],
             )?;
         }
+        tx.commit()?;
 
         Ok(DatabaseRow {
             id: *row_id,
@@ -604,18 +613,21 @@ impl DatabaseEngine for SqliteDatabaseEngine {
     }
 
     fn update_cell(&self, _db_id: &Uuid, row_id: &Uuid, field_id: &Uuid, value: serde_json::Value) -> Result<DatabaseCell, DatabaseError> {
-        let conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
+        let mut conn = self.conn.lock().map_err(|e| DatabaseError::Internal(e.to_string()))?;
         let now = Utc::now();
 
-        conn.execute(
+        // P1 修复 (P1-7): UPDATE row + INSERT OR REPLACE cell 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE database_rows SET updated_at = ?1 WHERE id = ?2",
             params![now.to_rfc3339(), row_id.to_string()],
         )?;
 
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO database_cells (row_id, field_id, value) VALUES (?1, ?2, ?3)",
             params![row_id.to_string(), field_id.to_string(), value.to_string()],
         )?;
+        tx.commit()?;
 
         Ok(DatabaseCell {
             field_id: *field_id,
@@ -769,6 +781,8 @@ fn cell_sort_value(value: &serde_json::Value) -> String {
 }
 
 #[cfg(test)]
+// 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
+// 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod tests {
     use super::*;
 

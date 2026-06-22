@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new feature or enhancement for DevNote
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Before submitting, please search
+        existing issues to avoid duplicates.
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Feature description
+      description: A clear and concise description of the feature you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: problem-motivation
+    attributes:
+      label: Problem / Motivation
+      description: What problem does this feature solve, or what is your motivation for requesting it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: Describe the solution you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives-considered
+    attributes:
+      label: Alternatives considered
+      description: Any alternative solutions or features you have considered.
+    validations:
+      required: false

@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/editor/bloc/editor_event.dart';
 import 'package:devnote/features/editor/bloc/editor_state.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+import 'package:devnote/features/editor/models/timeline_marker.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
+import 'package:devnote/features/editor/services/timeline_recorder_service.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
 
@@ -24,6 +27,12 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
   /// 实时协作服务（可选注入，未注入时退化为单机编辑）
   final RealtimeCollabService? _collabService;
 
+  /// 时间轴录音服务（可选注入，未注入时时间轴录音功能不可用）
+  final TimelineRecorderService? _timelineRecorderService;
+
+  /// 当前时间轴录音的音频文件路径（开始录音时捕获，停止时用于写入 content JSON）
+  String? _timelineAudioPath;
+
   /// 冲突解决器（复用现有 VectorClock 合并逻辑）
   final ConflictResolver _conflictResolver = ConflictResolver();
 
@@ -33,8 +42,12 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
   /// 标记当前是否正在应用远端操作（避免远端操作触发本地广播回环）
   bool _applyingRemoteOperation = false;
 
-  EditorBloc(this._editorService, {RealtimeCollabService? collabService})
-      : _collabService = collabService,
+  EditorBloc(
+    this._editorService, {
+    RealtimeCollabService? collabService,
+    TimelineRecorderService? timelineRecorderService,
+  })  : _collabService = collabService,
+        _timelineRecorderService = timelineRecorderService,
         super(const EditorInitial()) {
     on<LoadNote>(_onLoadNote);
     on<InsertBlock>(_onInsertBlock);
@@ -45,6 +58,14 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     on<UndoEvent>(_onUndo);
     on<RedoEvent>(_onRedo);
     on<SelectBlock>(_onSelectBlock);
+    on<RestoreContent>(_onRestoreContent);
+
+    // 时间轴录音相关事件
+    on<StartTimelineRecording>(_onStartTimelineRecording);
+    on<StopTimelineRecording>(_onStopTimelineRecording);
+    on<CancelTimelineRecording>(_onCancelTimelineRecording);
+    on<MarkTimelineBlock>(_onMarkTimelineBlock);
+    on<SeekToTimelineMarker>(_onSeekToTimelineMarker);
 
     // 订阅远端操作流（若注入了协作服务）
     _subscribeToRemoteOperations();
@@ -124,7 +145,20 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         for (var i = insertAt + 1; i < blocks.length; i++) {
           blocks[i] = blocks[i].copyWith(position: i);
         }
-        emit(state.pushUndo(state.blocks).copyWith(blocks: blocks, activeBlockId: newBlock.id));
+
+        // 时间轴录音中：为新建的文本块记录一个时间轴标记
+        // 仅在插入新块时标记（每个块对应一个时间点），避免逐字符标记导致标记泛滥
+        List<TimelineMarker> updatedMarkers = state.timelineMarkers;
+        if (state.isTimelineRecording && _timelineRecorderService != null) {
+          _timelineRecorderService!.markBlock(newBlock.id);
+          updatedMarkers = _timelineRecorderService!.markers;
+        }
+
+        emit(state.pushUndo(state.blocks).copyWith(
+          blocks: blocks,
+          activeBlockId: newBlock.id,
+          timelineMarkers: updatedMarkers,
+        ));
         // 实时协作：广播 insert 操作（远端操作应用时不广播，避免回环）
         _broadcastLocalOperation(
           blockId: newBlock.id,
@@ -278,6 +312,137 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
     if (state is EditorLoaded) {
       emit(state.copyWith(activeBlockId: event.blockId));
     }
+  }
+
+  /// 恢复笔记内容到指定版本
+  /// 将版本历史中的纯文本内容解析为 blocks 并替换当前所有 blocks
+  /// （EditorService.parseMarkdown 内部会清空旧 blocks 并持久化新 blocks）
+  Future<void> _onRestoreContent(RestoreContent event, Emitter<EditorState> emit) async {
+    try {
+      final state = this.state;
+      if (state is! EditorLoaded) return;
+      final blocks = await _editorService.parseMarkdown(
+        content: event.content,
+        noteId: state.noteId,
+      );
+      emit(state.pushUndo(state.blocks).copyWith(blocks: blocks));
+    } catch (e) {
+      emit(EditorError(e.toString()));
+    }
+  }
+
+  /// 开始时间轴录音
+  /// 调用 TimelineRecorderService.startRecording，捕获音频文件路径供停止时使用
+  Future<void> _onStartTimelineRecording(
+    StartTimelineRecording event,
+    Emitter<EditorState> emit,
+  ) async {
+    final service = _timelineRecorderService;
+    if (service == null) return;
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+
+    try {
+      _timelineAudioPath = await service.startRecording(event.audioBlockId);
+      emit(state.copyWith(
+        isTimelineRecording: true,
+        currentAudioBlockId: event.audioBlockId,
+        timelineMarkers: const [],
+      ));
+    } catch (e) {
+      emit(EditorError(e.toString()));
+    }
+  }
+
+  /// 停止时间轴录音
+  /// 将 markers 序列化后写入新建 audio block 的 content JSON：
+  /// {url, duration_ms, transcript, markers: [...]}
+  Future<void> _onStopTimelineRecording(
+    StopTimelineRecording event,
+    Emitter<EditorState> emit,
+  ) async {
+    final service = _timelineRecorderService;
+    if (service == null) return;
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+
+    try {
+      // 在停止前捕获时长（stopRecording 不会重置 _startTime）
+      final durationMs = service.currentDurationMs;
+      final markers = await service.stopRecording();
+      final path = _timelineAudioPath ?? '';
+
+      final content = {
+        'url': path,
+        'duration_ms': durationMs,
+        'transcript': '',
+        'markers': markers.map((m) => m.toJson()).toList(),
+      };
+      final contentJson = jsonEncode(content);
+
+      // 插入 audio block（直接调用 service，不经过 InsertBlock 事件，避免被标记）
+      final newBlock = await _editorService.createBlock(
+        noteId: state.noteId,
+        blockType: BlockType.audio,
+        content: contentJson,
+        position: state.blocks.length,
+      );
+      final blocks = List<BlockModel>.from(state.blocks)
+        ..add(newBlock.copyWith(position: state.blocks.length));
+
+      emit(state.copyWith(
+        blocks: blocks,
+        isTimelineRecording: false,
+        currentAudioBlockId: null,
+        timelineMarkers: markers,
+      ));
+      _timelineAudioPath = null;
+    } catch (e) {
+      emit(EditorError(e.toString()));
+    }
+  }
+
+  /// 取消时间轴录音
+  Future<void> _onCancelTimelineRecording(
+    CancelTimelineRecording event,
+    Emitter<EditorState> emit,
+  ) async {
+    final service = _timelineRecorderService;
+    if (service == null) return;
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+
+    await service.cancelRecording();
+    _timelineAudioPath = null;
+    emit(state.copyWith(
+      isTimelineRecording: false,
+      currentAudioBlockId: null,
+      timelineMarkers: const [],
+    ));
+  }
+
+  /// 为指定文本块记录时间轴标记（显式调用，用于录音中标记当前编辑位置）
+  void _onMarkTimelineBlock(
+    MarkTimelineBlock event,
+    Emitter<EditorState> emit,
+  ) {
+    final service = _timelineRecorderService;
+    if (service == null) return;
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+
+    service.markBlock(event.blockId, noteText: event.noteText);
+    emit(state.copyWith(timelineMarkers: service.markers));
+  }
+
+  /// 跳转到时间轴标记对应的文本块（设置 activeBlockId，由 UI 层滚动定位）
+  void _onSeekToTimelineMarker(
+    SeekToTimelineMarker event,
+    Emitter<EditorState> emit,
+  ) {
+    final state = this.state;
+    if (state is! EditorLoaded) return;
+    emit(state.copyWith(activeBlockId: event.blockId));
   }
 
   /// 广播本地操作到协作会话

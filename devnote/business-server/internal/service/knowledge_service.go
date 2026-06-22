@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/devnote/business-server/internal/model"
@@ -44,9 +43,17 @@ func NewKnowledgeService(db *sql.DB, cfg KnowledgeConfig) *KnowledgeService {
 
 // CreateRelation creates or updates a knowledge relation between two notes.
 // 整个操作包装在事务中，确保前向链接和反向链接的原子性。
-func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationType string, weight float64) (*model.KnowledgeRelation, error) {
+func (s *KnowledgeService) CreateRelation(userID, sourceNoteID, targetNoteID, relationType string, weight float64) (*model.KnowledgeRelation, error) {
 	if sourceNoteID == targetNoteID {
 		return nil, errors.New("self-referencing knowledge relation is not allowed")
+	}
+
+	// Verify both notes belong to the user before creating a relation.
+	if err := s.verifyNoteOwnership(userID, sourceNoteID); err != nil {
+		return nil, err
+	}
+	if err := s.verifyNoteOwnership(userID, targetNoteID); err != nil {
+		return nil, err
 	}
 
 	tx, err := s.db.Begin()
@@ -58,11 +65,11 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 	// Check if relation already exists
 	var existing model.KnowledgeRelation
 	row := tx.QueryRow(`
-		SELECT id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
-		FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND relation_type=?
-	`, sourceNoteID, targetNoteID, relationType)
+		SELECT id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
+		FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND relation_type=? AND user_id=?
+	`, sourceNoteID, targetNoteID, relationType, userID)
 
-	err = row.Scan(&existing.ID, &existing.SourceNoteID, &existing.TargetNoteID,
+	err = row.Scan(&existing.ID, &existing.UserID, &existing.SourceNoteID, &existing.TargetNoteID,
 		&existing.Weight, &existing.ReferenceCount, &existing.RelationType,
 		&existing.CreatedAt, &existing.UpdatedAt)
 
@@ -71,14 +78,14 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 		existing.ReferenceCount++
 		existing.Weight = weight
 		existing.UpdatedAt = time.Now().UTC()
-		_, execErr := tx.Exec(`UPDATE knowledge_relation SET reference_count=?, weight=?, updated_at=? WHERE id=?`,
-			existing.ReferenceCount, existing.Weight, existing.UpdatedAt, existing.ID)
+		_, execErr := tx.Exec(`UPDATE knowledge_relation SET reference_count=?, weight=?, updated_at=? WHERE id=? AND user_id=?`,
+			existing.ReferenceCount, existing.Weight, existing.UpdatedAt, existing.ID, userID)
 		if execErr != nil {
 			return nil, fmt.Errorf("update relation: %w", execErr)
 		}
 
 		// Also create reverse link if it doesn't exist
-		if err := s.ensureBidirectionalTx(tx, sourceNoteID, targetNoteID, relationType, weight); err != nil {
+		if err := s.ensureBidirectionalTx(tx, userID, sourceNoteID, targetNoteID, relationType, weight); err != nil {
 			return nil, fmt.Errorf("ensure bidirectional: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -94,6 +101,7 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 	// Create new
 	rel := &model.KnowledgeRelation{
 		ID:             uuid.New().String(),
+		UserID:         userID,
 		SourceNoteID:   sourceNoteID,
 		TargetNoteID:   targetNoteID,
 		Weight:         weight,
@@ -104,15 +112,15 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 	}
 
 	_, execErr := tx.Exec(`
-		INSERT INTO knowledge_relation (id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, rel.ID, rel.SourceNoteID, rel.TargetNoteID, rel.Weight, rel.ReferenceCount, rel.RelationType, rel.CreatedAt, rel.UpdatedAt)
+		INSERT INTO knowledge_relation (id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, rel.ID, rel.UserID, rel.SourceNoteID, rel.TargetNoteID, rel.Weight, rel.ReferenceCount, rel.RelationType, rel.CreatedAt, rel.UpdatedAt)
 	if execErr != nil {
 		return nil, fmt.Errorf("insert relation: %w", execErr)
 	}
 
 	// Ensure bidirectional
-	if err := s.ensureBidirectionalTx(tx, sourceNoteID, targetNoteID, relationType, weight); err != nil {
+	if err := s.ensureBidirectionalTx(tx, userID, sourceNoteID, targetNoteID, relationType, weight); err != nil {
 		return nil, fmt.Errorf("ensure bidirectional: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -121,18 +129,40 @@ func (s *KnowledgeService) CreateRelation(sourceNoteID, targetNoteID, relationTy
 	return rel, nil
 }
 
-func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+// verifyNoteOwnership returns an error if the note does not belong to the user.
+func (s *KnowledgeService) verifyNoteOwnership(userID, noteID string) error {
 	var cnt int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=?`, targetNoteID, sourceNoteID).Scan(&cnt)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, noteID, userID).Scan(&cnt); err != nil {
+		return fmt.Errorf("check note ownership: %w", err)
+	}
+	if cnt == 0 {
+		return fmt.Errorf("note not found: %s", noteID)
+	}
+	return nil
+}
+
+// queryExecer 是 *sql.DB 和 *sql.Tx 共同实现的接口，用于消除重复代码。
+// P2 修复 (P2-7): 原 ensureBidirectional 和 ensureBidirectionalTx 逻辑完全相同，
+// 仅数据源（*sql.DB vs *sql.Tx）不同，通过此接口抽取为单一函数。
+type queryExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+// ensureBidirectionalOn 在给定数据源上确保双向关系存在。
+// P2 修复 (P2-7): 抽取自 ensureBidirectional 和 ensureBidirectionalTx 的共享逻辑
+func ensureBidirectionalOn(db queryExecer, userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+	var cnt int
+	err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND user_id=?`, targetNoteID, sourceNoteID, userID).Scan(&cnt)
 	if err != nil {
 		return fmt.Errorf("check existing bidirectional relation: %w", err)
 	}
 	if cnt == 0 {
 		now := time.Now().UTC()
-		_, err := tx.Exec(`
-			INSERT INTO knowledge_relation (id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, uuid.New().String(), targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
+		_, err := db.Exec(`
+			INSERT INTO knowledge_relation (id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, uuid.New().String(), userID, targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
 		if err != nil {
 			return fmt.Errorf("insert bidirectional relation: %w", err)
 		}
@@ -140,38 +170,27 @@ func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, sourceNoteID, targe
 	return nil
 }
 
-func (s *KnowledgeService) ensureBidirectional(sourceNoteID, targetNoteID, relationType string, weight float64) error {
-	var cnt int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=?`, targetNoteID, sourceNoteID).Scan(&cnt)
-	if err != nil {
-		return fmt.Errorf("check existing bidirectional relation: %w", err)
-	}
-	if cnt == 0 {
-		now := time.Now().UTC()
-		_, err := s.db.Exec(`
-			INSERT INTO knowledge_relation (id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, uuid.New().String(), targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
-		if err != nil {
-			return fmt.Errorf("insert bidirectional relation: %w", err)
-		}
-	}
-	return nil
+func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+	return ensureBidirectionalOn(tx, userID, sourceNoteID, targetNoteID, relationType, weight)
+}
+
+func (s *KnowledgeService) ensureBidirectional(userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+	return ensureBidirectionalOn(s.db, userID, sourceNoteID, targetNoteID, relationType, weight)
 }
 
 // DeleteRelation removes a knowledge relation.
-func (s *KnowledgeService) DeleteRelation(id string) error {
-	_, err := s.db.Exec(`DELETE FROM knowledge_relation WHERE id=?`, id)
+func (s *KnowledgeService) DeleteRelation(userID, id string) error {
+	_, err := s.db.Exec(`DELETE FROM knowledge_relation WHERE id=? AND user_id=?`, id, userID)
 	return err
 }
 
 // GetRelations returns all relations for a note.
-func (s *KnowledgeService) GetRelations(noteID string) ([]model.KnowledgeRelation, error) {
+func (s *KnowledgeService) GetRelations(userID, noteID string) ([]model.KnowledgeRelation, error) {
 	rows, err := s.db.Query(`
-		SELECT id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
-		FROM knowledge_relation WHERE source_note_id=? OR target_note_id=?
+		SELECT id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at
+		FROM knowledge_relation WHERE user_id=? AND (source_note_id=? OR target_note_id=?)
 		ORDER BY weight DESC
-	`, noteID, noteID)
+	`, userID, noteID, noteID)
 	if err != nil {
 		return nil, fmt.Errorf("get relations: %w", err)
 	}
@@ -180,7 +199,7 @@ func (s *KnowledgeService) GetRelations(noteID string) ([]model.KnowledgeRelatio
 	var rels []model.KnowledgeRelation
 	for rows.Next() {
 		var r model.KnowledgeRelation
-		if err := rows.Scan(&r.ID, &r.SourceNoteID, &r.TargetNoteID, &r.Weight,
+		if err := rows.Scan(&r.ID, &r.UserID, &r.SourceNoteID, &r.TargetNoteID, &r.Weight,
 			&r.ReferenceCount, &r.RelationType, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan relation: %w", err)
 		}
@@ -204,13 +223,14 @@ type GraphEdge struct {
 }
 
 // ComputeGraphEdges returns all knowledge-graph edges weighted by reference frequency.
-func (s *KnowledgeService) ComputeGraphEdges() ([]GraphEdge, error) {
+func (s *KnowledgeService) ComputeGraphEdges(userID string) ([]GraphEdge, error) {
 	rows, err := s.db.Query(`
 		SELECT source_note_id, target_note_id, SUM(weight) as total_weight
 		FROM knowledge_relation
+		WHERE user_id=?
 		GROUP BY source_note_id, target_note_id
 		ORDER BY total_weight DESC
-	`)
+	`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("compute edges: %w", err)
 	}
@@ -235,8 +255,8 @@ func (s *KnowledgeService) ComputeGraphEdges() ([]GraphEdge, error) {
 // ----------------------------------------------------------------
 
 // ComputeMetrics calculates comprehensive graph metrics.
-func (s *KnowledgeService) ComputeMetrics() (*model.GraphMetrics, error) {
-	edges, err := s.ComputeGraphEdges()
+func (s *KnowledgeService) ComputeMetrics(userID string) (*model.GraphMetrics, error) {
+	edges, err := s.ComputeGraphEdges(userID)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +310,11 @@ func (s *KnowledgeService) ComputeMetrics() (*model.GraphMetrics, error) {
 	clusters := s.findClusters(nodes, adj)
 
 	// Orphans
-	orphans := s.FindOrphanNotes()
+	// 修复(P0): 传播 FindOrphanNotes 的错误，而非忽略。
+	orphans, err := s.FindOrphanNotes(userID)
+	if err != nil {
+		return nil, fmt.Errorf("find orphan notes: %w", err)
+	}
 
 	avgDegree := 0.0
 	if totalNodes > 0 {
@@ -474,15 +498,17 @@ func (s *KnowledgeService) findClusters(nodes []string, adj map[string]map[strin
 // ----------------------------------------------------------------
 
 // FindOrphanNotes returns note IDs that have no knowledge relations.
-func (s *KnowledgeService) FindOrphanNotes() []string {
+// 修复(P0): 原签名返回 []string 且出错时返回 nil，调用方无法区分"无孤儿"和"查询失败"。
+// 改为返回 ([]string, error) 以正确传播数据库错误。
+func (s *KnowledgeService) FindOrphanNotes(userID string) ([]string, error) {
 	rows, err := s.db.Query(`
 		SELECT nm.id FROM note_meta nm
-		WHERE NOT EXISTS (
-			SELECT 1 FROM knowledge_relation kr WHERE kr.source_note_id = nm.id OR kr.target_note_id = nm.id
+		WHERE nm.user_id = ? AND NOT EXISTS (
+			SELECT 1 FROM knowledge_relation kr WHERE kr.user_id = ? AND (kr.source_note_id = nm.id OR kr.target_note_id = nm.id)
 		)
-	`)
+	`, userID, userID)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("query orphan notes: %w", err)
 	}
 	defer rows.Close()
 
@@ -490,14 +516,14 @@ func (s *KnowledgeService) FindOrphanNotes() []string {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			continue
+			return nil, fmt.Errorf("scan orphan note id: %w", err)
 		}
 		orphans = append(orphans, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("iterate orphan notes: %w", err)
 	}
-	return orphans
+	return orphans, nil
 }
 
 // ----------------------------------------------------------------
@@ -506,17 +532,25 @@ func (s *KnowledgeService) FindOrphanNotes() []string {
 
 // SuggestRelatedNotes returns the top N notes related to the given note,
 // sorted by a combined score of shared tags, shared folder, and link weight.
-func (s *KnowledgeService) SuggestRelatedNotes(noteID string, limit int) ([]SuggestedNote, error) {
+func (s *KnowledgeService) SuggestRelatedNotes(userID, noteID string, limit int) ([]SuggestedNote, error) {
 	if limit < 1 {
 		limit = 10
 	}
 
-	// Collect candidate notes via shared tags
+	// Verify note ownership.
+	if err := s.verifyNoteOwnership(userID, noteID); err != nil {
+		return nil, err
+	}
+
+	// Collect candidate notes via shared tags (scoped to the user's tags and notes).
 	tagRows, err := s.db.Query(`
 		SELECT DISTINCT tr2.note_id FROM tag_relation tr1
 		INNER JOIN tag_relation tr2 ON tr1.tag_id = tr2.tag_id AND tr1.note_id != tr2.note_id
-		WHERE tr1.note_id = ?
-	`, noteID)
+		INNER JOIN tag_meta t1 ON tr1.tag_id = t1.id
+		INNER JOIN tag_meta t2 ON tr2.tag_id = t2.id
+		INNER JOIN note_meta nm2 ON tr2.note_id = nm2.id
+		WHERE tr1.note_id = ? AND t1.user_id = ? AND t2.user_id = ? AND nm2.user_id = ?
+	`, noteID, userID, userID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("tag candidates: %w", err)
 	}
@@ -534,12 +568,12 @@ func (s *KnowledgeService) SuggestRelatedNotes(noteID string, limit int) ([]Sugg
 		return nil, fmt.Errorf("iterate tag rows: %w", err)
 	}
 
-	// Collect via knowledge relations
+	// Collect via knowledge relations (scoped to the user).
 	relRows, err := s.db.Query(`
-		SELECT target_note_id, weight FROM knowledge_relation WHERE source_note_id = ?
+		SELECT target_note_id, weight FROM knowledge_relation WHERE user_id = ? AND source_note_id = ?
 		UNION
-		SELECT source_note_id, weight FROM knowledge_relation WHERE target_note_id = ?
-	`, noteID, noteID)
+		SELECT source_note_id, weight FROM knowledge_relation WHERE user_id = ? AND target_note_id = ?
+	`, userID, noteID, userID, noteID)
 	if err != nil {
 		return nil, fmt.Errorf("rel candidates: %w", err)
 	}
@@ -576,7 +610,7 @@ func (s *KnowledgeService) SuggestRelatedNotes(noteID string, limit int) ([]Sugg
 
 	var suggestions []SuggestedNote
 	for _, p := range pairs {
-		title, _ := s.getNoteTitle(p.id)
+		title, _ := s.getNoteTitle(userID, p.id)
 		suggestions = append(suggestions, SuggestedNote{
 			NoteID: p.id,
 			Title:  title,
@@ -593,9 +627,9 @@ type SuggestedNote struct {
 	Score  float64 `json:"score"`
 }
 
-func (s *KnowledgeService) getNoteTitle(noteID string) (string, error) {
+func (s *KnowledgeService) getNoteTitle(userID, noteID string) (string, error) {
 	var title string
-	err := s.db.QueryRow(`SELECT title FROM note_meta WHERE id=?`, noteID).Scan(&title)
+	err := s.db.QueryRow(`SELECT title FROM note_meta WHERE id=? AND user_id=?`, noteID, userID).Scan(&title)
 	return title, err
 }
 
@@ -616,17 +650,20 @@ type CoverageMetrics struct {
 }
 
 // ComputeCoverage computes knowledge coverage metrics.
-func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
+func (s *KnowledgeService) ComputeCoverage(userID string) (*CoverageMetrics, error) {
 	var totalNotes int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta`).Scan(&totalNotes); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE user_id=?`, userID).Scan(&totalNotes); err != nil {
 		return nil, fmt.Errorf("count notes: %w", err)
 	}
 
-	orphans := s.FindOrphanNotes()
+	orphans, err := s.FindOrphanNotes(userID)
+	if err != nil {
+		return nil, fmt.Errorf("find orphan notes: %w", err)
+	}
 	orphanCount := len(orphans)
 
 	var totalLinks int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation`).Scan(&totalLinks); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE user_id=?`, userID).Scan(&totalLinks); err != nil {
 		return nil, fmt.Errorf("count relations: %w", err)
 	}
 
@@ -642,14 +679,14 @@ func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
 		avgLinks = float64(totalLinks) / float64(totalNotes)
 	}
 
-	// Find note with max links
+	// Find note with max links (scoped to the user).
 	rows, err := s.db.Query(`
 		SELECT note_id, COUNT(*) as cnt FROM (
-			SELECT source_note_id as note_id FROM knowledge_relation
+			SELECT source_note_id as note_id FROM knowledge_relation WHERE user_id=?
 			UNION ALL
-			SELECT target_note_id as note_id FROM knowledge_relation
+			SELECT target_note_id as note_id FROM knowledge_relation WHERE user_id=?
 		) GROUP BY note_id ORDER BY cnt DESC LIMIT 1
-	`)
+	`, userID, userID)
 	maxLinks := 0
 	maxNote := ""
 	if err == nil {
@@ -681,8 +718,8 @@ func (s *KnowledgeService) ComputeCoverage() (*CoverageMetrics, error) {
 // ----------------------------------------------------------------
 
 // FindShortestPath computes the shortest path (by weight) between two notes using Dijkstra.
-func (s *KnowledgeService) FindShortestPath(fromNoteID, toNoteID string) ([]string, float64, error) {
-	edges, err := s.ComputeGraphEdges()
+func (s *KnowledgeService) FindShortestPath(userID, fromNoteID, toNoteID string) ([]string, float64, error) {
+	edges, err := s.ComputeGraphEdges(userID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -740,82 +777,4 @@ func (s *KnowledgeService) FindShortestPath(fromNoteID, toNoteID string) ([]stri
 	}
 
 	return path, dist[toNoteID], nil
-}
-
-// findSimilarNotesByContent returns notes with similar titles (simple string similarity).
-func (s *KnowledgeService) findSimilarNotesByContent(noteID string, limit int) ([]SuggestedNote, error) {
-	var myTitle string
-	if err := s.db.QueryRow(`SELECT title FROM note_meta WHERE id=?`, noteID).Scan(&myTitle); err != nil {
-		return nil, err
-	}
-
-	rows, err := s.db.Query(`SELECT id, title FROM note_meta WHERE id != ?`, noteID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	type candidate struct {
-		id    string
-		title string
-		sim   float64
-	}
-	var candidates []candidate
-	for rows.Next() {
-		var id, title string
-		if err := rows.Scan(&id, &title); err != nil {
-			continue
-		}
-		sim := jaccardSimilarity(strings.ToLower(myTitle), strings.ToLower(title))
-		candidates = append(candidates, candidate{id, title, sim})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].sim > candidates[j].sim
-	})
-
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-
-	var suggestions []SuggestedNote
-	for _, c := range candidates {
-		suggestions = append(suggestions, SuggestedNote{
-			NoteID: c.id,
-			Title:  c.title,
-			Score:  c.sim,
-		})
-	}
-	return suggestions, nil
-}
-
-func jaccardSimilarity(a, b string) float64 {
-	setA := tokenSet(a)
-	setB := tokenSet(b)
-	if len(setA) == 0 && len(setB) == 0 {
-		return 0
-	}
-	intersection := 0
-	for token := range setA {
-		if setB[token] {
-			intersection++
-		}
-	}
-	union := len(setA) + len(setB) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
-}
-
-func tokenSet(s string) map[string]bool {
-	words := strings.Fields(s)
-	set := make(map[string]bool, len(words))
-	for _, w := range words {
-		set[w] = true
-	}
-	return set
 }

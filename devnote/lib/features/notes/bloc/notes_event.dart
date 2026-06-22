@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
+import 'package:devnote/features/templates/models/note_template.dart';
 
 abstract class NotesEvent extends Equatable {
   const NotesEvent();
@@ -102,4 +103,42 @@ class LoadMoreNotes extends NotesEvent {
 
   @override
   List<Object?> get props => [folderId];
+}
+
+// ============================================================
+// 模板创建笔记 —— P1-3 模板系统
+// 从模板创建笔记：先创建空笔记，再将模板块逐个持久化到 SQLite
+// ============================================================
+class CreateNoteFromTemplate extends NotesEvent {
+  final NoteTemplate template;
+  final String folderId;
+
+  const CreateNoteFromTemplate({
+    required this.template,
+    required this.folderId,
+  });
+
+  @override
+  List<Object?> get props => [template, folderId];
+}
+
+// ============================================================
+// P2-4: Daily Notes —— 创建每日笔记
+// 与 CreateNoteFromTemplate 不同：Daily Notes 通过文件夹名称
+// （而非 folderId）定位存放位置，BLoC 负责解析名称到 ID
+// （不存在则自动创建文件夹），并使用日期作为标题。
+// ============================================================
+class CreateDailyNote extends NotesEvent {
+  final String title;
+  final String folderName;
+  final List<TemplateBlock> templateBlocks;
+
+  const CreateDailyNote({
+    required this.title,
+    required this.folderName,
+    required this.templateBlocks,
+  });
+
+  @override
+  List<Object?> get props => [title, folderName, templateBlocks];
 }

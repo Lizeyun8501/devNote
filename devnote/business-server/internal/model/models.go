@@ -5,6 +5,7 @@ import "time"
 // NoteMeta represents metadata for a single note.
 type NoteMeta struct {
 	ID           string    `json:"id"`
+	UserID       string    `json:"user_id"`
 	Title        string    `json:"title"`
 	Author       string    `json:"author"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -22,6 +23,7 @@ type NoteMeta struct {
 // FolderMeta represents metadata for a folder/directory.
 type FolderMeta struct {
 	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
 	Name        string    `json:"name"`
 	ParentID    string    `json:"parent_id"`
 	Path        string    `json:"path"`
@@ -38,6 +40,7 @@ type FolderMeta struct {
 // TagMeta represents a tag entity.
 type TagMeta struct {
 	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
 	Name        string    `json:"name"`
 	ParentID    string    `json:"parent_id"`
 	Color       string    `json:"color"`
@@ -57,6 +60,7 @@ type TagRelation struct {
 // KnowledgeRelation represents a bidirectional link between two notes.
 type KnowledgeRelation struct {
 	ID             string    `json:"id"`
+	UserID         string    `json:"user_id"`
 	SourceNoteID   string    `json:"source_note_id"`
 	TargetNoteID   string    `json:"target_note_id"`
 	Weight         float64   `json:"weight"`

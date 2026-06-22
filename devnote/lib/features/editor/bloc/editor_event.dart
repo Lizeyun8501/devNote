@@ -94,3 +94,53 @@ class SelectBlock extends EditorEvent {
   @override
   List<Object?> get props => [blockId];
 }
+
+class RestoreContent extends EditorEvent {
+  final String content;
+
+  const RestoreContent(this.content);
+
+  @override
+  List<Object?> get props => [content];
+}
+
+/// 开始带时间轴同步的录音
+class StartTimelineRecording extends EditorEvent {
+  final String audioBlockId;
+
+  const StartTimelineRecording(this.audioBlockId);
+
+  @override
+  List<Object?> get props => [audioBlockId];
+}
+
+/// 停止时间轴录音，将 markers 序列化存入 audio block
+class StopTimelineRecording extends EditorEvent {
+  const StopTimelineRecording();
+}
+
+/// 取消时间轴录音
+class CancelTimelineRecording extends EditorEvent {
+  const CancelTimelineRecording();
+}
+
+/// 为指定文本块记录一个时间轴标记
+class MarkTimelineBlock extends EditorEvent {
+  final String blockId;
+  final String? noteText;
+
+  const MarkTimelineBlock(this.blockId, this.noteText);
+
+  @override
+  List<Object?> get props => [blockId, noteText];
+}
+
+/// 跳转到时间轴标记对应的文本块
+class SeekToTimelineMarker extends EditorEvent {
+  final String blockId;
+
+  const SeekToTimelineMarker(this.blockId);
+
+  @override
+  List<Object?> get props => [blockId];
+}

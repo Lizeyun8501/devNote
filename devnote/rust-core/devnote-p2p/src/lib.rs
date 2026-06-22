@@ -418,15 +418,18 @@ impl DefaultSignalingClient {
 }
 
 impl SignalingClient for DefaultSignalingClient {
+    /// 修复(P1): 原实现返回 Ok(()) 但未执行任何注册逻辑，导致上层误认为节点注册成功。
+    /// 改为返回 Err，与 resolve/request_nat_traversal 保持一致。
+    /// TODO: 接入真实信令服务器后实现此方法。
     fn register(&self, _peer_id: &str, _public_key: &[u8], _addresses: &[String]) -> Result<(), P2PError> {
-        Ok(())
+        Err(P2PError::SignalingError("register: not implemented".to_string()))
     }
 
     fn resolve(&self, _peer_id: &str) -> Result<PeerInfo, P2PError> {
-        Err(P2PError::SignalingError("not implemented".to_string()))
+        Err(P2PError::SignalingError("resolve: not implemented".to_string()))
     }
 
     fn request_nat_traversal(&self, _peer_id: &str) -> Result<Vec<String>, P2PError> {
-        Err(P2PError::SignalingError("not implemented".to_string()))
+        Err(P2PError::SignalingError("request_nat_traversal: not implemented".to_string()))
     }
 }

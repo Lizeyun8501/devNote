@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>DevNote Web Clipper 设置</title>
+    <style>
+      :root {
+        --fg: #1f2937;
+        --muted: #6b7280;
+        --accent: #2563eb;
+        --accent-hover: #1d4ed8;
+        --border: #e5e7eb;
+        --success: #16a34a;
+        --error: #dc2626;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 32px 20px;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 14px;
+        color: var(--fg);
+        background: #f9fafb;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 24px;
+      }
+      .field {
+        margin-bottom: 20px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      input[type="text"],
+      input[type="password"],
+      select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 14px;
+        font-family: inherit;
+        background: #fff;
+      }
+      input:focus,
+      select:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-top: 28px;
+      }
+      .btn {
+        padding: 9px 18px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-family: inherit;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+      }
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+      .btn-secondary {
+        background: #fff;
+        color: var(--fg);
+        border: 1px solid var(--border);
+      }
+      .status {
+        font-size: 13px;
+      }
+      .status.success {
+        color: var(--success);
+      }
+      .status.error {
+        color: var(--error);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>DevNote Web Clipper 设置</h1>
+
+    <div class="field">
+      <label for="serverUrl">DevNote 服务器地址</label>
+      <input type="text" id="serverUrl" placeholder="https://sync.devnote.app" />
+      <div class="hint">sync-server 的根地址，剪藏请求将发送到 <code>{serverUrl}/api/v1/notes/clip</code></div>
+    </div>
+
+    <div class="field">
+      <label for="apiToken">API Token</label>
+      <input type="password" id="apiToken" placeholder="从 DevNote 应用中获取的访问令牌" />
+      <div class="hint">登录 DevNote 后在「设置 → 同步」中生成的 JWT 访问令牌。</div>
+    </div>
+
+    <div class="field">
+      <label for="defaultFolderId">默认文件夹 ID（可选）</label>
+      <input type="text" id="defaultFolderId" placeholder="留空则不指定文件夹" />
+      <div class="hint">剪藏的笔记将归入该文件夹；留空则保存到默认位置。</div>
+    </div>
+
+    <div class="field">
+      <label for="defaultMode">默认剪藏模式</label>
+      <select id="defaultMode">
+        <option value="full_page">整页</option>
+        <option value="simplified_article">正文（推荐）</option>
+        <option value="bookmark">书签</option>
+        <option value="selection">选中内容</option>
+      </select>
+      <div class="hint">点击扩展图标时默认使用的剪藏模式（仍可在弹窗中切换）。</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="save">保存设置</button>
+      <button class="btn btn-secondary" id="test">测试连接</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -55,6 +55,11 @@ pub enum SyncError {
     CRDTError(String),
     #[error("database error: {0}")]
     DatabaseError(String),
+    /// 修复(P1): 新增 NotImplemented 变体，用于标记尚未接入真实传输层的 stub 方法。
+    /// 原实现中 sync_inner/push_changes_inner/pull_changes_inner 返回 Ok(SyncInfo)
+    /// 但实际无任何网络调用，导致上层误认为同步成功。
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<devnote_crdt::CRDTError> for SyncError {
@@ -258,43 +263,30 @@ impl ClientSyncEngine {
         Ok(())
     }
 
+    /// 修复(P1): 原实现返回 Ok(SyncInfo) 但无任何网络调用，导致上层误认为同步成功。
+    /// 改为返回 Err(NotImplemented)，调用方可明确区分"同步成功"与"功能未接入"。
+    /// TODO: 接入 devnote-grpc / devnote-websocket 实现真实同步逻辑后移除此 stub。
     fn sync_inner(&mut self) -> Result<SyncInfo, SyncError> {
-        info!("sync: starting sync with {} pending changes", self.local_state.pending_operations.len());
-        self.status = SyncStatus::Syncing;
-        Ok(SyncInfo {
-            status: self.status.clone(),
-            last_synced_at: self.local_state.last_synced_at,
-            pending_changes: self.local_state.pending_operations.len() as u64,
-            server_version: None,
-            local_version: self.local_state.document.hlc.logical as u64,
-            content_hash: None,
-        })
+        info!("sync: stub called with {} pending changes (not implemented)", self.local_state.pending_operations.len());
+        Err(SyncError::NotImplemented(
+            "sync_inner: network transport not yet integrated".to_string(),
+        ))
     }
 
+    /// 修复(P1): 同上，原 stub 返回 Ok 假成功，改为显式 NotImplemented。
     fn push_changes_inner(&mut self) -> Result<SyncInfo, SyncError> {
-        info!("push_changes: {} pending operations", self.local_state.pending_operations.len());
-        self.status = SyncStatus::Syncing;
-        Ok(SyncInfo {
-            status: self.status.clone(),
-            last_synced_at: self.local_state.last_synced_at,
-            pending_changes: self.local_state.pending_operations.len() as u64,
-            server_version: None,
-            local_version: self.local_state.document.hlc.logical as u64,
-            content_hash: None,
-        })
+        info!("push_changes: stub called with {} pending operations (not implemented)", self.local_state.pending_operations.len());
+        Err(SyncError::NotImplemented(
+            "push_changes_inner: network transport not yet integrated".to_string(),
+        ))
     }
 
+    /// 修复(P1): 同上，原 stub 返回 Ok 假成功，改为显式 NotImplemented。
     fn pull_changes_inner(&mut self) -> Result<SyncInfo, SyncError> {
-        info!("pull_changes: local_version={}", self.local_state.document.hlc.logical);
-        self.status = SyncStatus::Syncing;
-        Ok(SyncInfo {
-            status: self.status.clone(),
-            last_synced_at: self.local_state.last_synced_at,
-            pending_changes: self.local_state.pending_operations.len() as u64,
-            server_version: None,
-            local_version: self.local_state.document.hlc.logical as u64,
-            content_hash: None,
-        })
+        info!("pull_changes: stub called, local_version={} (not implemented)", self.local_state.document.hlc.logical);
+        Err(SyncError::NotImplemented(
+            "pull_changes_inner: network transport not yet integrated".to_string(),
+        ))
     }
 }
 

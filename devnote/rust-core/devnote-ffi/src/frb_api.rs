@@ -185,10 +185,13 @@ pub struct DatabaseViewData {
 
 /// 初始化所有引擎 —— 替代原 devnote_init + register_all_handlers
 /// FRB 自动生成 Dart: `Future<void> initEngines()`
-pub fn init_engines() -> Result<(), String> {
-    if let Ok(repo) = SqliteNoteRepository::in_memory() {
-        *NOTE_REPO.lock() = Some(repo);
-    }
+///
+/// P0 修复: 原实现使用 `in_memory()`，FFI 模式下数据重启全部丢失。
+/// 现改为文件持久化，数据库路径通过参数传入，与 Dart 端共享 `devnote.db`。
+pub fn init_engines(db_path: String) -> Result<(), String> {
+    let repo = SqliteNoteRepository::init(&db_path)
+        .map_err(|e| format!("Failed to init persistence: {}", e))?;
+    *NOTE_REPO.lock() = Some(repo);
     *BLOCK_EDITOR.lock() = Some(DefaultBlockEditor::new());
     if let Ok(engine) = devnote_search::SqliteSearchEngine::in_memory() {
         *SEARCH_ENGINE.lock() = Some(engine);
@@ -673,4 +676,147 @@ pub fn export_markdown(notes_json: String, path: String) -> Result<(), String> {
     let exporter = MarkdownExporter::new();
     exporter.export(&notes, Path::new(&path), ExportFormat::Markdown)
         .map_err(|e| e.to_string())
+}
+
+// ── 语音转文字 API ────────────────────────────────────────────────────
+
+/// 语音转文字结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscribeResultFfi {
+    pub text: String,
+    pub duration_ms: u64,
+    pub segments: Vec<TranscriptSegmentFfi>,
+}
+
+/// 转写片段（带时间戳）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptSegmentFfi {
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+/// 语音转文字 —— 集成 whisper-rs 进行本地语音转文字
+///
+/// 当前为接口框架，实际转写逻辑待 whisper-rs 集成后实现。
+/// 调用方应捕获返回的 Err 并降级为平台原生 API。
+pub fn transcribe_audio(audio_base64: String, lang: String) -> Result<TranscribeResultFfi, String> {
+    let _ = audio_base64;
+    let _ = lang;
+    Err("Speech-to-text is not yet available. Whisper model integration pending.".to_string())
+}
+
+// ── OCR API ──────────────────────────────────────────────────────────
+// P0-2: OCR 文字识别 + 图片搜索
+// 基于 devnote-ocr crate（ocrs 纯 Rust OCR 引擎），识别图片中的文字并纳入全文搜索索引
+
+/// OCR 识别结果（FFI 传输结构）—— FRB 自动生成对应 Dart 类
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrResultFfi {
+    pub text: String,
+    pub lines: Vec<String>,
+    pub confidence: f32,
+}
+
+/// OCR 识别图片中的文字 —— 替代原 OcrEvent.Recognize
+/// image_base64: base64 编码的图片数据（支持 PNG/JPEG/WebP）
+/// 返回识别出的全文
+pub fn ocr_recognize_image(image_base64: String) -> Result<String, String> {
+    let mut engine = devnote_ocr::OcrEngine::new();
+    let result = engine.recognize_from_base64(&image_base64)
+        .map_err(|e| e.to_string())?;
+    Ok(result.text)
+}
+
+/// OCR 识别并返回结构化结果（含按行分割与置信度）
+pub fn ocr_recognize_image_detailed(image_base64: String) -> Result<OcrResultFfi, String> {
+    let mut engine = devnote_ocr::OcrEngine::new();
+    let result = engine.recognize_from_base64(&image_base64)
+        .map_err(|e| e.to_string())?;
+    Ok(OcrResultFfi {
+        text: result.text,
+        lines: result.lines,
+        confidence: result.confidence,
+    })
+}
+
+/// 将 OCR 识别文本纳入笔记的全文搜索索引 —— 替代原 OcrEvent.IndexImage
+/// 将 OCR 文本追加到笔记现有内容后重新索引，使图片中的文字可被全文检索
+pub fn index_ocr_text(note_id: String, ocr_text: String) -> Result<(), String> {
+    let uid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
+    let note = {
+        let guard = NOTE_REPO.lock();
+        let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
+        repo.get_note(&uid).map_err(|e| e.to_string())?
+            .ok_or("Note not found")?
+    };
+    let mut content = extract_content(&note);
+    if !ocr_text.is_empty() {
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str("[OCR] ");
+        content.push_str(&ocr_text);
+    }
+    let sguard = SEARCH_ENGINE.lock();
+    let engine = sguard.as_ref().ok_or("Search engine not initialized")?;
+    engine.index_note_with_meta(&note.id, &note.title, &content, &note.folder_id, &[], &note.updated_at)
+        .map_err(|e| e.to_string())
+}
+
+// ── Vault 保险库 API ──────────────────────────────────────────────────
+// P1-7: Vault 保险库（敏感笔记二次加密）
+// 对标 Notesnook 的 Vault 功能：使用独立密码对敏感笔记进行二次加密
+
+/// Vault 加密数据（FFI 传输结构）—— FRB 自动生成对应 Dart 类
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultEncryptedDataFfi {
+    pub ciphertext: String,
+    pub salt: String,
+    pub nonce: String,
+    pub memory_cost: u32,
+    pub time_cost: u32,
+    pub parallelism: u32,
+}
+
+/// Vault 加密 —— 使用用户密码对明文进行加密
+/// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密
+pub fn vault_encrypt(password: String, plaintext: String) -> Result<VaultEncryptedDataFfi, String> {
+    let result = devnote_crypto::vault_encrypt(&password, &plaintext)
+        .map_err(|e| e.to_string())?;
+    Ok(VaultEncryptedDataFfi {
+        ciphertext: result.ciphertext,
+        salt: result.salt,
+        nonce: result.nonce,
+        memory_cost: result.memory_cost,
+        time_cost: result.time_cost,
+        parallelism: result.parallelism,
+    })
+}
+
+/// Vault 解密 —— 使用用户密码对密文进行解密
+pub fn vault_decrypt(password: String, encrypted: VaultEncryptedDataFfi) -> Result<String, String> {
+    let encrypted_data = devnote_crypto::VaultEncryptedData {
+        ciphertext: encrypted.ciphertext,
+        salt: encrypted.salt,
+        nonce: encrypted.nonce,
+        memory_cost: encrypted.memory_cost,
+        time_cost: encrypted.time_cost,
+        parallelism: encrypted.parallelism,
+    };
+    devnote_crypto::vault_decrypt(&password, &encrypted_data)
+        .map_err(|e| e.to_string())
+}
+
+/// 验证 Vault 密码 —— 通过尝试解密测试向量验证密码是否正确
+pub fn vault_verify_password(password: String, encrypted: VaultEncryptedDataFfi) -> bool {
+    let encrypted_data = devnote_crypto::VaultEncryptedData {
+        ciphertext: encrypted.ciphertext,
+        salt: encrypted.salt,
+        nonce: encrypted.nonce,
+        memory_cost: encrypted.memory_cost,
+        time_cost: encrypted.time_cost,
+        parallelism: encrypted.parallelism,
+    };
+    devnote_crypto::vault_verify_password(&password, &encrypted_data)
 }

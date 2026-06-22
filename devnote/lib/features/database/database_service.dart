@@ -653,16 +653,35 @@ class DatabaseService {
 
     if (rowId == null) return null;
 
-    // 获取数据库 ID（需要遍历所有数据库查找该行）
+    // P2-2 修复: 直接查询 database_rows 和 database_cells，避免调用 listDatabases()
+    // 扫全库 + 全行 + 全单元格的 O(N*M) 查询，替换为 O(1) 单行查询 + O(C) 单元格查询
     try {
-      final databases = await listDatabases();
-      for (final db in databases) {
-        for (final row in db.rows) {
-          if (row.id == rowId) {
-            return row;
-          }
-        }
-      }
+      final db = await _dbHelper.database;
+      final rowRecords = await db.query(
+        'database_rows',
+        where: 'id = ?',
+        whereArgs: [rowId],
+        limit: 1,
+      );
+      if (rowRecords.isEmpty) return null;
+
+      final r = rowRecords.first;
+      final cellRecords = await db.query(
+        'database_cells',
+        where: 'row_id = ?',
+        whereArgs: [rowId],
+      );
+      final cells = cellRecords.map((cell) => DatabaseCellModel(
+        fieldId: cell['field_id'] as String,
+        value: _decodeCellValue(cell['value'] as String?),
+      )).toList();
+
+      return DatabaseRowModel(
+        id: r['id'] as String,
+        cells: cells,
+        createdAt: DateTime.parse(r['created_at'] as String),
+        updatedAt: DateTime.parse(r['updated_at'] as String),
+      );
     } catch (e) {
       // 数据库查询失败，回退为 null
       debugPrint('Failed to get row by block id: $e');

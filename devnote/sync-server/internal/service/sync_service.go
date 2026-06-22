@@ -2,7 +2,7 @@ package service
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"time"
 
 	"github.com/devnote/sync-server/internal/model"
@@ -61,12 +61,26 @@ func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, erro
 	var conflicts []Conflict
 	processed := 0
 
+	tx := s.db.Begin()
+	if tx.Error != nil {
+		return nil, fmt.Errorf("begin transaction: %w", tx.Error)
+	}
+
+	// 获取该用户的全局最大版本号（per-user 单调递增序列），
+	// 确保 Pull 的 `WHERE user_id = ? AND version > ?` 能正确工作。
+	var globalMaxVer int64
+	if err := tx.Model(&model.SyncRecord{}).Where("user_id = ?", userID).Select("COALESCE(MAX(version), 0)").Scan(&globalMaxVer).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("query global max version: %w", err)
+	}
+
 	for _, input := range req.Records {
 		var latest model.NoteSnapshot
-		err := s.db.Where("note_id = ? AND user_id = ?", input.NoteID, userID).Order("version DESC").First(&latest).Error
+		err := tx.Where("note_id = ? AND user_id = ?", input.NoteID, userID).Order("version DESC").First(&latest).Error
 
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
+			tx.Rollback()
+			return nil, fmt.Errorf("query latest snapshot: %w", err)
 		}
 
 		if latest.ID != "" && latest.Version > input.Version {
@@ -80,9 +94,15 @@ func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, erro
 			}
 		}
 
-		newVer := input.Version + 1
+		// 全局递增分配版本号
+		globalMaxVer++
+		newVer := globalMaxVer
+
+		// 防止乱序：若该笔记已有更新版本（例如通过 ResolveConflict 直接写入
+		// NoteSnapshot），则调整版本号以保持单调递增。
 		if latest.ID != "" && newVer <= latest.Version {
 			newVer = latest.Version + 1
+			globalMaxVer = newVer
 		}
 
 		record := &model.SyncRecord{
@@ -96,8 +116,9 @@ func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, erro
 			Payload:   input.Payload,
 		}
 
-		if err := s.db.Create(record).Error; err != nil {
-			return nil, err
+		if err := tx.Create(record).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("create sync record: %w", err)
 		}
 
 		snapshot := &model.NoteSnapshot{
@@ -107,14 +128,23 @@ func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, erro
 			Version: newVer,
 			Content: input.Payload,
 		}
-		if err := s.db.Create(snapshot).Error; err != nil {
-			return nil, err
+		if err := tx.Create(snapshot).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("create note snapshot: %w", err)
 		}
 
 		processed++
 	}
 
-	s.updateDeviceSync(userID, req.DeviceID)
+	// 在事务内更新设备同步状态
+	if err := updateDeviceSyncTx(tx, userID, req.DeviceID, globalMaxVer); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("update device sync: %w", err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
 
 	return &PushResponse{
 		Processed: processed,
@@ -130,14 +160,20 @@ func (s *SyncService) Pull(userID string, req *PullRequest, limit int) (*PullRes
 	}
 
 	var latestVer int64
-	s.db.Model(&model.SyncRecord{}).Where("user_id = ?", userID).Select("COALESCE(MAX(version), 0)").Scan(&latestVer)
+	if err := s.db.Model(&model.SyncRecord{}).Where("user_id = ?", userID).Select("COALESCE(MAX(version), 0)").Scan(&latestVer).Error; err != nil {
+		return nil, fmt.Errorf("query latest version: %w", err)
+	}
 
 	hasMore := len(records) > limit
 	if hasMore {
 		records = records[:limit]
 	}
 
-	s.updateDeviceSync(userID, req.DeviceID)
+	// P2 修复 (P2-10): updateDeviceSync 失败时返回 error，原实现仅 log.Printf 静默吞异常，
+	// 导致设备同步状态不一致（Push 成功但 latest_version 未更新，下次 Pull 重复拉取）
+	if err := s.updateDeviceSync(userID, req.DeviceID, latestVer); err != nil {
+		return nil, fmt.Errorf("update device sync: %w", err)
+	}
 
 	return &PullResponse{
 		Records:   records,
@@ -163,7 +199,9 @@ func (s *SyncService) GetStatus(userID, deviceID string) (*SyncStatus, error) {
 	}
 
 	var latestVer int64
-	s.db.Model(&model.SyncRecord{}).Where("user_id = ?", userID).Select("COALESCE(MAX(version), 0)").Scan(&latestVer)
+	if err := s.db.Model(&model.SyncRecord{}).Where("user_id = ?", userID).Select("COALESCE(MAX(version), 0)").Scan(&latestVer).Error; err != nil {
+		return nil, fmt.Errorf("query latest version: %w", err)
+	}
 
 	var pending int64
 	s.db.Model(&model.SyncRecord{}).Where("user_id = ? AND version > ?", userID, device.LastSyncVer).Count(&pending)
@@ -177,39 +215,113 @@ func (s *SyncService) GetStatus(userID, deviceID string) (*SyncStatus, error) {
 	}, nil
 }
 
-func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolution) error {
-	snapshot := &model.NoteSnapshot{
-		ID:      uuid.New().String(),
-		NoteID:  resolution.NoteID,
-		UserID:  userID,
-		Version: resolution.Version + 1,
-		Content: resolution.ChosenData,
+// GetNoteLatestVersion 返回指定笔记在最新快照中的版本号，找不到时返回 0。
+// 用于剪藏等场景在 Push 之后获取实际分配到的版本号。
+func (s *SyncService) GetNoteLatestVersion(userID, noteID string) (int64, error) {
+	var snapshot model.NoteSnapshot
+	err := s.db.Where("note_id = ? AND user_id = ?", noteID, userID).
+		Order("version DESC").First(&snapshot).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("query note latest version: %w", err)
 	}
-	return s.db.Create(snapshot).Error
+	return snapshot.Version, nil
 }
 
-func (s *SyncService) updateDeviceSync(userID, deviceID string) {
+// GetNoteHistory 获取笔记的版本历史
+func (s *SyncService) GetNoteHistory(userID string, noteID string, limit int) ([]model.NoteSnapshot, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	var snapshots []model.NoteSnapshot
+	err := s.db.Where("note_id = ? AND user_id = ?", noteID, userID).
+		Order("version DESC").
+		Limit(limit).
+		Find(&snapshots).Error
+	if err != nil {
+		return nil, fmt.Errorf("query note history: %w", err)
+	}
+	return snapshots, nil
+}
+
+// GetNoteVersion 获取笔记的特定版本
+func (s *SyncService) GetNoteVersion(userID string, noteID string, version int64) (*model.NoteSnapshot, error) {
+	var snapshot model.NoteSnapshot
+	err := s.db.Where("note_id = ? AND user_id = ? AND version = ?", noteID, userID, version).
+		First(&snapshot).Error
+	if err != nil {
+		return nil, fmt.Errorf("query note version: %w", err)
+	}
+	return &snapshot, nil
+}
+
+func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolution) error {
+	// P1 修复 (SEC-12): 原实现仅创建 NoteSnapshot，不写 SyncRecord，
+	// 导致 Pull（基于 SyncRecord.version）拉不到冲突解决结果，其他设备持续看到冲突。
+	// 现改为在事务中同时创建 NoteSnapshot 和 SyncRecord，保证一致性。
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		snapshot := &model.NoteSnapshot{
+			ID:      uuid.New().String(),
+			NoteID:  resolution.NoteID,
+			UserID:  userID,
+			Version: resolution.Version + 1,
+			Content: resolution.ChosenData,
+		}
+		if err := tx.Create(snapshot).Error; err != nil {
+			return fmt.Errorf("create snapshot: %w", err)
+		}
+
+		// 同步写入 SyncRecord，使其他设备 Pull 时能拉到冲突解决结果
+		record := &model.SyncRecord{
+			ID:        uuid.New().String(),
+			UserID:    userID,
+			NoteID:    resolution.NoteID,
+			Action:    "update",
+			Version:   resolution.Version + 1,
+			Payload:   resolution.ChosenData,
+			CreatedAt: time.Now(),
+		}
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("create sync record: %w", err)
+		}
+		return nil
+	})
+}
+
+// P2 修复 (P2-10): 返回 error 而非静默吞异常，让调用方决定如何处理失败
+func (s *SyncService) updateDeviceSync(userID, deviceID string, latestVer int64) error {
+	return updateDeviceSyncTx(s.db, userID, deviceID, latestVer)
+}
+
+// updateDeviceSyncTx 在给定的事务/连接上更新设备的同步时间与版本号。
+// 接受 *gorm.DB 以便在 Push 事务内复用（tx）或在 Pull 中使用 s.db。
+func updateDeviceSyncTx(db *gorm.DB, userID, deviceID string, latestVer int64) error {
 	var device model.Device
-	err := s.db.Where("user_id = ? AND id = ?", userID, deviceID).First(&device).Error
+	err := db.Where("user_id = ? AND id = ?", userID, deviceID).First(&device).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		device = model.Device{
-			ID:         deviceID,
-			UserID:     userID,
-			DeviceName: deviceID,
-			LastSyncAt: time.Now(),
+			ID:          deviceID,
+			UserID:      userID,
+			DeviceName:  deviceID,
+			LastSyncAt:  time.Now(),
+			LastSyncVer: latestVer,
 		}
-		if createErr := s.db.Create(&device).Error; createErr != nil {
-			log.Printf("create device record failed: %v", createErr)
-			return
+		if createErr := db.Create(&device).Error; createErr != nil {
+			return fmt.Errorf("create device record: %w", createErr)
 		}
-	} else if err != nil {
-		log.Printf("query device failed: %v", err)
-		return
-	} else {
-		if updateErr := s.db.Model(&device).Updates(map[string]interface{}{
-			"last_sync_at": time.Now(),
-		}).Error; updateErr != nil {
-			log.Printf("update device sync time failed: %v", updateErr)
-		}
+		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("query device: %w", err)
+	}
+
+	if updateErr := db.Model(&device).Updates(map[string]interface{}{
+		"last_sync_at":  time.Now(),
+		"last_sync_ver": latestVer,
+	}).Error; updateErr != nil {
+		return fmt.Errorf("update device sync: %w", updateErr)
+	}
+	return nil
 }

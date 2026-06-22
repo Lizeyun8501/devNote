@@ -1,25 +1,10 @@
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/persistence/models/highlight_model.dart';
 
-class HighlightModel {
-  final int start;
-  final int end;
-  final String text;
-
-  const HighlightModel({
-    required this.start,
-    required this.end,
-    required this.text,
-  });
-
-  factory HighlightModel.fromJson(Map<String, dynamic> json) {
-    return HighlightModel(
-      start: json['start'] as int,
-      end: json['end'] as int,
-      text: json['text'] as String,
-    );
-  }
-}
+// P1 修复 (P1-3): HighlightModel 已提取到 core/persistence/models/，
+// 通过 re-export 保持向后兼容，现有 import search_service.dart 的代码无需改动。
+export 'package:devnote/core/persistence/models/highlight_model.dart';
 
 class SearchResultModel {
   final String noteId;

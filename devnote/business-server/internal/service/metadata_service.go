@@ -2,7 +2,6 @@ package service
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -22,21 +21,22 @@ func NewMetadataService(db *sql.DB) *MetadataService {
 }
 
 // Create inserts a new note-metadata record.
-func (s *MetadataService) Create(meta *model.NoteMeta) (*model.NoteMeta, error) {
+func (s *MetadataService) Create(userID string, meta *model.NoteMeta) (*model.NoteMeta, error) {
 	if meta.Title == "" {
 		return nil, errors.New("title is required")
 	}
 
 	meta.ID = uuid.New().String()
+	meta.UserID = userID
 	now := time.Now().UTC()
 	meta.CreatedAt = now
 	meta.ModifiedAt = now
 
 	_, err := s.db.Exec(`
-		INSERT INTO note_meta (id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO note_meta (id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		meta.ID, meta.Title, meta.Author, meta.CreatedAt, meta.ModifiedAt,
+		meta.ID, meta.UserID, meta.Title, meta.Author, meta.CreatedAt, meta.ModifiedAt,
 		meta.WordCount, meta.CharCount, meta.Format, meta.Excerpt, meta.Language,
 		boolToInt(meta.IsEncrypted), meta.ContentHash, meta.CustomFields,
 	)
@@ -47,15 +47,15 @@ func (s *MetadataService) Create(meta *model.NoteMeta) (*model.NoteMeta, error) 
 }
 
 // Get retrieves a single note-metadata record by ID.
-func (s *MetadataService) Get(id string) (*model.NoteMeta, error) {
+func (s *MetadataService) Get(userID, id string) (*model.NoteMeta, error) {
 	row := s.db.QueryRow(`
-		SELECT id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields
-		FROM note_meta WHERE id = ?
-	`, id)
+		SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields
+		FROM note_meta WHERE id = ? AND user_id = ?
+	`, id, userID)
 
 	var m model.NoteMeta
 	var isEnc int
-	err := row.Scan(&m.ID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
+	err := row.Scan(&m.ID, &m.UserID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
 		&m.WordCount, &m.CharCount, &m.Format, &m.Excerpt, &m.Language,
 		&isEnc, &m.ContentHash, &m.CustomFields)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -69,35 +69,39 @@ func (s *MetadataService) Get(id string) (*model.NoteMeta, error) {
 }
 
 // Update modifies an existing note-metadata record.
-func (s *MetadataService) Update(meta *model.NoteMeta) (*model.NoteMeta, error) {
+func (s *MetadataService) Update(userID string, meta *model.NoteMeta) (*model.NoteMeta, error) {
 	if meta.ID == "" {
 		return nil, errors.New("id is required")
 	}
 
 	meta.ModifiedAt = time.Now().UTC()
 
-	_, err := s.db.Exec(`
+	res, err := s.db.Exec(`
 		UPDATE note_meta SET title=?, author=?, modified_at=?, word_count=?, char_count=?, format=?, excerpt=?, language=?, is_encrypted=?, content_hash=?, custom_fields=?
-		WHERE id=?
+		WHERE id=? AND user_id=?
 	`,
 		meta.Title, meta.Author, meta.ModifiedAt, meta.WordCount, meta.CharCount,
 		meta.Format, meta.Excerpt, meta.Language, boolToInt(meta.IsEncrypted),
-		meta.ContentHash, meta.CustomFields, meta.ID,
+		meta.ContentHash, meta.CustomFields, meta.ID, userID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update note meta: %w", err)
 	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return nil, fmt.Errorf("note meta not found: %s", meta.ID)
+	}
+	meta.UserID = userID
 	return meta, nil
 }
 
 // Delete removes a note-metadata record by ID.
-func (s *MetadataService) Delete(id string) error {
-	_, err := s.db.Exec(`DELETE FROM note_meta WHERE id = ?`, id)
+func (s *MetadataService) Delete(userID, id string) error {
+	_, err := s.db.Exec(`DELETE FROM note_meta WHERE id = ? AND user_id = ?`, id, userID)
 	return err
 }
 
 // List returns a paginated list of note-metadata records with optional search filter.
-func (s *MetadataService) List(page, pageSize int, search string) (*model.PaginatedResponse, error) {
+func (s *MetadataService) List(userID string, page, pageSize int, search string) (*model.PaginatedResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -111,21 +115,21 @@ func (s *MetadataService) List(page, pageSize int, search string) (*model.Pagina
 
 	if search != "" {
 		like := "%" + search + "%"
-		err = s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE title LIKE ? OR author LIKE ?`, like, like).Scan(&total)
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE user_id = ? AND (title LIKE ? OR author LIKE ?)`, userID, like, like).Scan(&total)
 		if err != nil {
 			return nil, fmt.Errorf("count note meta: %w", err)
 		}
 		offset := (page - 1) * pageSize
-		rows, err = s.db.Query(`SELECT id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE title LIKE ? OR author LIKE ? ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
-			like, like, pageSize, offset)
+		rows, err = s.db.Query(`SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE user_id = ? AND (title LIKE ? OR author LIKE ?) ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
+			userID, like, like, pageSize, offset)
 	} else {
-		err = s.db.QueryRow(`SELECT COUNT(*) FROM note_meta`).Scan(&total)
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE user_id = ?`, userID).Scan(&total)
 		if err != nil {
 			return nil, fmt.Errorf("count note meta: %w", err)
 		}
 		offset := (page - 1) * pageSize
-		rows, err = s.db.Query(`SELECT id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
-			pageSize, offset)
+		rows, err = s.db.Query(`SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE user_id = ? ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
+			userID, pageSize, offset)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list note meta: %w", err)
@@ -136,7 +140,7 @@ func (s *MetadataService) List(page, pageSize int, search string) (*model.Pagina
 	for rows.Next() {
 		var m model.NoteMeta
 		var isEnc int
-		if err := rows.Scan(&m.ID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
 			&m.WordCount, &m.CharCount, &m.Format, &m.Excerpt, &m.Language,
 			&isEnc, &m.ContentHash, &m.CustomFields); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
@@ -156,7 +160,7 @@ func (s *MetadataService) List(page, pageSize int, search string) (*model.Pagina
 }
 
 // BatchCreate inserts multiple note-metadata records in a single transaction.
-func (s *MetadataService) BatchCreate(items []*model.NoteMeta) ([]*model.NoteMeta, error) {
+func (s *MetadataService) BatchCreate(userID string, items []*model.NoteMeta) ([]*model.NoteMeta, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -165,15 +169,16 @@ func (s *MetadataService) BatchCreate(items []*model.NoteMeta) ([]*model.NoteMet
 
 	for _, m := range items {
 		m.ID = uuid.New().String()
+		m.UserID = userID
 		now := time.Now().UTC()
 		m.CreatedAt = now
 		m.ModifiedAt = now
 
 		_, err := tx.Exec(`
-			INSERT INTO note_meta (id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO note_meta (id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-			m.ID, m.Title, m.Author, m.CreatedAt, m.ModifiedAt,
+			m.ID, m.UserID, m.Title, m.Author, m.CreatedAt, m.ModifiedAt,
 			m.WordCount, m.CharCount, m.Format, m.Excerpt, m.Language,
 			boolToInt(m.IsEncrypted), m.ContentHash, m.CustomFields,
 		)
@@ -189,7 +194,7 @@ func (s *MetadataService) BatchCreate(items []*model.NoteMeta) ([]*model.NoteMet
 }
 
 // BatchDelete removes multiple note-metadata records by IDs.
-func (s *MetadataService) BatchDelete(ids []string) error {
+func (s *MetadataService) BatchDelete(userID string, ids []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -197,7 +202,7 @@ func (s *MetadataService) BatchDelete(ids []string) error {
 	defer tx.Rollback()
 
 	for _, id := range ids {
-		if _, err := tx.Exec(`DELETE FROM note_meta WHERE id = ?`, id); err != nil {
+		if _, err := tx.Exec(`DELETE FROM note_meta WHERE id = ? AND user_id = ?`, id, userID); err != nil {
 			return fmt.Errorf("batch delete: %w", err)
 		}
 	}
@@ -205,11 +210,11 @@ func (s *MetadataService) BatchDelete(ids []string) error {
 }
 
 // Filter returns notes matching the given criteria.
-func (s *MetadataService) Filter(filterMap map[string]string, page, pageSize int) (*model.PaginatedResponse, error) {
+func (s *MetadataService) Filter(userID string, filterMap map[string]string, page, pageSize int) (*model.PaginatedResponse, error) {
 	// Simplified filter implementation — extend as needed.
-	query := "SELECT id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE 1=1"
-	countQ := "SELECT COUNT(*) FROM note_meta WHERE 1=1"
-	args := []interface{}{}
+	query := "SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE user_id = ?"
+	countQ := "SELECT COUNT(*) FROM note_meta WHERE user_id = ?"
+	args := []interface{}{userID}
 
 	if v, ok := filterMap["format"]; ok && v != "" {
 		query += " AND format = ?"
@@ -252,7 +257,7 @@ func (s *MetadataService) Filter(filterMap map[string]string, page, pageSize int
 	for rows.Next() {
 		var m model.NoteMeta
 		var isEnc int
-		if err := rows.Scan(&m.ID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Title, &m.Author, &m.CreatedAt, &m.ModifiedAt,
 			&m.WordCount, &m.CharCount, &m.Format, &m.Excerpt, &m.Language,
 			&isEnc, &m.ContentHash, &m.CustomFields); err != nil {
 			return nil, fmt.Errorf("scan filter row: %w", err)
@@ -269,15 +274,6 @@ func (s *MetadataService) Filter(filterMap map[string]string, page, pageSize int
 		PageSize:   pageSize,
 		TotalPages: totalPages,
 	}, nil
-}
-
-// parseCustomFields unmarshals a JSON custom_fields string into a Go map.
-func parseCustomFields(raw string) map[string]interface{} {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return map[string]interface{}{}
-	}
-	return m
 }
 
 func boolToInt(b bool) int {

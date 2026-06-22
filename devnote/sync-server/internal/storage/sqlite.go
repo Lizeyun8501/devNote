@@ -25,7 +25,7 @@ func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	if err := db.AutoMigrate(&model.User{}, &model.Device{}, &model.SyncRecord{}, &model.NoteSnapshot{}, &model.RefreshToken{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Device{}, &model.SyncRecord{}, &model.NoteSnapshot{}, &model.RefreshToken{}, &model.SharedNote{}); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 

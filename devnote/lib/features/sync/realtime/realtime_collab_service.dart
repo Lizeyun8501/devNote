@@ -13,6 +13,8 @@
 //   只传输操作增量，不传输完整文档，降低带宽与冲突面。
 // - **Yjs / Automerge** ([GitHub](https://github.com/yjs/yjs)):
 //   CRDT 操作语义。本服务复用现有 devnote-crdt 的 YATA 算法思想（通过
+
+import 'package:devnote/core/config/app_config.dart';
 //   `ConflictResolver.mergeWithVectorClocks` 间接复用），并对并发文本块
 //   采用字符级合并。
 // - **Yjs y-websocket** ([GitHub](https://github.com/yjs/y-websocket)):
@@ -421,7 +423,11 @@ class RealtimeCollabService {
   static const String _deviceIdKey = 'realtime_device_id';
 
   /// 默认 WebSocket 服务器地址（与 sync-server 对齐）
-  static const String _defaultServerUrl = 'wss://sync.devnote.app/realtime';
+  ///
+  /// 仅作为兜底默认值；实际连接地址由 [_resolveServerUrl] 从
+  /// SharedPreferences 读取用户配置的同步服务器地址（与 SyncService 共用
+  /// `sync_server_url` key）后转换得到，允许用户自定义部署地址。
+  static const String _defaultServerUrl = defaultRealtimeServerUrl;
 
   final RealtimeTransport _transport;
   final Uuid _uuid = const Uuid();
@@ -560,7 +566,8 @@ class RealtimeCollabService {
 
     // 建立 WebSocket 连接
     final token = await _resolveToken();
-    await _transport.connect(_defaultServerUrl, token: token);
+    final serverUrl = await _resolveServerUrl();
+    await _transport.connect(serverUrl, token: token);
 
     // 发送 join 消息
     final ok = await _transport.send({
@@ -706,10 +713,14 @@ class RealtimeCollabService {
 
     // 通过 resolver 注册块级向量时钟，供 EditorBloc 在调用
     // mergeWithVectorClocks 时进行因果关系判定
-    resolver.setVectorClocks(
-      {op.blockId: _localVectorClock},
-      {op.blockId: op.vectorClock},
-    );
+    // P1 修复 (INC-04): 原实现每次用单元素 Map 覆盖 resolver 内部状态，
+    // 导致多 block 场景下其他 block 的向量时钟被清空丢失，因果关系判定失效。
+    // 改为合并到现有 Map 而非覆盖。
+    final localVcMap = <String, VectorClock>{};
+    localVcMap[op.blockId] = _localVectorClock;
+    final remoteVcMap = <String, VectorClock>{};
+    remoteVcMap[op.blockId] = op.vectorClock;
+    resolver.mergeVectorClocks(localVcMap, remoteVcMap);
 
     AppLogger.d(
       _tag,
@@ -832,7 +843,9 @@ class RealtimeCollabService {
             _presences[state.deviceId] = state;
             _presenceController.add(state);
           }
-        } catch (_) {}
+        } catch (e) {
+          AppLogger.w(_tag, '解析 peer presence 数据失败，跳过: $e');
+        }
       }
     }
     _updateStatus(RealtimeCollabStatus.connected);
@@ -902,6 +915,31 @@ class RealtimeCollabService {
   Future<String?> _resolveToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('sync_auth_token');
+  }
+
+  /// 解析 WebSocket 服务器地址
+  ///
+  /// 优先从 SharedPreferences 读取用户配置的同步服务器地址（与 SyncService
+  /// 共用 `sync_server_url` key），将其从 HTTP(S) 转换为 WS(S) 协议并追加
+  /// `/realtime` 路径。未配置时回退到默认地址 [_defaultServerUrl]。
+  Future<String> _resolveServerUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final syncUrl = prefs.getString('sync_server_url');
+    if (syncUrl == null || syncUrl.isEmpty) {
+      return _defaultServerUrl;
+    }
+    // 将 HTTP(S) URL 转换为 WS(S) URL
+    var wsUrl = syncUrl;
+    if (wsUrl.startsWith('https://')) {
+      wsUrl = 'wss://${wsUrl.substring('https://'.length)}';
+    } else if (wsUrl.startsWith('http://')) {
+      wsUrl = 'ws://${wsUrl.substring('http://'.length)}';
+    }
+    // 追加 /realtime 路径（去除末尾斜杠避免双斜杠）
+    if (wsUrl.endsWith('/')) {
+      wsUrl = wsUrl.substring(0, wsUrl.length - 1);
+    }
+    return '$wsUrl/realtime';
   }
 
   /// 生成设备 ID（密码学安全的 32 位十六进制字符串）

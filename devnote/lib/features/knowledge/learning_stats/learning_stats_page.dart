@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/knowledge/learning_stats/learning_stats_service.dart';
 import 'package:devnote/features/knowledge/learning_stats/widgets/stats_card.dart';
 import 'package:devnote/features/knowledge/learning_stats/widgets/trend_chart.dart';
@@ -22,7 +23,7 @@ class LearningStatsPage extends StatefulWidget {
 
 class _LearningStatsPageState extends State<LearningStatsPage>
     with SingleTickerProviderStateMixin {
-  final LearningStatsService _service = LearningStatsService();
+  final LearningStatsService _service = getIt<LearningStatsService>();
   LearningStatsSummary? _summary;
   bool _loading = true;
 

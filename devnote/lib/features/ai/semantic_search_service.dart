@@ -18,10 +18,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/core/persistence/models/highlight_model.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/features/ai/embedding_service.dart';
 import 'package:devnote/features/ai/search_result.dart';
-import 'package:devnote/features/search/search_service.dart' show HighlightModel;
 
 /// 语义搜索服务
 ///

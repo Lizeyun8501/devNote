@@ -132,7 +132,12 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
           _SectionTitle(title: '自动同步'),
           const SizedBox(height: 8),
           BlocBuilder<SyncBloc, SyncState>(
-            builder: (context, state) {
+          // P2-4: 仅在 autoSyncEnabled/syncInterval 变化时重建，
+          // 避免 SyncInProgress/SyncCompleted 等状态切换触发不必要的重建。
+          buildWhen: (previous, current) =>
+              previous.autoSyncEnabled != current.autoSyncEnabled ||
+              previous.syncInterval != current.syncInterval,
+          builder: (context, state) {
               return Card(
                 child: Column(
                   children: [
@@ -167,6 +172,10 @@ class _SyncSettingsPageState extends State<SyncSettingsPage> {
             child: Column(
               children: [
                 BlocBuilder<SyncBloc, SyncState>(
+                  // P2-4: 仅在同步进行中状态变化时重建按钮（SyncInProgress ↔ 其他），
+                  // 避免 lastSyncTime/conflicts 等字段变化触发不必要的重建。
+                  buildWhen: (previous, current) =>
+                      previous.runtimeType != current.runtimeType,
                   builder: (context, state) {
                     final isSyncing = state is SyncInProgress;
                     return ListTile(

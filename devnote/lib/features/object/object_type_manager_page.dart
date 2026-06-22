@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/object/object_service.dart';
 
 class ObjectTypeManagerPage extends StatefulWidget {
@@ -9,7 +10,7 @@ class ObjectTypeManagerPage extends StatefulWidget {
 }
 
 class _ObjectTypeManagerPageState extends State<ObjectTypeManagerPage> {
-  final ObjectService _service = ObjectService();
+  final ObjectService _service = getIt<ObjectService>();
   List<ObjectTypeModel> _objectTypes = [];
 
   @override

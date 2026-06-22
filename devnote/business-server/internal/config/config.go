@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"os"
 	"strconv"
@@ -23,15 +25,33 @@ type Config struct {
 }
 
 // Load reads configuration from environment variables with sensible defaults.
+//
+// P1 修复 (SEC-06): business-server 应使用独立的 JWT_SECRET，不与 sync-server 共用。
+// 原实现两服务器共用同一密钥，任一泄露即可伪造另一服务器的 token。
+// 现改为：优先读取 BUSINESS_JWT_SECRET，其次 JWT_SECRET，开发环境生成随机密钥。
 func Load() *Config {
-	jwtSecret := os.Getenv("JWT_SECRET")
+	// P1 修复: business-server 优先使用独立密钥 BUSINESS_JWT_SECRET
+	jwtSecret := os.Getenv("BUSINESS_JWT_SECRET")
+	if jwtSecret == "" {
+		// 回退到 JWT_SECRET（向后兼容）
+		jwtSecret = os.Getenv("JWT_SECRET")
+	}
 	if jwtSecret == "" {
 		if os.Getenv("GO_ENV") == "production" {
-			log.Fatal("JWT_SECRET environment variable must be set in production")
+			log.Fatal("JWT_SECRET or BUSINESS_JWT_SECRET environment variable must be set in production")
 		}
-		// Only allow default in development
-		jwtSecret = "devnote-dev-secret-key-change-me"
-		log.Println("WARNING: Using default JWT_SECRET. Set JWT_SECRET env var for production.")
+		// P1 修复: 生成随机密钥替代固定默认值
+		jwtSecret = generateRandomSecret(32)
+		log.Println("WARNING: Generated random JWT_SECRET for development. "
+			+ "Set BUSINESS_JWT_SECRET env var for consistent sessions.")
+	}
+
+	// P1 修复: 校验密钥长度
+	if len(jwtSecret) < 32 {
+		if os.Getenv("GO_ENV") == "production" {
+			log.Fatal("JWT_SECRET must be at least 32 bytes for security")
+		}
+		log.Printf("WARNING: JWT_SECRET is only %d bytes, recommend at least 32 bytes", len(jwtSecret))
 	}
 
 	allowedOrigins := parseEnvList("ALLOWED_ORIGINS", []string{"*"})
@@ -90,4 +110,14 @@ func parseEnvList(key string, fallback []string) []string {
 		return fallback
 	}
 	return result
+}
+
+// generateRandomSecret 生成密码学安全的随机密钥（十六进制编码）
+// P1 修复 (SEC-06): 替代固定默认密钥
+func generateRandomSecret(byteLength int) string {
+	b := make([]byte, byteLength)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("Failed to generate random secret: %v", err)
+	}
+	return hex.EncodeToString(b)
 }

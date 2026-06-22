@@ -24,6 +24,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:graphview/GraphView.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_bloc.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_event.dart';
 import 'package:devnote/features/knowledge_graph/bloc/graph_state.dart';
@@ -37,7 +38,7 @@ class KnowledgeGraphPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => GraphBloc(GraphService())..add(const LoadGraph()),
+      create: (context) => GraphBloc(getIt<GraphService>())..add(const LoadGraph()),
       child: const _KnowledgeGraphView(),
     );
   }

@@ -15,11 +15,12 @@ pub enum IpfsError {
     Cid(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("other error: {0}")]
+    Other(#[from] anyhow::Error),
 }
 
 // IPFS API response types
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct IpfsAddResponse {
     #[serde(rename = "Name")]
     name: String,
@@ -171,11 +172,13 @@ impl IpfsClient {
         if let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&data) {
             if manifest["type"] == "devnote-ipfs-chunked" {
                 let mut result = Vec::new();
-                if let Some(chunks) = manifest["chunks"].as_array() {
-                    for chunk_cid in chunks {
-                        let chunk_data = self.get(chunk_cid.as_str().unwrap_or("")).await?;
-                        result.extend_from_slice(&chunk_data);
-                    }
+                let chunks = manifest["chunks"].as_array()
+                    .ok_or_else(|| anyhow::anyhow!("manifest missing 'chunks' array"))?;
+                for chunk_cid in chunks {
+                    let cid_str = chunk_cid.as_str()
+                        .ok_or_else(|| anyhow::anyhow!("chunk CID is not a string"))?;
+                    let chunk_data = self.get(cid_str).await?;
+                    result.extend_from_slice(&chunk_data);
                 }
                 return Ok(Bytes::from(result));
             }
