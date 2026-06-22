@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/devnote/sync-server/internal/model"
@@ -81,7 +82,11 @@ func (s *ShareService) GetShareByToken(token, password string) (*model.SharedNot
 	}
 
 	// 增加浏览数
-	s.db.Model(&share).UpdateColumn("view_count", gorm.Expr("view_count + 1"))
+	// P3 修复 (P3-9): 原实现忽略 UpdateColumn 错误，浏览数统计失败时无任何感知
+	// 浏览数为非关键统计数据，失败时记录日志但不影响分享访问
+	if err := s.db.Model(&share).UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error; err != nil {
+		log.Printf("update share view_count failed (share_id=%s): %v", share.ID, err)
+	}
 
 	return &share, nil
 }

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/sync/incremental_sync_service.dart';
 import 'crypto/e2e_crypto_service.dart';
@@ -246,8 +247,10 @@ class SyncService {
         await http.post(uri, headers: headers, body: body).timeout(
           const Duration(seconds: 15),
         );
-      } catch (_) {
+      } catch (e, stack) {
+        // P2 修复 (P2-12): 记录上报失败日志，原 catch(_) 静默吞异常导致故障不可见
         // 上报失败不影响本地状态，下次同步会重新检测冲突
+        AppLogger.w('SyncService', 'conflict report failed', error: e);
       }
     }
 

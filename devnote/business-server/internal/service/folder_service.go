@@ -357,18 +357,18 @@ func (s *FolderService) GetNotesByFolder(userID, folderID string, page, pageSize
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	// Association is stored via a custom field / external lookup.
-	// Here we query note_meta.custom_fields for a "folder_id" key.
-	search := `%"folder_id":"` + folderID + `"%`
+	// P2 修复 (P2-6): 原实现使用 custom_fields LIKE '%"folder_id":"<id>"%' 在 JSON 字符串中匹配，
+	// 无法使用索引且非常脆弱（JSON 格式变化如空格/键顺序会导致匹配失败，也容易误匹配子串）。
+	// 现改为使用 SQLite JSON1 扩展的 json_extract 精确提取 folder_id 字段值比较。
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE user_id=? AND custom_fields LIKE ?`, userID, search).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE user_id=? AND json_extract(custom_fields, '$.folder_id') = ?`, userID, folderID).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count folder notes: %w", err)
 	}
 
 	offset := (page - 1) * pageSize
 	rows, err := s.db.Query(
-		`SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE user_id=? AND custom_fields LIKE ? ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
-		userID, search, pageSize, offset)
+		`SELECT id, user_id, title, author, created_at, modified_at, word_count, char_count, format, excerpt, language, is_encrypted, content_hash, custom_fields FROM note_meta WHERE user_id=? AND json_extract(custom_fields, '$.folder_id') = ? ORDER BY modified_at DESC LIMIT ? OFFSET ?`,
+		userID, folderID, pageSize, offset)
 	if err != nil {
 		return nil, fmt.Errorf("get folder notes: %w", err)
 	}

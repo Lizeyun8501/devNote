@@ -72,14 +72,18 @@ func main() {
 	authService := service.NewAuthService(sqliteStore.DB, cfg)
 	syncService := service.NewSyncService(sqliteStore.DB, s3Store)
 	shareService := service.NewShareService(sqliteStore.DB)
-	emailService := service.NewEmailService(sqliteStore.DB, syncService, cfg.EmailDomain)
+	// P3 修复 (P3-13): NewEmailService 现在返回 error，迁移失败时 fatal 退出
+	emailService, err := service.NewEmailService(sqliteStore.DB, syncService, cfg.EmailDomain)
+	if err != nil {
+		logger.Fatal("failed to init email service", zap.Error(err))
+	}
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	srpAuthHandler := handler.NewSRPAuthHandler(authService)
 	syncHandler := handler.NewSyncHandler(syncService)
 	healthHandler := handler.NewHealthHandler()
-	realtimeHandler := handler.NewRealtimeHandler(authService)
+	realtimeHandler := handler.NewRealtimeHandler(authService, logger)
 	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader
 	handler.SetupCheckOrigin(cfg.AllowedOrigins)
 	clipperHandler := handler.NewClipperHandler(syncService)

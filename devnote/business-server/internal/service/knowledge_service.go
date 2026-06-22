@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/devnote/business-server/internal/model"
@@ -142,15 +141,25 @@ func (s *KnowledgeService) verifyNoteOwnership(userID, noteID string) error {
 	return nil
 }
 
-func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+// queryExecer 是 *sql.DB 和 *sql.Tx 共同实现的接口，用于消除重复代码。
+// P2 修复 (P2-7): 原 ensureBidirectional 和 ensureBidirectionalTx 逻辑完全相同，
+// 仅数据源（*sql.DB vs *sql.Tx）不同，通过此接口抽取为单一函数。
+type queryExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+// ensureBidirectionalOn 在给定数据源上确保双向关系存在。
+// P2 修复 (P2-7): 抽取自 ensureBidirectional 和 ensureBidirectionalTx 的共享逻辑
+func ensureBidirectionalOn(db queryExecer, userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
 	var cnt int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND user_id=?`, targetNoteID, sourceNoteID, userID).Scan(&cnt)
+	err := db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND user_id=?`, targetNoteID, sourceNoteID, userID).Scan(&cnt)
 	if err != nil {
 		return fmt.Errorf("check existing bidirectional relation: %w", err)
 	}
 	if cnt == 0 {
 		now := time.Now().UTC()
-		_, err := tx.Exec(`
+		_, err := db.Exec(`
 			INSERT INTO knowledge_relation (id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, uuid.New().String(), userID, targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
@@ -161,23 +170,12 @@ func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, userID, sourceNoteI
 	return nil
 }
 
+func (s *KnowledgeService) ensureBidirectionalTx(tx *sql.Tx, userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
+	return ensureBidirectionalOn(tx, userID, sourceNoteID, targetNoteID, relationType, weight)
+}
+
 func (s *KnowledgeService) ensureBidirectional(userID, sourceNoteID, targetNoteID, relationType string, weight float64) error {
-	var cnt int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relation WHERE source_note_id=? AND target_note_id=? AND user_id=?`, targetNoteID, sourceNoteID, userID).Scan(&cnt)
-	if err != nil {
-		return fmt.Errorf("check existing bidirectional relation: %w", err)
-	}
-	if cnt == 0 {
-		now := time.Now().UTC()
-		_, err := s.db.Exec(`
-			INSERT INTO knowledge_relation (id, user_id, source_note_id, target_note_id, weight, reference_count, relation_type, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, uuid.New().String(), userID, targetNoteID, sourceNoteID, weight*0.8, 1, relationType, now, now)
-		if err != nil {
-			return fmt.Errorf("insert bidirectional relation: %w", err)
-		}
-	}
-	return nil
+	return ensureBidirectionalOn(s.db, userID, sourceNoteID, targetNoteID, relationType, weight)
 }
 
 // DeleteRelation removes a knowledge relation.
@@ -779,82 +777,4 @@ func (s *KnowledgeService) FindShortestPath(userID, fromNoteID, toNoteID string)
 	}
 
 	return path, dist[toNoteID], nil
-}
-
-// findSimilarNotesByContent returns notes with similar titles (simple string similarity).
-func (s *KnowledgeService) findSimilarNotesByContent(userID, noteID string, limit int) ([]SuggestedNote, error) {
-	var myTitle string
-	if err := s.db.QueryRow(`SELECT title FROM note_meta WHERE id=? AND user_id=?`, noteID, userID).Scan(&myTitle); err != nil {
-		return nil, err
-	}
-
-	rows, err := s.db.Query(`SELECT id, title FROM note_meta WHERE id != ? AND user_id=?`, noteID, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	type candidate struct {
-		id    string
-		title string
-		sim   float64
-	}
-	var candidates []candidate
-	for rows.Next() {
-		var id, title string
-		if err := rows.Scan(&id, &title); err != nil {
-			continue
-		}
-		sim := jaccardSimilarity(strings.ToLower(myTitle), strings.ToLower(title))
-		candidates = append(candidates, candidate{id, title, sim})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].sim > candidates[j].sim
-	})
-
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-
-	var suggestions []SuggestedNote
-	for _, c := range candidates {
-		suggestions = append(suggestions, SuggestedNote{
-			NoteID: c.id,
-			Title:  c.title,
-			Score:  c.sim,
-		})
-	}
-	return suggestions, nil
-}
-
-func jaccardSimilarity(a, b string) float64 {
-	setA := tokenSet(a)
-	setB := tokenSet(b)
-	if len(setA) == 0 && len(setB) == 0 {
-		return 0
-	}
-	intersection := 0
-	for token := range setA {
-		if setB[token] {
-			intersection++
-		}
-	}
-	union := len(setA) + len(setB) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
-}
-
-func tokenSet(s string) map[string]bool {
-	words := strings.Fields(s)
-	set := make(map[string]bool, len(words))
-	for _, w := range words {
-		set[w] = true
-	}
-	return set
 }

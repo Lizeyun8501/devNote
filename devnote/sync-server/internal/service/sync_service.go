@@ -3,7 +3,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/devnote/sync-server/internal/model"
@@ -170,7 +169,11 @@ func (s *SyncService) Pull(userID string, req *PullRequest, limit int) (*PullRes
 		records = records[:limit]
 	}
 
-	s.updateDeviceSync(userID, req.DeviceID, latestVer)
+	// P2 修复 (P2-10): updateDeviceSync 失败时返回 error，原实现仅 log.Printf 静默吞异常，
+	// 导致设备同步状态不一致（Push 成功但 latest_version 未更新，下次 Pull 重复拉取）
+	if err := s.updateDeviceSync(userID, req.DeviceID, latestVer); err != nil {
+		return nil, fmt.Errorf("update device sync: %w", err)
+	}
 
 	return &PullResponse{
 		Records:   records,
@@ -287,10 +290,9 @@ func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolut
 	})
 }
 
-func (s *SyncService) updateDeviceSync(userID, deviceID string, latestVer int64) {
-	if err := updateDeviceSyncTx(s.db, userID, deviceID, latestVer); err != nil {
-		log.Printf("update device sync failed: %v", err)
-	}
+// P2 修复 (P2-10): 返回 error 而非静默吞异常，让调用方决定如何处理失败
+func (s *SyncService) updateDeviceSync(userID, deviceID string, latestVer int64) error {
+	return updateDeviceSyncTx(s.db, userID, deviceID, latestVer)
 }
 
 // updateDeviceSyncTx 在给定的事务/连接上更新设备的同步时间与版本号。

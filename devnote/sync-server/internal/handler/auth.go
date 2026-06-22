@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/devnote/sync-server/internal/service"
@@ -99,7 +100,11 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 	c.ShouldBindJSON(&req)
 	if req.RefreshToken != "" {
-		h.authService.RevokeRefreshToken(req.RefreshToken)
+		// P3 修复 (P3-15): 原实现忽略 RevokeRefreshToken 错误，无论撤销是否成功都返回成功
+		// 现改为检查错误并记录日志，便于审计；token 通常有自然过期时间，不阻断登出流程
+		if err := h.authService.RevokeRefreshToken(req.RefreshToken); err != nil {
+			log.Printf("revoke refresh token failed during logout: %v", err)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }

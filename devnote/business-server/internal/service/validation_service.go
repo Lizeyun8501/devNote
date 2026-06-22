@@ -398,21 +398,23 @@ func (s *ValidationService) ValidateKnowledgeRelation(userID, relID string) (*mo
 // ----------------------------------------------------------------
 
 // CreateRule inserts a new validation rule.
+// P2 修复 (P2-5): 写入 user_id 实现数据隔离，原实现忽略 userID 导致所有用户共享规则
 func (s *ValidationService) CreateRule(userID string, rule *model.ValidationRule) (*model.ValidationRule, error) {
 	rule.ID = uuid.New().String()
 	_, err := s.db.Exec(`
-		INSERT INTO validation_rule (id, name, description, category, rule_type, pattern, severity, is_enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	`, rule.ID, rule.Name, rule.Description, rule.Category, rule.RuleType, rule.Pattern, rule.Severity, boolToInt(rule.IsEnabled))
+		INSERT INTO validation_rule (id, user_id, name, description, category, rule_type, pattern, severity, is_enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, rule.ID, userID, rule.Name, rule.Description, rule.Category, rule.RuleType, rule.Pattern, rule.Severity, boolToInt(rule.IsEnabled))
 	if err != nil {
 		return nil, fmt.Errorf("insert validation rule: %w", err)
 	}
 	return rule, nil
 }
 
-// ListRules returns all validation rules.
+// ListRules returns all validation rules owned by the given user.
+// P2 修复 (P2-5): 添加 WHERE user_id=? 过滤，仅返回该用户拥有的规则
 func (s *ValidationService) ListRules(userID string) ([]model.ValidationRule, error) {
-	rows, err := s.db.Query(`SELECT id, name, description, category, rule_type, pattern, severity, is_enabled, created_at, updated_at FROM validation_rule ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, description, category, rule_type, pattern, severity, is_enabled, created_at, updated_at FROM validation_rule WHERE user_id=? ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list rules: %w", err)
 	}
@@ -432,21 +434,33 @@ func (s *ValidationService) ListRules(userID string) ([]model.ValidationRule, er
 }
 
 // UpdateRule modifies an existing validation rule.
+// P2 修复 (P2-5): WHERE 子句添加 user_id=? 过滤，防止用户篡改他人规则
 func (s *ValidationService) UpdateRule(userID string, rule *model.ValidationRule) (*model.ValidationRule, error) {
-	_, err := s.db.Exec(`
+	res, err := s.db.Exec(`
 		UPDATE validation_rule SET name=?, description=?, category=?, rule_type=?, pattern=?, severity=?, is_enabled=?, updated_at=CURRENT_TIMESTAMP
-		WHERE id=?
-	`, rule.Name, rule.Description, rule.Category, rule.RuleType, rule.Pattern, rule.Severity, boolToInt(rule.IsEnabled), rule.ID)
+		WHERE id=? AND user_id=?
+	`, rule.Name, rule.Description, rule.Category, rule.RuleType, rule.Pattern, rule.Severity, boolToInt(rule.IsEnabled), rule.ID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("update rule: %w", err)
+	}
+	// P2 修复 (P2-5): 检查影响行数，0 行表示规则不存在或不属于该用户
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return nil, fmt.Errorf("validation rule not found or not owned by user")
 	}
 	return rule, nil
 }
 
 // DeleteRule removes a validation rule.
+// P2 修复 (P2-5): WHERE 子句添加 user_id=? 过滤，防止用户删除他人规则
 func (s *ValidationService) DeleteRule(userID, id string) error {
-	_, err := s.db.Exec(`DELETE FROM validation_rule WHERE id=?`, id)
-	return err
+	res, err := s.db.Exec(`DELETE FROM validation_rule WHERE id=? AND user_id=?`, id, userID)
+	if err != nil {
+		return err
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return fmt.Errorf("validation rule not found or not owned by user")
+	}
+	return nil
 }
 
 // ----------------------------------------------------------------
@@ -454,21 +468,23 @@ func (s *ValidationService) DeleteRule(userID, id string) error {
 // ----------------------------------------------------------------
 
 // CreateBusinessRule inserts a new business rule.
+// P2 修复 (P2-5): 写入 user_id 实现数据隔离
 func (s *ValidationService) CreateBusinessRule(userID string, rule *model.BusinessRule) (*model.BusinessRule, error) {
 	rule.ID = uuid.New().String()
 	_, err := s.db.Exec(`
-		INSERT INTO business_rule (id, name, expression, action, priority, is_enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	`, rule.ID, rule.Name, rule.Expression, rule.Action, rule.Priority, boolToInt(rule.IsEnabled))
+		INSERT INTO business_rule (id, user_id, name, expression, action, priority, is_enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, rule.ID, userID, rule.Name, rule.Expression, rule.Action, rule.Priority, boolToInt(rule.IsEnabled))
 	if err != nil {
 		return nil, fmt.Errorf("insert business rule: %w", err)
 	}
 	return rule, nil
 }
 
-// ListBusinessRules returns all business rules.
+// ListBusinessRules returns all business rules owned by the given user.
+// P2 修复 (P2-5): 添加 WHERE user_id=? 过滤
 func (s *ValidationService) ListBusinessRules(userID string) ([]model.BusinessRule, error) {
-	rows, err := s.db.Query(`SELECT id, name, expression, action, priority, is_enabled, created_at, updated_at FROM business_rule ORDER BY priority DESC`)
+	rows, err := s.db.Query(`SELECT id, name, expression, action, priority, is_enabled, created_at, updated_at FROM business_rule WHERE user_id=? ORDER BY priority DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list business rules: %w", err)
 	}
@@ -488,19 +504,30 @@ func (s *ValidationService) ListBusinessRules(userID string) ([]model.BusinessRu
 }
 
 // UpdateBusinessRule modifies an existing business rule.
+// P2 修复 (P2-5): WHERE 子句添加 user_id=? 过滤
 func (s *ValidationService) UpdateBusinessRule(userID string, rule *model.BusinessRule) (*model.BusinessRule, error) {
-	_, err := s.db.Exec(`
+	res, err := s.db.Exec(`
 		UPDATE business_rule SET name=?, expression=?, action=?, priority=?, is_enabled=?, updated_at=CURRENT_TIMESTAMP
-		WHERE id=?
-	`, rule.Name, rule.Expression, rule.Action, rule.Priority, boolToInt(rule.IsEnabled), rule.ID)
+		WHERE id=? AND user_id=?
+	`, rule.Name, rule.Expression, rule.Action, rule.Priority, boolToInt(rule.IsEnabled), rule.ID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("update business rule: %w", err)
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return nil, fmt.Errorf("business rule not found or not owned by user")
 	}
 	return rule, nil
 }
 
 // DeleteBusinessRule removes a business rule.
+// P2 修复 (P2-5): WHERE 子句添加 user_id=? 过滤
 func (s *ValidationService) DeleteBusinessRule(userID, id string) error {
-	_, err := s.db.Exec(`DELETE FROM business_rule WHERE id=?`, id)
-	return err
+	res, err := s.db.Exec(`DELETE FROM business_rule WHERE id=? AND user_id=?`, id, userID)
+	if err != nil {
+		return err
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return fmt.Errorf("business rule not found or not owned by user")
+	}
+	return nil
 }

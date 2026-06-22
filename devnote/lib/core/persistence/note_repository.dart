@@ -3,12 +3,11 @@
 // 来源: https://github.com/AppFlowy-IO/AppFlowy
 // 借鉴内容: Repository 模式通过 FFI 桥接调 Rust 持久化层
 
-import 'dart:developer' as developer;
-
 import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/persistence_dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 
@@ -57,7 +56,7 @@ class SqliteNoteRepository implements NoteRepository {
           conflictAlgorithm: ConflictAlgorithm.replace);
     } catch (e) {
       // 同步失败不影响主流程（Rust DB 已是权威源）
-      developer.log('Failed to sync note to Dart sqflite: $e', level: 900);
+      AppLogger.w('NoteRepository', 'Failed to sync note to Dart sqflite', error: e);
     }
   }
 
@@ -70,7 +69,7 @@ class SqliteNoteRepository implements NoteRepository {
       await _syncToDartSqflite(saved);
       return saved;
     }
-    developer.log('FFI not available, falling back to sqflite for createNote', level: 900);
+    AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for createNote');
     final db = await _dbHelper.database;
     await db.insert('notes', note.toSqfliteJson());
     return note;
@@ -90,7 +89,7 @@ class SqliteNoteRepository implements NoteRepository {
       await _syncToDartSqflite(note);
       return note;
     }
-    developer.log('FFI not available, falling back to sqflite for getNote', level: 900);
+    AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for getNote');
     final db = await _dbHelper.database;
     final results = await db.query(
       'notes',
@@ -110,7 +109,7 @@ class SqliteNoteRepository implements NoteRepository {
       await _syncToDartSqflite(saved);
       return saved;
     }
-    developer.log('FFI not available, falling back to sqflite for updateNote', level: 900);
+    AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for updateNote');
     final db = await _dbHelper.database;
     await db.update(
       'notes',
@@ -137,11 +136,11 @@ class SqliteNoteRepository implements NoteRepository {
         final db = await _dbHelper.database;
         await db.delete('notes', where: 'id = ?', whereArgs: [id]);
       } catch (e) {
-        developer.log('Failed to sync note deletion to Dart sqflite: $e', level: 900);
+        AppLogger.w('NoteRepository', 'Failed to sync note deletion to Dart sqflite', error: e);
       }
       return;
     }
-    developer.log('FFI not available, falling back to sqflite for deleteNote', level: 900);
+    AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for deleteNote');
     final db = await _dbHelper.database;
     await db.delete('notes', where: 'id = ?', whereArgs: [id]);
   }
@@ -152,7 +151,7 @@ class SqliteNoteRepository implements NoteRepository {
       final items = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
       return items.map((json) => NoteModel.fromJson(json)).toList();
     }
-    developer.log('FFI not available, falling back to sqflite for listNotes', level: 900);
+    AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for listNotes');
     final db = await _dbHelper.database;
     final results = await db.query(
       'notes',
@@ -175,7 +174,7 @@ class SqliteNoteRepository implements NoteRepository {
       final paged = items.skip(offset).take(limit).toList();
       return paged.map((json) => NoteModel.fromJson(json)).toList();
     }
-    developer.log('FFI not available, falling back to sqflite for listNotesPaged', level: 900);
+    AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for listNotesPaged');
     final db = await _dbHelper.database;
     final results = await db.query(
       'notes',
@@ -197,7 +196,7 @@ class SqliteNoteRepository implements NoteRepository {
       final ftsResults = await _dbHelper.searchNotesFTS(query);
       return ftsResults.map((json) => NoteModel.fromJson(json)).toList();
     } catch (e) {
-      developer.log('FTS5 search failed, falling back to in-memory filter: $e', level: 900);
+      AppLogger.w('NoteRepository', 'FTS5 search failed, falling back to in-memory filter', error: e);
       // 回退：全量加载后内存过滤
       final all = await db.query('notes', orderBy: 'updated_at DESC');
       final lowerQuery = query.toLowerCase();

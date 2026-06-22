@@ -21,7 +21,10 @@ import 'dart:io';
 import 'package:ffi/ffi.dart' hide Utf16Pointer;
 
 import 'ffi_response.dart';
+import 'mixins/canvas_mixin.dart';
+import 'mixins/flashcard_mixin.dart';
 import 'mixins/git_mixin.dart';
+import 'mixins/graph_mixin.dart';
 import 'mixins/knowledge_mixin.dart';
 import 'mixins/p2p_mixin.dart';
 import 'mixins/vault_mixin.dart';
@@ -132,13 +135,16 @@ class FfiException implements Exception {
 // FFIBridge —— Flutter 与 Rust 核心通信桥接
 // ============================================================
 
-// P1 修复 (P1-2): 应用领域 Mixin 拆分 God Class
+// P1 修复 (P1-2) + P2 修复 (P2-4): 应用领域 Mixin 拆分 God Class
 // - VaultMixin: 纯 Dart 加密实现，无 C ABI 依赖
 // - GitMixin: 全 stub，Rust 端无 handler
 // - P2PMixin: 全 stub，P2P 在 Dart 端独立实现
 // - KnowledgeMixin: 全 stub，KnowledgeService 走 sqflite 兜底
+// - CanvasMixin: 6 个 FFI + 10 个 stub
+// - GraphMixin: 2 个 FFI + 7 个 stub
+// - FlashcardMixin: 3 个 FFI + 7 个 stub
 // 对外 API 完全不变，所有调用方零改动。
-class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin {
+class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin, GraphMixin, FlashcardMixin {
   FFIBridge();
 
   bool _isAvailable = false;
@@ -282,6 +288,15 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin {
       throw StateError('FFI bridge not available. Call init() first.');
     }
   }
+
+  // P2 修复 (P2-4): CanvasMixin/GraphMixin/FlashcardMixin 的抽象方法实现
+  // 委托给现有的 _checkAvailable 和 _dispatch，保持单一 FDI 入口
+  @override
+  void ffiCheckAvailable() => _checkAvailable();
+
+  @override
+  dynamic ffiDispatch(String event, [Map<String, dynamic>? payload]) =>
+      _dispatch(event, payload);
 
   // ============================================================
   // 系统 API
@@ -523,67 +538,8 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin {
   }
 
   // ============================================================
-  // Canvas API
+  // Canvas API —— 已迁移到 CanvasMixin (P2-4)
   // ============================================================
-
-  Future<void> canvasAddNode({required String canvasId, required String nodeJson}) async {
-    _checkAvailable();
-    _dispatch('CanvasEvent.AddNode', {
-      'canvas_id': canvasId,
-      'node': jsonDecode(nodeJson),
-    });
-  }
-
-  Future<void> canvasRemoveNode({required String canvasId, required String nodeId}) async {
-    _checkAvailable();
-    _dispatch('CanvasEvent.RemoveNode', {
-      'canvas_id': canvasId,
-      'node_id': nodeId,
-    });
-  }
-
-  Future<void> canvasAutoLayout({required String canvasId, required String layoutType}) async {
-    _checkAvailable();
-    _dispatch('CanvasEvent.AutoLayout', {
-      'canvas_id': canvasId,
-      'layout_type': layoutType,
-    });
-  }
-
-  Future<void> canvasAddEdge({required String canvasId, required String edgeJson}) async {
-    _checkAvailable();
-    _dispatch('CanvasEvent.AddEdge', {
-      'canvas_id': canvasId,
-      'edge': jsonDecode(edgeJson),
-    });
-  }
-
-  Future<void> canvasSaveCanvas({required String canvasId, required String path}) async {
-    _checkAvailable();
-    _dispatch('CanvasEvent.SaveJson', {
-      'canvas_id': canvasId,
-      'path': path,
-    });
-  }
-
-  Future<String> canvasLoadCanvas({required String path}) async {
-    _checkAvailable();
-    final result = _dispatch('CanvasEvent.LoadJson', {'path': path});
-    return jsonEncode(result);
-  }
-
-  // 以下 Canvas 方法无对应 C ABI handler
-  // P0 修复: 原 throw UnimplementedError 会导致调用方崩溃，改为返回降级结果
-  // 调用方应根据返回值判断是否成功，而非依赖 try-catch
-  Future<String> canvasCreateCanvas() async => '{}';
-  Future<Map<String, dynamic>> canvasGetCanvas({required String canvasId}) async => {};
-  Future<void> canvasMoveNode({required String canvasId, required String nodeId, required double x, required double y}) async {}
-  Future<void> canvasResizeNode({required String canvasId, required String nodeId, required double width, required double height}) async {}
-  Future<void> canvasRemoveEdge({required String canvasId, required String edgeId}) async {}
-  Future<void> canvasStartCollaboration({required String canvasId, required String sessionId}) async {}
-  Future<Map<String, dynamic>> canvasJoinCollaboration({required String sessionId}) async => {};
-  Future<void> canvasBroadcastChange({required String changeJson}) async {}
-  Future<void> canvasEndCollaboration({required String sessionId}) async {}
 
   // ============================================================
   // 数据库 API
@@ -610,66 +566,12 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin {
   }
 
   // ============================================================
-  // 图谱 API
+  // 图谱 API —— 已迁移到 GraphMixin (P2-4)
   // ============================================================
 
-  Future<String> calculateCentrality() async {
-    _checkAvailable();
-    return jsonEncode(_dispatch('GraphEvent.CalculateCentrality'));
-  }
-
-  Future<String> detectClusters() async {
-    _checkAvailable();
-    return jsonEncode(_dispatch('GraphEvent.DetectClusters'));
-  }
-
-  // 以下图谱方法无对应 C ABI handler
-  // P0 修复: 返回空 JSON 而非抛异常，调用方应处理空结果
-  Future<String> getGraph() async => '{"nodes":[],"edges":[]}';
-  Future<String> getNodeDetails({required String nodeId}) async => '{}';
-  Future<String> getRelatedNodes({required String nodeId}) async => '{"nodes":[]}';
-  Future<String> searchNodes({required String query}) async => '{"nodes":[]}';
-  Future<String> getGraphStats() async => '{"node_count":0,"edge_count":0}';
-  Future<String> getShortestPath({required String fromId, required String toId}) async => '{"path":[]}';
-  Future<String> getNeighbors({required String nodeId, required int depth}) async => '{"nodes":[]}';
-
   // ============================================================
-  // 闪卡 API
+  // 闪卡 API —— 已迁移到 FlashcardMixin (P2-4)
   // ============================================================
-
-  Future<String> createDeck({required String name, required String description}) async {
-    _checkAvailable();
-    return jsonEncode(_dispatch('FlashcardEvent.CreateDeck', {
-      'name': name,
-      'description': description,
-    }));
-  }
-
-  Future<String> reviewFlashcard({required String flashcardId, required int quality}) async {
-    _checkAvailable();
-    return jsonEncode(_dispatch('FlashcardEvent.ReviewCard', {
-      'flashcard_id': flashcardId,
-      'quality': quality,
-    }));
-  }
-
-  Future<String> getDueCards({required String deckId, int? limit}) async {
-    _checkAvailable();
-    return jsonEncode(_dispatch('FlashcardEvent.GetDueCards', {
-      'deck_id': deckId,
-      'limit': limit,
-    }));
-  }
-
-  // 以下闪卡方法无对应 C ABI handler
-  // P0 修复: 返回空结果而非抛异常，调用方应使用 Dart 端 sqflite 兜底
-  Future<void> deleteDeck({required String deckId}) async {}
-  Future<List<Map<String, dynamic>>> listDecks() async => [];
-  Future<Map<String, dynamic>> createFlashcard({required String deckId, required String cardType, required String front, required String back, String? noteId}) async => {};
-  Future<Map<String, dynamic>> updateFlashcard({required String id, required String front, required String back}) async => {};
-  Future<void> deleteFlashcard({required String flashcardId}) async {}
-  Future<Map<String, dynamic>> getReviewStats({required String deckId}) async => {'total_cards': 0, 'due_cards': 0, 'new_cards': 0};
-  Future<List<Map<String, dynamic>>> batchGenerateFromNote({required String noteId}) async => [];
 
   // ============================================================
   // CRDT API

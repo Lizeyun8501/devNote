@@ -2,7 +2,6 @@ package service
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -275,15 +274,6 @@ func (s *MetadataService) Filter(userID string, filterMap map[string]string, pag
 		PageSize:   pageSize,
 		TotalPages: totalPages,
 	}, nil
-}
-
-// parseCustomFields unmarshals a JSON custom_fields string into a Go map.
-func parseCustomFields(raw string) map[string]interface{} {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return map[string]interface{}{}
-	}
-	return m
 }
 
 func boolToInt(b bool) int {

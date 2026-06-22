@@ -111,8 +111,11 @@ func (s *SQLiteStore) migrate() error {
 		updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
+	-- P2 修复 (P2-5): validation_rule 和 business_rule 添加 user_id 列实现数据隔离
+	-- 原表无 user_id，所有用户共享规则，存在多租户数据泄漏风险
 	CREATE TABLE IF NOT EXISTS validation_rule (
 		id          TEXT PRIMARY KEY,
+		user_id     TEXT NOT NULL DEFAULT '',
 		name        TEXT NOT NULL DEFAULT '',
 		description TEXT NOT NULL DEFAULT '',
 		category    TEXT NOT NULL DEFAULT '',
@@ -126,6 +129,7 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS business_rule (
 		id         TEXT PRIMARY KEY,
+		user_id    TEXT NOT NULL DEFAULT '',
 		name       TEXT NOT NULL DEFAULT '',
 		expression TEXT NOT NULL DEFAULT '',
 		action     TEXT NOT NULL DEFAULT '',
@@ -147,6 +151,9 @@ func (s *SQLiteStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_relation(source_note_id);
 	CREATE INDEX IF NOT EXISTS idx_knowledge_target ON knowledge_relation(target_note_id);
 	CREATE INDEX IF NOT EXISTS idx_knowledge_relation_user_id ON knowledge_relation(user_id);
+	-- P2 修复 (P2-5): 为规则表添加 user_id 索引，加速按用户过滤查询
+	CREATE INDEX IF NOT EXISTS idx_validation_rule_user_id ON validation_rule(user_id);
+	CREATE INDEX IF NOT EXISTS idx_business_rule_user_id ON business_rule(user_id);
 	`
 
 	_, err := s.DB.Exec(schema)

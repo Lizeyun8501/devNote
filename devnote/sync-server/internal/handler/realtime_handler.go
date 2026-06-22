@@ -19,7 +19,6 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 )
 
 // 连接与心跳相关常量
@@ -92,6 +92,8 @@ func SetupCheckOrigin(origins []string) {
 type RealtimeHandler struct {
 	authService *service.AuthService
 	hub         *CollaborationHub
+	// P2 修复 (P2-9): 注入 zap 结构化日志替代 log.Printf，便于统一收集和关联 Request ID
+	logger *zap.Logger
 }
 
 // CollaborationHub 管理所有活跃的协作连接（按 noteID 分房间）
@@ -119,6 +121,8 @@ type Client struct {
 	room     *CollaborationRoom
 	presence []byte // 最近一次 presence state 的原始 JSON
 	done     chan struct{}
+	// P2 修复 (P2-9): 持有 logger 引用，供 readPump/writePump 记录结构化日志
+	logger *zap.Logger
 }
 
 // WSMessage WebSocket 消息协议
@@ -147,12 +151,17 @@ type WSMessage struct {
 }
 
 // NewRealtimeHandler 构造 RealtimeHandler
-func NewRealtimeHandler(authService *service.AuthService) *RealtimeHandler {
+// P2 修复 (P2-9): 接收 zap.Logger 注入，替代包级 log.Printf
+func NewRealtimeHandler(authService *service.AuthService, logger *zap.Logger) *RealtimeHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &RealtimeHandler{
 		authService: authService,
 		hub: &CollaborationHub{
 			rooms: make(map[string]*CollaborationRoom),
 		},
+		logger: logger,
 	}
 }
 
@@ -182,7 +191,7 @@ func (h *RealtimeHandler) Connect(c *gin.Context) {
 	// 2. 升级 HTTP 为 WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[realtime] websocket upgrade failed: %v", err)
+		h.logger.Warn("websocket upgrade failed", zap.Error(err))
 		return
 	}
 
@@ -190,21 +199,21 @@ func (h *RealtimeHandler) Connect(c *gin.Context) {
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		log.Printf("[realtime] failed to read join message: %v", err)
+		h.logger.Warn("failed to read join message", zap.Error(err))
 		conn.Close()
 		return
 	}
 
 	var joinMsg WSMessage
 	if err := json.Unmarshal(raw, &joinMsg); err != nil || joinMsg.Type != msgJoin {
-		log.Printf("[realtime] first message is not a valid join (type=%q, err=%v)", joinMsg.Type, err)
+		h.logger.Warn("first message is not a valid join", zap.String("type", joinMsg.Type), zap.Error(err))
 		conn.Close()
 		return
 	}
 
 	noteID := joinMsg.NoteID
 	if noteID == "" {
-		log.Printf("[realtime] join message missing noteId")
+		h.logger.Warn("join message missing noteId")
 		conn.Close()
 		return
 	}
@@ -231,10 +240,14 @@ func (h *RealtimeHandler) Connect(c *gin.Context) {
 		send:     make(chan []byte, sendBufferSize),
 		room:     room,
 		done:     make(chan struct{}),
+		logger:   h.logger,
 	}
 	room.addClient(client)
 
-	log.Printf("[realtime] client joined: user=%s device=%s note=%s", userID, deviceID, noteID)
+	h.logger.Info("client joined",
+		zap.String("user", userID),
+		zap.String("device", deviceID),
+		zap.String("note", noteID))
 
 	// 5. 发送 join ack（包含当前在线协作者列表）
 	h.sendJoinAck(client)
@@ -290,7 +303,10 @@ func (c *Client) readPump(hub *CollaborationHub) {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("[realtime] read error: user=%s device=%s: %v", c.userID, c.deviceID, err)
+				c.logger.Warn("read error",
+					zap.String("user", c.userID),
+					zap.String("device", c.deviceID),
+					zap.Error(err))
 			}
 			return
 		}
@@ -298,7 +314,7 @@ func (c *Client) readPump(hub *CollaborationHub) {
 		// 解析消息类型
 		var msg WSMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			log.Printf("[realtime] invalid json from device=%s: %v", c.deviceID, err)
+			c.logger.Warn("invalid json from client", zap.String("device", c.deviceID), zap.Error(err))
 			continue
 		}
 
@@ -317,7 +333,7 @@ func (c *Client) readPump(hub *CollaborationHub) {
 		case msgJoin:
 			// 后续 join 消息忽略（首条 join 已在 Connect 中处理）
 		default:
-			log.Printf("[realtime] unknown message type: %s", msg.Type)
+			c.logger.Warn("unknown message type", zap.String("type", msg.Type))
 		}
 	}
 }
@@ -422,7 +438,10 @@ func (c *Client) cleanup(hub *CollaborationHub) {
 	close(c.done)
 	// 关闭 WebSocket 连接
 	c.conn.Close()
-	log.Printf("[realtime] client left: user=%s device=%s note=%s", c.userID, c.deviceID, c.noteID)
+	c.logger.Info("client left",
+		zap.String("user", c.userID),
+		zap.String("device", c.deviceID),
+		zap.String("note", c.noteID))
 }
 
 // --- CollaborationRoom 方法 ---
@@ -461,7 +480,7 @@ func (r *CollaborationRoom) broadcast(message []byte, sender *Client) {
 		case c.send <- message:
 		default:
 			// 发送缓冲已满，关闭慢消费者
-			log.Printf("[realtime] send buffer full, closing client: device=%s", c.deviceID)
+			c.logger.Warn("send buffer full, closing client", zap.String("device", c.deviceID))
 			go c.conn.Close()
 		}
 	}

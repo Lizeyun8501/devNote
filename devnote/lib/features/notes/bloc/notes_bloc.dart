@@ -229,7 +229,9 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
             searchQuery: null,
             notes: _sortNotes(allNotes, currentState.sortBy),
           ));
-        } catch (_) {
+        } catch (e) {
+          // P2 修复 (P2-12): 记录查询失败日志，原 catch(_) 静默吞异常
+          AppLogger.w('NotesBloc', 'search by folder failed, clearing search', error: e);
           emit(currentState.copyWith(searchQuery: null));
         }
         return;
@@ -281,7 +283,9 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
           notes: _sortNotes(allNotes, currentState.sortBy),
           filterTagId: null,
         ));
-      } catch (_) {
+      } catch (e) {
+        // P2 修复 (P2-12): 记录查询失败日志，原 catch(_) 静默吞异常
+        AppLogger.w('NotesBloc', 'filter by tag failed, clearing filter', error: e);
         emit(currentState.copyWith(filterTagId: null));
       }
       return;
@@ -296,8 +300,10 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
         notes: filteredNotes,
         filterTagId: event.tagId,
       ));
-    } catch (_) {
+    } catch (e) {
+      // P2 修复 (P2-12): 记录查询失败日志，原 catch(_) 静默吞异常
       // 查询失败时仅更新 filterTagId，不改变 notes 列表
+      AppLogger.w('NotesBloc', 'filter by tagId failed, keeping notes list', error: e);
       emit(currentState.copyWith(filterTagId: event.tagId));
     }
   }

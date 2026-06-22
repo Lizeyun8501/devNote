@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -22,7 +21,9 @@ type EmailService struct {
 }
 
 // NewEmailService 创建邮件转笔记服务，并自动迁移别名表
-func NewEmailService(db *gorm.DB, syncService *SyncService, domain string) *EmailService {
+// P3 修复 (P3-13): 原实现 AutoMigrate 失败仅 log.Printf，服务继续启动但表结构可能不存在，
+// 后续邮件转笔记操作会失败。现改为返回 error，启动时若迁移失败则 fatal 退出
+func NewEmailService(db *gorm.DB, syncService *SyncService, domain string) (*EmailService, error) {
 	s := &EmailService{
 		db:          db,
 		syncService: syncService,
@@ -30,9 +31,9 @@ func NewEmailService(db *gorm.DB, syncService *SyncService, domain string) *Emai
 	}
 	// 自动迁移邮件别名表
 	if err := db.AutoMigrate(&UserEmailAlias{}); err != nil {
-		log.Printf("failed to migrate email alias table: %v", err)
+		return nil, fmt.Errorf("migrate email alias table: %w", err)
 	}
-	return s
+	return s, nil
 }
 
 // UserEmailAlias 用户邮件别名
