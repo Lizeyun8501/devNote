@@ -107,7 +107,7 @@ func (h *ValidationHandler) CreateRule(c *gin.Context) {
 	result, err := h.svc.CreateRule(userID, &req)
 	if err != nil {
 		h.logger.Error("create validation rule failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusCreated, model.SuccessResponse{Data: result})
@@ -123,7 +123,7 @@ func (h *ValidationHandler) ListRules(c *gin.Context) {
 	rules, err := h.svc.ListRules(userID)
 	if err != nil {
 		h.logger.Error("list validation rules failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: rules})
@@ -146,7 +146,7 @@ func (h *ValidationHandler) UpdateRule(c *gin.Context) {
 	result, err := h.svc.UpdateRule(userID, &req)
 	if err != nil {
 		h.logger.Error("update validation rule failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -162,7 +162,7 @@ func (h *ValidationHandler) DeleteRule(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.svc.DeleteRule(userID, id); err != nil {
 		h.logger.Error("delete validation rule failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": id}})
@@ -187,7 +187,7 @@ func (h *ValidationHandler) CreateBusinessRule(c *gin.Context) {
 	result, err := h.svc.CreateBusinessRule(userID, &req)
 	if err != nil {
 		h.logger.Error("create business rule failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusCreated, model.SuccessResponse{Data: result})
@@ -203,7 +203,7 @@ func (h *ValidationHandler) ListBusinessRules(c *gin.Context) {
 	rules, err := h.svc.ListBusinessRules(userID)
 	if err != nil {
 		h.logger.Error("list business rules failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: rules})
@@ -226,7 +226,7 @@ func (h *ValidationHandler) UpdateBusinessRule(c *gin.Context) {
 	result, err := h.svc.UpdateBusinessRule(userID, &req)
 	if err != nil {
 		h.logger.Error("update business rule failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -242,7 +242,7 @@ func (h *ValidationHandler) DeleteBusinessRule(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.svc.DeleteBusinessRule(userID, id); err != nil {
 		h.logger.Error("delete business rule failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": id}})

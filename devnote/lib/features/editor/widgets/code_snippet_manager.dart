@@ -493,31 +493,37 @@ class _CodeSnippetManagerState extends State<CodeSnippetManager> {
           if (_service.allTags.isNotEmpty)
             SizedBox(
               height: 36,
-              child: ListView(
+              child: ListView.builder(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                children: [
-                  FilterChip(
-                    label: const Text('全部'),
-                    selected: _filterTag == null,
-                    onSelected: (_) {
-                      setState(() => _filterTag = null);
-                      _applyFilters();
-                    },
-                  ),
-                  const SizedBox(width: 4),
-                  ..._service.allTags.map((tag) => Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: FilterChip(
-                          label: Text(tag),
-                          selected: _filterTag == tag,
-                          onSelected: (_) {
-                            setState(() => _filterTag = _filterTag == tag ? null : tag);
-                            _applyFilters();
-                          },
-                        ),
-                      )),
-                ],
+                itemCount: _service.allTags.length + 2,
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return FilterChip(
+                      label: const Text('全部'),
+                      selected: _filterTag == null,
+                      onSelected: (_) {
+                        setState(() => _filterTag = null);
+                        _applyFilters();
+                      },
+                    );
+                  }
+                  if (index == 1) {
+                    return const SizedBox(width: 4);
+                  }
+                  final tag = _service.allTags[index - 2];
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: FilterChip(
+                      label: Text(tag),
+                      selected: _filterTag == tag,
+                      onSelected: (_) {
+                        setState(() => _filterTag = _filterTag == tag ? null : tag);
+                        _applyFilters();
+                      },
+                    ),
+                  );
+                },
               ),
             ),
           // 语言过滤器

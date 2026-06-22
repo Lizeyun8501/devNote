@@ -93,7 +93,11 @@ func (s *FolderService) Update(userID string, folder *model.FolderMeta) (*model.
 	if err != nil {
 		return nil, fmt.Errorf("update folder: %w", err)
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return nil, fmt.Errorf("folder not found: %s", folder.ID)
 	}
 	folder.UserID = userID

@@ -256,28 +256,32 @@ class _SearchViewState extends State<_SearchView> {
             );
           }
           if (state.results.isNotEmpty) {
-            return ListView(
+            return ListView.builder(
               padding: const EdgeInsets.all(16),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    '找到 ${state.results.length} 个结果',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                  ),
-                ),
-                ...state.results.map((result) => SearchResultCard(
-                      result: result,
-                      query: state.query,
-                      onTap: () {
-                        // 修复: 实际路由为 /notes/:id（参见 app_router.dart），
-                        // 之前写成 /editor/:id 会导致点击搜索结果无法打开编辑器。
-                        context.push('/notes/${result.noteId}');
-                      },
-                    )),
-              ],
+              itemCount: state.results.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      '找到 ${state.results.length} 个结果',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  );
+                }
+                final result = state.results[index - 1];
+                return SearchResultCard(
+                  result: result,
+                  query: state.query,
+                  onTap: () {
+                    // 修复: 实际路由为 /notes/:id（参见 app_router.dart），
+                    // 之前写成 /editor/:id 会导致点击搜索结果无法打开编辑器。
+                    context.push('/notes/${result.noteId}');
+                  },
+                );
+              },
             );
           }
           return _buildSearchHistory(state.searchHistory);
@@ -312,41 +316,47 @@ class _SearchViewState extends State<_SearchView> {
   Widget _buildSearchHistory(List<String> history) {
     if (history.isEmpty) return _buildInitialView();
 
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              '搜索历史',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            TextButton(
-              onPressed: () {
-                getIt<SearchService>().clearSearchHistory();
-                context.read<SearchBloc>().add(const SearchHistoryRequested());
-              },
-              child: Semantics(
-                label: '清除搜索历史',
-                child: const Text('清除'),
+      itemCount: history.length + 2,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '搜索历史',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        ...history.map((query) => Semantics(
-              label: '搜索历史: $query',
-              child: ListTile(
-                leading: const Icon(Icons.history, size: 20),
-                title: Text(query),
-                dense: true,
-                onTap: () => _onHistoryItemTap(query),
+              TextButton(
+                onPressed: () {
+                  getIt<SearchService>().clearSearchHistory();
+                  context.read<SearchBloc>().add(const SearchHistoryRequested());
+                },
+                child: Semantics(
+                  label: '清除搜索历史',
+                  child: const Text('清除'),
+                ),
               ),
-            )),
-      ],
+            ],
+          );
+        }
+        if (index == 1) {
+          return const SizedBox(height: 8);
+        }
+        final query = history[index - 2];
+        return Semantics(
+          label: '搜索历史: $query',
+          child: ListTile(
+            leading: const Icon(Icons.history, size: 20),
+            title: Text(query),
+            dense: true,
+            onTap: () => _onHistoryItemTap(query),
+          ),
+        );
+      },
     );
   }
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net/http"
 
 	"github.com/devnote/sync-server/internal/config"
 	"github.com/minio/minio-go/v7"
@@ -16,8 +17,9 @@ import (
 var ErrS3NotConfigured = errors.New("S3 storage is not configured (S3_ENDPOINT is empty)")
 
 type S3Storage struct {
-	client *minio.Client
-	bucket string
+	client    *minio.Client
+	bucket    string
+	transport http.RoundTripper
 }
 
 func NewS3Storage(cfg *config.Config) (*S3Storage, error) {
@@ -25,9 +27,11 @@ func NewS3Storage(cfg *config.Config) (*S3Storage, error) {
 		return &S3Storage{bucket: cfg.S3Bucket}, nil
 	}
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	client, err := minio.New(cfg.S3Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.S3AccessKey, cfg.S3SecretKey, ""),
-		Secure: cfg.S3UseSSL,
+		Creds:     credentials.NewStaticV4(cfg.S3AccessKey, cfg.S3SecretKey, ""),
+		Secure:    cfg.S3UseSSL,
+		Transport: transport,
 	})
 	if err != nil {
 		return nil, err
@@ -45,7 +49,17 @@ func NewS3Storage(cfg *config.Config) (*S3Storage, error) {
 		log.Printf("created bucket: %s", cfg.S3Bucket)
 	}
 
-	return &S3Storage{client: client, bucket: cfg.S3Bucket}, nil
+	return &S3Storage{client: client, bucket: cfg.S3Bucket, transport: transport}, nil
+}
+
+// Close 释放底层 HTTP 连接池资源。
+func (s *S3Storage) Close() error {
+	if s.transport != nil {
+		if tr, ok := s.transport.(*http.Transport); ok {
+			tr.CloseIdleConnections()
+		}
+	}
+	return nil
 }
 
 // P3 修复 (P3-8): client 为 nil 时返回明确错误，让调用方决定降级策略

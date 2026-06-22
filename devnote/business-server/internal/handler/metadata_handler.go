@@ -38,7 +38,7 @@ func (h *MetadataHandler) Create(c *gin.Context) {
 	result, err := h.svc.Create(userID, &req)
 	if err != nil {
 		h.logger.Error("create metadata failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 
@@ -82,7 +82,7 @@ func (h *MetadataHandler) Update(c *gin.Context) {
 	result, err := h.svc.Update(userID, &req)
 	if err != nil {
 		h.logger.Error("update metadata failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -99,7 +99,7 @@ func (h *MetadataHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.svc.Delete(userID, id); err != nil {
 		h.logger.Error("delete metadata failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": id}})
@@ -120,7 +120,7 @@ func (h *MetadataHandler) List(c *gin.Context) {
 	result, err := h.svc.List(userID, page, pageSize, search)
 	if err != nil {
 		h.logger.Error("list metadata failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -146,7 +146,7 @@ func (h *MetadataHandler) Filter(c *gin.Context) {
 	result, err := h.svc.Filter(userID, filterMap, page, pageSize)
 	if err != nil {
 		h.logger.Error("filter metadata failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -171,7 +171,7 @@ func (h *MetadataHandler) BatchCreate(c *gin.Context) {
 	result, err := h.svc.BatchCreate(userID, req.Items)
 	if err != nil {
 		h.logger.Error("batch create metadata failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusCreated, model.SuccessResponse{Data: result})
@@ -195,7 +195,7 @@ func (h *MetadataHandler) BatchDelete(c *gin.Context) {
 
 	if err := h.svc.BatchDelete(userID, req.IDs); err != nil {
 		h.logger.Error("batch delete metadata failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": len(req.IDs)}})

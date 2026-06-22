@@ -1,19 +1,23 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type AuthHandler struct {
 	authService *service.AuthService
+	logger      *zap.Logger
 }
 
-func NewAuthHandler(authService *service.AuthService) *AuthHandler {
-	return &AuthHandler{authService: authService}
+func NewAuthHandler(authService *service.AuthService, logger *zap.Logger) *AuthHandler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &AuthHandler{authService: authService, logger: logger}
 }
 
 type RegisterRequest struct {
@@ -61,7 +65,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// Generate refresh token
 	refreshToken, err := h.authService.GenerateRefreshToken(user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		respondInternalError(c, h.logger, "failed to generate refresh token", err)
 		return
 	}
 
@@ -103,7 +107,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		// P3 修复 (P3-15): 原实现忽略 RevokeRefreshToken 错误，无论撤销是否成功都返回成功
 		// 现改为检查错误并记录日志，便于审计；token 通常有自然过期时间，不阻断登出流程
 		if err := h.authService.RevokeRefreshToken(req.RefreshToken); err != nil {
-			log.Printf("revoke refresh token failed during logout: %v", err)
+			h.logger.Error("revoke refresh token failed during logout", zap.Error(err))
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})

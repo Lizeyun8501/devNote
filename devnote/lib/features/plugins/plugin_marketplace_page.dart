@@ -64,10 +64,12 @@ class _PluginMarketplacePageState extends State<PluginMarketplacePage> {
   Widget _buildCategoryTabs() {
     return SizedBox(
       height: 48,
-      child: ListView(
+      child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        children: _categories.map((category) {
+        itemCount: _categories.length,
+        itemBuilder: (context, index) {
+          final category = _categories[index];
           final isSelected = category == _selectedCategory;
           return Padding(
             padding: const EdgeInsets.only(right: 8),
@@ -81,7 +83,7 @@ class _PluginMarketplacePageState extends State<PluginMarketplacePage> {
               },
             ),
           );
-        }).toList(),
+        },
       ),
     );
   }

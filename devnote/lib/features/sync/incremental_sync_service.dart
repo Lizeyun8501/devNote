@@ -23,6 +23,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/config/app_config.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
 import 'package:devnote/features/sync/rdiff_service.dart';
@@ -425,8 +426,9 @@ class IncrementalSyncService {
         if (signatures.isNotEmpty) {
           return _rdiff.calculateDelta(newData, signatures);
         }
-      } catch (_) {
+      } catch (e) {
         // 签名解码失败，降级为全量传输
+        AppLogger.w('IncrementalSyncService', 'Failed to decode remote signatures, falling back to full transfer', error: e);
       }
     }
 
@@ -500,7 +502,8 @@ class IncrementalSyncService {
         return _rdiff.decodeSignatures(response.bodyBytes);
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.w('IncrementalSyncService', 'Failed to fetch remote signatures', error: e);
       return null;
     }
   }
@@ -517,8 +520,9 @@ class IncrementalSyncService {
       final uri = Uri.parse('$serverUrl/api/v1/sync/signatures');
       final body = _rdiff.encodeSignatures(signatures);
       await http.put(uri, headers: headers, body: body);
-    } catch (_) {
+    } catch (e) {
       // 签名更新失败不影响同步正确性（下次降级为全量）
+      AppLogger.w('IncrementalSyncService', 'Failed to update remote signatures', error: e);
     }
   }
 
@@ -537,7 +541,8 @@ class IncrementalSyncService {
         return response.bodyBytes;
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.w('IncrementalSyncService', 'Failed to upload delta', error: e);
       return null;
     }
   }
@@ -563,7 +568,8 @@ class IncrementalSyncService {
       final response = await http.post(uri, headers: headers, body: data);
 
       return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.w('IncrementalSyncService', 'Failed to upload chunk (session=$sessionId, index=$chunkIndex)', error: e);
       return false;
     }
   }
@@ -579,7 +585,8 @@ class IncrementalSyncService {
       final response = await http.post(uri, headers: headers);
 
       return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.w('IncrementalSyncService', 'Failed to commit sync session (session=$sessionId)', error: e);
       return false;
     }
   }

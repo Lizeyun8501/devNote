@@ -444,7 +444,11 @@ func (s *ValidationService) UpdateRule(userID string, rule *model.ValidationRule
 		return nil, fmt.Errorf("update rule: %w", err)
 	}
 	// P2 修复 (P2-5): 检查影响行数，0 行表示规则不存在或不属于该用户
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return nil, fmt.Errorf("validation rule not found or not owned by user")
 	}
 	return rule, nil
@@ -457,7 +461,11 @@ func (s *ValidationService) DeleteRule(userID, id string) error {
 	if err != nil {
 		return err
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return fmt.Errorf("validation rule not found or not owned by user")
 	}
 	return nil
@@ -513,7 +521,11 @@ func (s *ValidationService) UpdateBusinessRule(userID string, rule *model.Busine
 	if err != nil {
 		return nil, fmt.Errorf("update business rule: %w", err)
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return nil, fmt.Errorf("business rule not found or not owned by user")
 	}
 	return rule, nil
@@ -526,7 +538,11 @@ func (s *ValidationService) DeleteBusinessRule(userID, id string) error {
 	if err != nil {
 		return err
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get rows affected: %w", err)
+	}
+	if rows == 0 {
 		return fmt.Errorf("business rule not found or not owned by user")
 	}
 	return nil

@@ -270,26 +270,30 @@ class _CalendarViewState extends State<CalendarView> {
     final titleField = _titleField;
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => ListView(
+      builder: (ctx) => ListView.builder(
         shrinkWrap: true,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ),
-          const Divider(),
-          ...rows.map((row) {
-            String title = '空行';
-            if (titleField != null) {
-              final cell = row.cells.where((c) => c.fieldId == titleField.id).firstOrNull;
-              title = cell?.value?.toString() ?? '空行';
-            }
-            return ListTile(title: Text(title));
-          }),
-        ],
+        itemCount: rows.length + 2,
+        itemBuilder: (ctx, index) {
+          if (index == 0) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            );
+          }
+          if (index == 1) {
+            return const Divider();
+          }
+          final row = rows[index - 2];
+          String title = '空行';
+          if (titleField != null) {
+            final cell = row.cells.where((c) => c.fieldId == titleField.id).firstOrNull;
+            title = cell?.value?.toString() ?? '空行';
+          }
+          return ListTile(title: Text(title));
+        },
       ),
     );
   }

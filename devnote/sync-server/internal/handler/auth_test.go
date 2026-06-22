@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -40,7 +41,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, *service.AuthService) {
 	}
 
 	authService := service.NewAuthService(db, cfg)
-	authHandler := NewAuthHandler(authService)
+	authHandler := NewAuthHandler(authService, zap.NewNop())
 
 	r := gin.New()
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))

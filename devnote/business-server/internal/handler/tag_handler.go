@@ -37,7 +37,7 @@ func (h *TagHandler) Create(c *gin.Context) {
 	result, err := h.svc.Create(userID, &req)
 	if err != nil {
 		h.logger.Error("create tag failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusCreated, model.SuccessResponse{Data: result})
@@ -79,7 +79,7 @@ func (h *TagHandler) Update(c *gin.Context) {
 	result, err := h.svc.Update(userID, &req)
 	if err != nil {
 		h.logger.Error("update tag failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -96,7 +96,7 @@ func (h *TagHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.svc.Delete(userID, id); err != nil {
 		h.logger.Error("delete tag failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"deleted": id}})
@@ -117,7 +117,7 @@ func (h *TagHandler) List(c *gin.Context) {
 	result, err := h.svc.List(userID, page, pageSize, search)
 	if err != nil {
 		h.logger.Error("list tags failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -135,7 +135,7 @@ func (h *TagHandler) GetChildren(c *gin.Context) {
 	children, err := h.svc.GetChildren(userID, id)
 	if err != nil {
 		h.logger.Error("get tag children failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: children})
@@ -153,7 +153,7 @@ func (h *TagHandler) GetHierarchy(c *gin.Context) {
 	hierarchy, err := h.svc.GetHierarchy(userID, id)
 	if err != nil {
 		h.logger.Error("get tag hierarchy failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: hierarchy})
@@ -176,7 +176,7 @@ func (h *TagHandler) LinkTag(c *gin.Context) {
 	result, err := h.svc.LinkTagToNote(userID, tagID, noteID)
 	if err != nil {
 		h.logger.Error("link tag to note failed", zap.String("tag_id", tagID), zap.String("note_id", noteID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -194,7 +194,7 @@ func (h *TagHandler) UnlinkTag(c *gin.Context) {
 	noteID := c.Param("noteId")
 	if err := h.svc.UnlinkTagFromNote(userID, tagID, noteID); err != nil {
 		h.logger.Error("unlink tag failed", zap.String("tag_id", tagID), zap.String("note_id", noteID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"unlinked": true}})
@@ -215,7 +215,7 @@ func (h *TagHandler) GetNotesByTag(c *gin.Context) {
 	result, err := h.svc.GetNotesByTag(userID, tagID, page, pageSize)
 	if err != nil {
 		h.logger.Error("get notes by tag failed", zap.String("tag_id", tagID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -233,7 +233,7 @@ func (h *TagHandler) GetTagsByNote(c *gin.Context) {
 	tags, err := h.svc.GetTagsByNote(userID, noteID)
 	if err != nil {
 		h.logger.Error("get tags by note failed", zap.String("note_id", noteID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: tags})
@@ -261,7 +261,7 @@ func (h *TagHandler) MergeTags(c *gin.Context) {
 	}
 	if err := h.svc.MergeTags(userID, req.SourceTagID, req.TargetTagID); err != nil {
 		h.logger.Error("merge tags failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: gin.H{"merged": true}})
@@ -287,7 +287,7 @@ func (h *TagHandler) SplitTag(c *gin.Context) {
 	result, err := h.svc.SplitTag(userID, req.SourceTagID, req.NewTagName, req.NoteIDs)
 	if err != nil {
 		h.logger.Error("split tag failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: result})
@@ -309,7 +309,7 @@ func (h *TagHandler) GetStats(c *gin.Context) {
 	stats, err := h.svc.GetStats(userID, id)
 	if err != nil {
 		h.logger.Error("get tag stats failed", zap.String("id", id), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: stats})
@@ -327,7 +327,7 @@ func (h *TagHandler) GetTopTags(c *gin.Context) {
 	tags, err := h.svc.GetTopTags(userID, limit)
 	if err != nil {
 		h.logger.Error("get top tags failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Code: 500, Message: err.Error()})
+		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}
 	c.JSON(http.StatusOK, model.SuccessResponse{Data: tags})

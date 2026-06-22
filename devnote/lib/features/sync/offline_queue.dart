@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/sync/bloc/sync_event.dart';
 
 class OfflineOperation {
@@ -44,11 +45,12 @@ class OfflineQueue {
     for (final op in operations) {
       try {
         await replayFn(op.event);
-      } catch (_) {
+      } catch (e) {
         // 重放失败时重新入队，但增加重试计数
         final retryCount = _pendingOperations
             .where((o) => o.event == op.event)
             .length;
+        AppLogger.w('OfflineQueue', 'Replay failed for ${op.event.runtimeType}, retryCount=$retryCount', error: e);
         if (retryCount < _maxRetries) {
           _pendingOperations.add(op);
         }

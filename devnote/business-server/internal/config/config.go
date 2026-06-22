@@ -42,8 +42,8 @@ func Load() *Config {
 		}
 		// P1 修复: 生成随机密钥替代固定默认值
 		jwtSecret = generateRandomSecret(32)
-		log.Println("WARNING: Generated random JWT_SECRET for development. "
-			+ "Set BUSINESS_JWT_SECRET env var for consistent sessions.")
+		log.Println("WARNING: Generated random JWT_SECRET for development. " +
+			"Set BUSINESS_JWT_SECRET env var for consistent sessions.")
 	}
 
 	// P1 修复: 校验密钥长度
