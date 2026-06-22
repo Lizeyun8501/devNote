@@ -22,8 +22,9 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
   NotesBloc(
     this._noteRepository,
     this._folderRepository,
-    this._blockCreationPort,
-  ) : super(const NotesInitial()) {
+    this._blockCreationPort, {
+    this._pageSize = 20,
+  }) : super(const NotesInitial()) {
     on<LoadNotes>(_onLoadNotes);
     on<CreateNote>(_onCreateNote);
     on<CreateNoteFromTemplate>(_onCreateNoteFromTemplate);
@@ -38,7 +39,7 @@ class NotesBloc extends Bloc<NotesEvent, NotesState> {
     on<LoadMoreNotes>(_onLoadMoreNotes);
   }
 
-  static const int _pageSize = 20;
+  final int _pageSize;
 
   Future<void> _onLoadNotes(LoadNotes event, Emitter<NotesState> emit) async {
     try {

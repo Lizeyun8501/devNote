@@ -13,6 +13,8 @@
 //   只传输操作增量，不传输完整文档，降低带宽与冲突面。
 // - **Yjs / Automerge** ([GitHub](https://github.com/yjs/yjs)):
 //   CRDT 操作语义。本服务复用现有 devnote-crdt 的 YATA 算法思想（通过
+
+import 'package:devnote/core/config/app_config.dart';
 //   `ConflictResolver.mergeWithVectorClocks` 间接复用），并对并发文本块
 //   采用字符级合并。
 // - **Yjs y-websocket** ([GitHub](https://github.com/yjs/y-websocket)):
@@ -425,7 +427,7 @@ class RealtimeCollabService {
   /// 仅作为兜底默认值；实际连接地址由 [_resolveServerUrl] 从
   /// SharedPreferences 读取用户配置的同步服务器地址（与 SyncService 共用
   /// `sync_server_url` key）后转换得到，允许用户自定义部署地址。
-  static const String _defaultServerUrl = 'wss://sync.devnote.app/realtime';
+  static const String _defaultServerUrl = defaultRealtimeServerUrl;
 
   final RealtimeTransport _transport;
   final Uuid _uuid = const Uuid();

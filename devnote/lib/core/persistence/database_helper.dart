@@ -1,8 +1,8 @@
-import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
@@ -284,10 +284,10 @@ class DatabaseHelper {
       final originalFile = File(originalPath);
       if (await originalFile.exists()) {
         await originalFile.copy(backupPath);
-        developer.log('Migration backup created at $backupPath', name: 'DatabaseHelper');
+        AppLogger.d('DatabaseHelper', 'Migration backup created at $backupPath');
       }
     } catch (e) {
-      developer.log('Could not create migration backup', name: 'DatabaseHelper', error: e);
+      AppLogger.w('DatabaseHelper', 'Could not create migration backup', error: e);
     }
   }
 
@@ -388,11 +388,11 @@ class DatabaseHelper {
       }
       // batch.commit() 将所有操作放在一个事务中，任一失败则整体回滚
       await batch.commit(noResult: true);
-      developer.log('数据库升级成功: $oldVersion -> $newVersion', name: 'DatabaseHelper');
+      AppLogger.d('DatabaseHelper', '数据库升级成功: $oldVersion -> $newVersion');
     } catch (e) {
       // P1-1 修复: 迁移失败时通过 catch 捕获，batch 未 commit 则自动回滚
       // 同时记录详细错误日志，便于排查问题
-      developer.log('数据库升级失败，事务已回滚: $e', name: 'DatabaseHelper');
+      AppLogger.w('DatabaseHelper', '数据库升级失败，事务已回滚', error: e);
       rethrow;
     }
   }

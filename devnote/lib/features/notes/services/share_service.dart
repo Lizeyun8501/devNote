@@ -1,16 +1,17 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:devnote/core/config/app_config.dart';
 
 class ShareService {
   Future<String> _getServerUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('sync_server_url') ?? 'https://sync.devnote.app';
+    return prefs.getString(syncServerUrlKey) ?? defaultSyncServerUrl;
   }
 
   Future<String> _getToken() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token') ?? '';
+    return prefs.getString(syncAuthTokenKey) ?? '';
   }
 
   /// 创建分享链接

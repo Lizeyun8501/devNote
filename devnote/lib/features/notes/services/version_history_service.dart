@@ -1,13 +1,14 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:devnote/core/config/app_config.dart';
 
 class VersionHistoryService {
   /// 获取笔记版本历史
   Future<List<VersionItem>> getNoteHistory(String noteId, {int limit = 50}) async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = prefs.getString('sync_server_url') ?? 'https://sync.devnote.app';
-    final token = prefs.getString('auth_token') ?? '';
+    final serverUrl = prefs.getString(syncServerUrlKey) ?? defaultSyncServerUrl;
+    final token = prefs.getString(syncAuthTokenKey) ?? '';
 
     final response = await http.get(
       Uri.parse('$serverUrl/api/v1/sync/notes/$noteId/history?limit=$limit'),
@@ -31,8 +32,8 @@ class VersionHistoryService {
   /// 获取特定版本
   Future<VersionItem> getNoteVersion(String noteId, int version) async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = prefs.getString('sync_server_url') ?? 'https://sync.devnote.app';
-    final token = prefs.getString('auth_token') ?? '';
+    final serverUrl = prefs.getString(syncServerUrlKey) ?? defaultSyncServerUrl;
+    final token = prefs.getString(syncAuthTokenKey) ?? '';
 
     final response = await http.get(
       Uri.parse('$serverUrl/api/v1/sync/notes/$noteId/versions/$version'),

@@ -17,7 +17,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -365,6 +364,6 @@ class RealtimeTransport {
     await disconnect();
     await _messageController.close();
     await _statusController.close();
-    developer.log('RealtimeTransport disposed', name: _tag);
+    AppLogger.d(_tag, 'RealtimeTransport disposed');
   }
 }

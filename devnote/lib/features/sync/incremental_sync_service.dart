@@ -22,6 +22,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
 import 'package:devnote/features/sync/rdiff_service.dart';
@@ -151,9 +152,8 @@ class IncrementalSyncService {
 
   /// SharedPreferences 键名前缀
   static const String _keySession = 'incremental_sync_session';
-  static const String _keyServerUrl = 'sync_server_url';
-  static const String _keyAuthToken = 'sync_auth_token';
-  static const String _defaultServerUrl = 'https://sync.devnote.app';
+  static const String _keyServerUrl = syncServerUrlKey;
+  static const String _keyAuthToken = syncAuthTokenKey;
 
   /// 当前活跃的同步会话（从持久化存储恢复）
   SyncSession? _activeSession;
@@ -460,7 +460,7 @@ class IncrementalSyncService {
 
   Future<String> _getServerUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyServerUrl) ?? _defaultServerUrl;
+    return prefs.getString(_keyServerUrl) ?? defaultSyncServerUrl;
   }
 
   Future<String?> _getAuthToken() async {

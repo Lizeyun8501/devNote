@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:devnote/core/config/app_config.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,12 +56,9 @@ class SyncServiceState {
 class SyncService {
   SyncService();
 
-  // 默认同步服务器地址
-  static const String _defaultServerUrl = 'https://sync.devnote.app';
-
   // SharedPreferences 中存储服务器地址和认证令牌的键名
-  static const String _keyServerUrl = 'sync_server_url';
-  static const String _keyAuthToken = 'sync_auth_token';
+  static const String _keyServerUrl = syncServerUrlKey;
+  static const String _keyAuthToken = syncAuthTokenKey;
 
   static const String _keyLastSyncTime = 'sync_last_sync_time';
   static const String _keyPendingChanges = 'sync_pending_changes';
@@ -369,7 +367,7 @@ class SyncService {
   /// 获取配置的服务器地址，优先从 SharedPreferences 读取，否则使用默认值
   Future<String> _getServerUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyServerUrl) ?? _defaultServerUrl;
+    return prefs.getString(_keyServerUrl) ?? defaultSyncServerUrl;
   }
 
   /// 获取 JWT 认证令牌

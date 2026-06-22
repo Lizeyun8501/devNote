@@ -3,11 +3,10 @@
 // 来源: https://github.com/AppFlowy-IO/AppFlowy
 // 借鉴内容: Repository 模式通过 FFI 桥接调 Rust 持久化层
 
-import 'dart:developer' as developer;
-
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/persistence_dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
 
@@ -33,7 +32,7 @@ class SqliteFolderRepository implements FolderRepository {
       final result = await _dispatch.create(entity: 'folder', data: folder.toJson());
       return FolderModel.fromJson(result);
     }
-    developer.log('FFI not available, falling back to sqflite for createFolder', level: 900);
+    AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for createFolder');
     final db = await _dbHelper.database;
     await db.insert('folders', folder.toJson());
     return folder;
@@ -51,7 +50,7 @@ class SqliteFolderRepository implements FolderRepository {
       final items = await _dispatch.list(entity: 'folder', filter: filter);
       return items.map((json) => FolderModel.fromJson(json)).toList();
     }
-    developer.log('FFI not available, falling back to sqflite for listFolders', level: 900);
+    AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for listFolders');
     final db = await _dbHelper.database;
     final results = parentId != null
         ? await db.query(
@@ -95,7 +94,7 @@ class SqliteFolderRepository implements FolderRepository {
       return;
     }
 
-    developer.log('FFI not available, falling back to sqflite for deleteFolder', level: 900);
+    AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for deleteFolder');
     final db = await _dbHelper.database;
     final allFolderIds = await _collectSubfolderIdsViaSqflite(db, id);
     allFolderIds.add(id);
@@ -168,7 +167,7 @@ class SqliteFolderRepository implements FolderRepository {
       final result = await _dispatch.update(entity: 'folder', id: folder.id, data: folder.toJson());
       return FolderModel.fromJson(result);
     }
-    developer.log('FFI not available, falling back to sqflite for updateFolder', level: 900);
+    AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for updateFolder');
     final db = await _dbHelper.database;
     await db.update(
       'folders',
