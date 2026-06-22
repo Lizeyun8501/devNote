@@ -8,6 +8,7 @@ on:
       - 'devnote/pubspec.yaml'
       - 'devnote/pubspec.lock'
       - 'devnote/android/**'
+      - 'devnote/rust-core/**'
       - '.github/workflows/build-apk.yml'
   pull_request:
     branches: [main]
@@ -16,6 +17,7 @@ on:
       - 'devnote/pubspec.yaml'
       - 'devnote/pubspec.lock'
       - 'devnote/android/**'
+      - 'devnote/rust-core/**'
       - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
@@ -37,12 +39,23 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.29.x'
           channel: 'stable'
           cache: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang pkg-config libgtk-3-dev libblkid-dev liblzma-dev
+
+      - name: Accept Android licenses
+        run: yes | flutter doctor --android-licenses || true
 
       - name: Get dependencies
         run: flutter pub get
