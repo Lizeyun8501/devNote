@@ -13,6 +13,7 @@ import (
 type Config struct {
 	Port            string
 	DBPath          string
+	MigrationsPath  string
 	JWTSecret       string
 	AllowedOrigins  []string
 	LogLevel        string
