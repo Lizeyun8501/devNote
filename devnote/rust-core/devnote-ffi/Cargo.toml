@@ -18,15 +18,12 @@ devnote-crypto = { workspace = true }
 devnote-editor = { workspace = true }
 devnote-search = { workspace = true }
 devnote-sync = { workspace = true }
-devnote-format = { workspace = true }
-devnote-canvas = { workspace = true }
+devnote-extensions = { workspace = true, features = ["math-ink", "ocr", "canvas", "format"] }
 devnote-database = { workspace = true }
 devnote-object = { workspace = true }
 devnote-graph = { workspace = true }
 devnote-crdt = { workspace = true }
 devnote-flashcard = { workspace = true }
-devnote-ocr = { workspace = true }
-devnote-math-ink = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

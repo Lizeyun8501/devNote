@@ -1,0 +1,45 @@
+[package]
+name = "devnote-extensions"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "DevNote 扩展功能集合 —— 通过 feature flag 控制各模块编译"
+
+[dependencies]
+# 共享轻量依赖（已在 workspace 依赖树中，不增加编译开销）
+devnote-observe = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+
+# ocr 专用（重依赖：ML 模型 crates）
+image = { version = "0.25", optional = true }
+ocrs = { version = "0.10", optional = true }
+rten = { version = "0.14", optional = true }
+
+# ipfs 专用（重依赖：HTTP/CID/multihash）
+tokio = { version = "1", optional = true }
+reqwest = { version = "0.12", optional = true }
+bytes = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+cid = { version = "0.11", optional = true }
+multihash = { version = "0.19", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+# workflow 专用
+notify = { version = "6", optional = true }
+
+[features]
+default = []
+# 各模块独立 feature flag，按需启用以缩短编译时间
+math-ink = []
+ocr = ["dep:image", "dep:ocrs", "dep:rten"]
+ipfs = ["dep:tokio", "dep:reqwest", "dep:bytes", "dep:sha2", "dep:cid", "dep:multihash", "dep:async-trait"]
+canvas = []
+workflow = ["dep:tokio", "dep:notify"]
+format = []

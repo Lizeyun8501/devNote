@@ -19,7 +19,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 sha2 = "0.10"
 base64 = "0.22"
-devnote-ipfs = { path = "../devnote-ipfs", optional = true }
+devnote-extensions = { workspace = true, optional = true, features = ["ipfs"] }
 
 [features]
-ipfs = ["devnote-ipfs"]
+ipfs = ["devnote-extensions"]

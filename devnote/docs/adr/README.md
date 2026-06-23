@@ -7,12 +7,12 @@
 | 编号 | 标题 | 状态 | 日期 |
 |------|------|------|------|
 | [001](001-use-rust-for-core.md) | 使用 Rust 作为核心引擎 | Accepted | 2025-01-15 |
-| [002](002-ffi-bridge-pattern.md) | FFI Bridge 模式（Dart FFI + C ABI） | Superseded | 2025-01-20 |
+| [002](002-ffi-bridge-pattern.md) | 使用 flutter_rust_bridge v2 实现 Flutter 与 Rust 核心的类型安全通信 | Accepted | 2025-01-20 / 2026-06-23 |
 | [003](003-five-layer-architecture.md) | 五层解耦架构设计 | Accepted | 2025-02-01 |
 | [004](004-sqlite-for-persistence.md) | SQLite 作为主要持久化层 | Accepted | 2025-02-10 |
 | [005](005-crdt-for-sync.md) | CRDT + HLC 用于无冲突同步 | Accepted | 2025-02-20 |
 | [006](006-bloc-state-management.md) | BLoC 模式用于 Flutter 状态管理 | Accepted | 2025-03-01 |
-| [007](007-wasm-plugin-system.md) | WebAssembly 插件沙箱 | Superseded | 2025-03-10 |
+| [007](007-wasm-plugin-system.md) | WebAssembly 插件沙箱（运行时从 Wasmtime 迁移至 extism） | Superseded | 2025-03-10 / 2026-06-19 |
 
 ## ADR 格式
 

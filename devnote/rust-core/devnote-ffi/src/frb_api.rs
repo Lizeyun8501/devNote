@@ -20,13 +20,13 @@ use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoConfig, CryptoEngine, DefaultCryptoEngine};
 use devnote_editor::{BlockEditor, BlockType, DefaultBlockEditor};
 use devnote_flashcard::FlashcardEngine;
-use devnote_format::{ExportFormat, FormatExporter, FormatImporter, HtmlExporter, ImportFormat, MarkdownExporter, MarkdownImporter, ObsidianImporter};
+use devnote_extensions::format::{ExportFormat, FormatExporter, FormatImporter, HtmlExporter, ImportFormat, MarkdownExporter, MarkdownImporter, ObsidianImporter};
 use devnote_graph::GraphEngine;
 use devnote_object::ObjectEngine;
 use devnote_persistence::SqliteNoteRepository;
 use devnote_search::SearchEngine;
 use devnote_sync::{ClientSyncEngine, SyncEngine};
-use devnote_canvas::{CanvasEngine, LayoutType};
+use devnote_extensions::canvas::{CanvasEngine, LayoutType};
 use devnote_crdt::{merge_documents, CRDTDocument, Operation};
 use devnote_database::DatabaseEngine;
 use devnote_database::formula::eval_formula;
@@ -575,7 +575,7 @@ pub fn get_sync_status() -> Result<SyncStatusData, String> {
 
 /// 添加画布节点 —— 替代原 CanvasEvent.AddNode
 pub fn canvas_add_node(canvas_id: String, node_json: String) -> Result<(), String> {
-    let node: devnote_canvas::CanvasNode = serde_json::from_str(&node_json)
+    let node: devnote_extensions::canvas::CanvasNode = serde_json::from_str(&node_json)
         .map_err(|e| e.to_string())?;
     let mut guard = CANVAS_ENGINE.lock();
     let engine = guard.as_mut().ok_or("Canvas engine not initialized")?;
@@ -600,7 +600,7 @@ pub fn canvas_auto_layout(canvas_id: String, layout_type: String) -> Result<(), 
 
 /// 添加画布边 —— 替代原 CanvasEvent.AddEdge
 pub fn canvas_add_edge(canvas_id: String, edge_json: String) -> Result<(), String> {
-    let edge: devnote_canvas::CanvasEdge = serde_json::from_str(&edge_json)
+    let edge: devnote_extensions::canvas::CanvasEdge = serde_json::from_str(&edge_json)
         .map_err(|e| e.to_string())?;
     let mut guard = CANVAS_ENGINE.lock();
     let engine = guard.as_mut().ok_or("Canvas engine not initialized")?;
@@ -747,7 +747,7 @@ pub fn import_markdown(path: String) -> Result<String, String> {
 
 /// 导出 Markdown —— 替代原 FormatEvent.ExportMarkdown
 pub fn export_markdown(notes_json: String, path: String) -> Result<(), String> {
-    let notes: Vec<devnote_format::NoteData> = serde_json::from_str(&notes_json)
+    let notes: Vec<devnote_extensions::format::NoteData> = serde_json::from_str(&notes_json)
         .map_err(|e| e.to_string())?;
     let exporter = MarkdownExporter::new();
     exporter.export(&notes, Path::new(&path), ExportFormat::Markdown)
@@ -798,7 +798,7 @@ pub struct OcrResultFfi {
 /// image_base64: base64 编码的图片数据（支持 PNG/JPEG/WebP）
 /// 返回识别出的全文
 pub fn ocr_recognize_image(image_base64: String) -> Result<String, String> {
-    let mut engine = devnote_ocr::OcrEngine::new();
+    let mut engine = devnote_extensions::ocr::OcrEngine::new();
     let result = engine.recognize_from_base64(&image_base64)
         .map_err(|e| e.to_string())?;
     Ok(result.text)
@@ -806,7 +806,7 @@ pub fn ocr_recognize_image(image_base64: String) -> Result<String, String> {
 
 /// OCR 识别并返回结构化结果（含按行分割与置信度）
 pub fn ocr_recognize_image_detailed(image_base64: String) -> Result<OcrResultFfi, String> {
-    let mut engine = devnote_ocr::OcrEngine::new();
+    let mut engine = devnote_extensions::ocr::OcrEngine::new();
     let result = engine.recognize_from_base64(&image_base64)
         .map_err(|e| e.to_string())?;
     Ok(OcrResultFfi {
@@ -921,9 +921,9 @@ pub struct MathRecognitionResultFfi {
 ///
 /// 输入 JSON 序列化的笔触列表，返回 LaTeX 识别结果。
 pub fn math_ink_recognize(strokes_json: String) -> Result<MathRecognitionResultFfi, String> {
-    let strokes: Vec<devnote_math_ink::InkStroke> = serde_json::from_str(&strokes_json)
+    let strokes: Vec<devnote_extensions::math_ink::InkStroke> = serde_json::from_str(&strokes_json)
         .map_err(|e| e.to_string())?;
-    let recognizer = devnote_math_ink::MathInkRecognizer::new();
+    let recognizer = devnote_extensions::math_ink::MathInkRecognizer::new();
     let result = recognizer.recognize(strokes);
     Ok(MathRecognitionResultFfi {
         latex: result.latex,

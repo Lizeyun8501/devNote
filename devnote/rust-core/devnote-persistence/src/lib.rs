@@ -1585,7 +1585,7 @@ impl SqliteNoteRepository {
 
 #[cfg(feature = "ipfs")]
 pub mod ipfs {
-    use devnote_ipfs::{IpfsClient, IpfsConfig, IpfsError};
+    use devnote_extensions::ipfs::{IpfsClient, IpfsConfig, IpfsError};
     use rusqlite::params;
     use std::sync::Mutex;
     use uuid::Uuid;
