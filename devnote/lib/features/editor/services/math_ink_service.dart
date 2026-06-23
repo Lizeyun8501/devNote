@@ -1,14 +1,12 @@
 import 'dart:convert';
-import 'dart:ffi';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../../../core/bridge/ffi_bridge.dart';
 import '../../../core/di/injection.dart';
+import '../../../src/rust/library.dart' as rust;
 
 /// 手写公式识别结果
 ///
@@ -35,6 +33,14 @@ class MathInkRecognitionResult {
         alternatives: [],
       );
 
+  factory MathInkRecognitionResult.fromRust(rust.MathRecognitionResultFfi r) {
+    return MathInkRecognitionResult(
+      latex: r.latex,
+      confidence: r.confidence,
+      alternatives: r.alternatives,
+    );
+  }
+
   factory MathInkRecognitionResult.fromJson(Map<String, dynamic> json) {
     return MathInkRecognitionResult(
       latex: json['latex'] as String? ?? '',
@@ -56,9 +62,9 @@ class MathInkRecognitionResult {
 /// 手写公式识别服务（P2-9）
 ///
 /// 将手写笔触转换为 LaTeX 公式。识别优先级：
-/// 1. **Rust FFI**：调用 `devnote-math-ink` crate 的 `math_ink_recognize` C ABI
+/// 1. **FRB**：通过 flutter_rust_bridge v2 调用 `devnote-math-ink` crate
 /// 2. **在线 API**（可选）：用户配置 API URL 后，将笔迹渲染为 PNG 上传识别
-/// 3. **降级**：FFI 不可用时返回空结果并提示
+/// 3. **降级**：FRB 不可用时返回空结果并提示
 ///
 /// 与 [OcrService] 模式一致：通过 [FFIBridge] 调用 Rust 核心。
 class MathInkService {
@@ -66,7 +72,7 @@ class MathInkService {
 
   /// 用户可选配置的在线识别 API URL（如 Mathpix API）
   ///
-  /// 为 null 时仅使用本地 FFI 识别。
+  /// 为 null 时仅使用本地 FRB 识别。
   String? onlineApiUrl;
 
   /// 在线 API 的认证 Token（如 `app_id`:`app_key`）
@@ -82,12 +88,12 @@ class MathInkService {
       return MathInkRecognitionResult.empty();
     }
 
-    // 优先尝试 FFI 调用
+    // 优先尝试 FRB 调用
     if (_ffiBridge.isAvailable) {
       try {
-        return _recognizeViaFfi(strokes);
+        return await _recognizeViaFrb(strokes);
       } catch (e) {
-        // FFI 调用失败，降级到在线 API（若配置）
+        // FRB 调用失败，降级到在线 API（若配置）
         if (onlineApiUrl != null) {
           return _recognizeViaOnlineApi(strokes);
         }
@@ -95,7 +101,7 @@ class MathInkService {
       }
     }
 
-    // FFI 不可用，尝试在线 API
+    // FRB 不可用，尝试在线 API
     if (onlineApiUrl != null) {
       return _recognizeViaOnlineApi(strokes);
     }
@@ -115,11 +121,12 @@ class MathInkService {
     return _recognizePngViaOnlineApi(pngBytes);
   }
 
-  /// 通过 FFI 调用 Rust 端 `math_ink_recognize`
+  /// 通过 FRB 调用 Rust 端 `math_ink_recognize`
   ///
-  /// 与 [OcrService] 模式一致：将输入序列化为 JSON，调用 C ABI，解析返回的 JSON。
-  MathInkRecognitionResult _recognizeViaFfi(List<List<Offset>> strokes) {
-    // 序列化笔触为 JSON
+  /// 替代原 C ABI: 直接通过 DynamicLibrary.lookup 查找 math_ink_recognize 符号。
+  /// 现使用 FRB v2 类型安全绑定，消除手写 dart:ffi 代码。
+  Future<MathInkRecognitionResult> _recognizeViaFrb(List<List<Offset>> strokes) async {
+    // 序列化笔触为 JSON（与 Rust 端 InkStroke 结构对齐）
     final strokesJson = jsonEncode(strokes.map((stroke) {
       return {
         'points': stroke
@@ -130,39 +137,9 @@ class MathInkService {
       };
     }).toList());
 
-    // 调用 C ABI: math_ink_recognize
-    // 注意：当前 FFIBridge 尚未封装 math_ink_recognize 方法，
-    // 这里通过 DynamicLibrary 直接查找符号（与 FFIBridge._openNativeLibrary 一致）。
-    final dylib = _openNativeLibrary();
-    if (dylib == null) {
-      throw StateError('Native library not available for math ink recognition');
-    }
-
-    final recognizePtr = dylib.lookup<
-        NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
-      'math_ink_recognize',
-    );
-    final freePtr = dylib.lookup<
-        NativeFunction<Void Function(Pointer<Utf8>)>>(
-      'math_ink_free_result',
-    );
-
-    final recognize = recognizePtr.asFunction<Pointer<Utf8> Function(Pointer<Utf8>)>();
-    final free = freePtr.asFunction<void Function(Pointer<Utf8>)>();
-
-    final inputPtr = strokesJson.toNativeUtf8();
-    try {
-      final resultPtr = recognize(inputPtr);
-      try {
-        final resultJson = resultPtr.toDartString();
-        final decoded = jsonDecode(resultJson) as Map<String, dynamic>;
-        return MathInkRecognitionResult.fromJson(decoded);
-      } finally {
-        free(resultPtr);
-      }
-    } finally {
-      calloc.free(inputPtr);
-    }
+    // FRB v2 调用 —— 类型安全，自动内存管理
+    final result = await rust.mathInkRecognize(strokesJson: strokesJson);
+    return MathInkRecognitionResult.fromRust(result);
   }
 
   /// 通过在线 API 识别笔触（用户可选）
@@ -220,29 +197,5 @@ class MathInkService {
 
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     return MathInkRecognitionResult.fromJson(decoded);
-  }
-
-  /// 加载 native 库 —— 与 FFIBridge._openNativeLibrary 一致的跨平台策略
-  DynamicLibrary? _openNativeLibrary() {
-    try {
-      if (Platform.isAndroid) {
-        return DynamicLibrary.open('libdevnote_ffi.so');
-      }
-      if (Platform.isIOS) {
-        return DynamicLibrary.process();
-      }
-      if (Platform.isMacOS) {
-        return DynamicLibrary.open('libdevnote_ffi.dylib');
-      }
-      if (Platform.isLinux) {
-        return DynamicLibrary.open('libdevnote_ffi.so');
-      }
-      if (Platform.isWindows) {
-        return DynamicLibrary.open('devnote_ffi.dll');
-      }
-      return null;
-    } catch (_) {
-      return null;
-    }
   }
 }

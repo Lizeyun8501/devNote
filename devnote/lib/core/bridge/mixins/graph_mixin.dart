@@ -1,40 +1,35 @@
-// P2 修复 (P2-4): FFIBridge God Class 进一步拆分 —— Graph 领域 Mixin
+// Graph API Mixin —— 基于 flutter_rust_bridge v2
 //
-// 从 FFIBridge 中抽取的知识图谱 API。部分方法通过 C ABI 调用 Rust，
-// 部分（无对应 handler）为 stub 返回降级结果。
+// 从 FFIBridge 中抽取的知识图谱 API。通过 FRB 生成的类型安全绑定调用 Rust。
 //
 // 拆分理由:
-// - Graph 操作与 FFI 核心职责（C ABI 分发）无关，属领域 API
-// - 9 个方法（2 个 FFI + 7 个 stub），约 25 行
+// - Graph 操作属领域 API，独立后便于维护
+// - 9 个方法（2 个 FRB + 7 个 stub），约 25 行
 // - 独立后便于未来实现真实图谱查询或对接 petgraph
 
-import 'dart:convert';
+import 'package:devnote/src/rust/library.dart' as rust;
 
 /// Graph API Mixin
 ///
-/// 宿主类需实现 [ffiCheckAvailable] 和 [ffiDispatch] 提供 C ABI 访问能力。
-/// 无对应 C ABI handler 的方法返回空 JSON，调用方应处理空结果。
+/// 宿主类需实现 [ffiCheckAvailable] 提供 FFI 可用性检查。
+/// 无对应 FRB 函数的方法返回空 JSON，调用方应处理空结果。
 mixin GraphMixin {
   /// 宿主类提供：检查 FFI 是否可用，不可用则抛 StateError
   void ffiCheckAvailable();
 
-  /// 宿主类提供：通过 C ABI 调用 Rust dispatch，返回解析后的 JSON 数据
-  dynamic ffiDispatch(String event, [Map<String, dynamic>? payload]);
-
-  // ── 有 C ABI handler 的方法 ──────────────────────────────
+  // ── 有 FRB 绑定的方法 ───────────────────────────────────
 
   Future<String> calculateCentrality() async {
     ffiCheckAvailable();
-    return jsonEncode(ffiDispatch('GraphEvent.CalculateCentrality'));
+    return rust.calculateCentrality();
   }
 
   Future<String> detectClusters() async {
     ffiCheckAvailable();
-    return jsonEncode(ffiDispatch('GraphEvent.DetectClusters'));
+    return rust.detectClusters();
   }
 
-  // ── 无 C ABI handler 的 stub 方法（返回空 JSON）──────────
-  // P0 修复: 返回空 JSON 而非抛异常，调用方应处理空结果
+  // ── 无 FRB 绑定的 stub 方法（返回空 JSON）──────────
 
   Future<String> getGraph() async => '{"nodes":[],"edges":[]}';
   Future<String> getNodeDetails({required String nodeId}) async => '{}';

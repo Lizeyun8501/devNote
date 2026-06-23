@@ -16,12 +16,11 @@
 //! Flutter Favorite: ✅
 
 use base64::Engine;
-use devnote_core::models::Folder;
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoConfig, CryptoEngine, DefaultCryptoEngine};
 use devnote_editor::{BlockEditor, BlockType, DefaultBlockEditor};
 use devnote_flashcard::FlashcardEngine;
-use devnote_format::{FormatExporter, FormatImporter, HtmlExporter, MarkdownExporter, MarkdownImporter, ObsidianImporter, ImportFormat, ExportFormat};
+use devnote_format::{ExportFormat, FormatExporter, FormatImporter, HtmlExporter, ImportFormat, MarkdownExporter, MarkdownImporter, ObsidianImporter};
 use devnote_graph::GraphEngine;
 use devnote_object::ObjectEngine;
 use devnote_persistence::SqliteNoteRepository;
@@ -29,7 +28,7 @@ use devnote_search::SearchEngine;
 use devnote_sync::{ClientSyncEngine, SyncEngine};
 use devnote_canvas::{CanvasEngine, LayoutType};
 use devnote_crdt::{merge_documents, CRDTDocument, Operation};
-use devnote_database::{DatabaseEngine, ViewType};
+use devnote_database::DatabaseEngine;
 use devnote_database::formula::eval_formula;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -39,9 +38,8 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 // ── 全局引擎实例 ──────────────────────────────────────────────────────
-// pub(crate) 使得 handlers.rs (C ABI FFI) 与 frb_api.rs 共享同一套引擎实例，
-// 避免两套独立的全局变量导致 2x 内存浪费和状态不一致。
-// 两个模块都通过 LazyLock 延迟初始化，首次访问时自动填充。
+// 所有引擎通过 LazyLock 延迟初始化，首次访问时自动填充。
+// FRB 生成的 Dart 函数直接调用这些引擎实例，无需中间分发层。
 
 pub(crate) static NOTE_REPO: LazyLock<Mutex<Option<SqliteNoteRepository>>> =
     LazyLock::new(|| Mutex::new(None));
@@ -68,24 +66,6 @@ pub(crate) static CRDT_DOCS: LazyLock<Mutex<HashMap<String, CRDTDocument>>> =
 
 // ── FRB 数据类型 ──────────────────────────────────────────────────────
 // FRB 自动将这些 Rust 结构体映射为 Dart 类，无需手写序列化代码
-
-/// FRB 统一响应类型 —— 替代原 FFIResponse + DispatchResponse
-/// FRB 自动生成对应的 Dart 类，包含 code/message/data 字段
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FrbResponse<T: Serialize> {
-    pub code: i32,
-    pub message: String,
-    pub data: Option<T>,
-}
-
-impl<T: Serialize> FrbResponse<T> {
-    pub fn success(data: T) -> Self {
-        Self { code: 0, message: "ok".to_string(), data: Some(data) }
-    }
-    pub fn error(code: i32, message: String) -> FrbResponse<serde_json::Value> {
-        FrbResponse { code, message, data: None }
-    }
-}
 
 /// 版本信息 —— 替代原 FfiVersionInfo
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +349,54 @@ pub fn delete_folder(id: String) -> Result<(), String> {
     NoteRepository::delete_folder(repo, &uid).map_err(|e| e.to_string())
 }
 
+/// 获取文件夹 —— 替代原 FolderEvent.GetFolder
+pub fn get_folder(id: String) -> Result<Option<FolderData>, String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let mut guard = NOTE_REPO.lock();
+    let repo = guard.as_mut().ok_or("Persistence engine not initialized")?;
+    match NoteRepository::get_folder(repo, &uid) {
+        Ok(Some(folder)) => Ok(Some(FolderData {
+            id: folder.id.to_string(),
+            name: folder.name,
+            parent_id: folder.parent_id.map(|id| id.to_string()),
+            sort_order: folder.sort_order,
+            created_at: folder.created_at.to_rfc3339(),
+            updated_at: folder.updated_at.to_rfc3339(),
+        })),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 更新文件夹 —— 替代原 FolderEvent.UpdateFolder
+pub fn update_folder(id: String, name: String, parent_id: Option<String>, sort_order: Option<i32>) -> Result<FolderData, String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let pid = parent_id.map(|s| Uuid::parse_str(&s)).transpose().map_err(|e| e.to_string())?;
+    let mut guard = NOTE_REPO.lock();
+    let repo = guard.as_mut().ok_or("Persistence engine not initialized")?;
+    let existing = NoteRepository::get_folder(repo, &uid)
+        .map_err(|e| e.to_string())?
+        .ok_or("Folder not found")?;
+    let sort_order = sort_order.unwrap_or(existing.sort_order);
+    let folder = devnote_core::models::Folder {
+        id: uid,
+        name,
+        parent_id: pid,
+        sort_order,
+        created_at: existing.created_at,
+        updated_at: chrono::Utc::now(),
+    };
+    let folder = NoteRepository::update_folder(repo, folder).map_err(|e| e.to_string())?;
+    Ok(FolderData {
+        id: folder.id.to_string(),
+        name: folder.name,
+        parent_id: folder.parent_id.map(|id| id.to_string()),
+        sort_order: folder.sort_order,
+        created_at: folder.created_at.to_rfc3339(),
+        updated_at: folder.updated_at.to_rfc3339(),
+    })
+}
+
 // ── 标签 API ──────────────────────────────────────────────────────────
 
 /// 创建标签 —— 替代原 TagEvent.CreateTag
@@ -570,6 +598,30 @@ pub fn canvas_auto_layout(canvas_id: String, layout_type: String) -> Result<(), 
     engine.auto_layout(&canvas_id, lt).map_err(|e| e.to_string())
 }
 
+/// 添加画布边 —— 替代原 CanvasEvent.AddEdge
+pub fn canvas_add_edge(canvas_id: String, edge_json: String) -> Result<(), String> {
+    let edge: devnote_canvas::CanvasEdge = serde_json::from_str(&edge_json)
+        .map_err(|e| e.to_string())?;
+    let mut guard = CANVAS_ENGINE.lock();
+    let engine = guard.as_mut().ok_or("Canvas engine not initialized")?;
+    engine.add_edge(&canvas_id, edge).map_err(|e| e.to_string())
+}
+
+/// 保存画布为 JSON —— 替代原 CanvasEvent.SaveJson
+pub fn canvas_save_canvas(canvas_id: String, path: String) -> Result<(), String> {
+    let guard = CANVAS_ENGINE.lock();
+    let engine = guard.as_ref().ok_or("Canvas engine not initialized")?;
+    engine.save_canvas(&canvas_id, &path).map_err(|e| e.to_string())
+}
+
+/// 从 JSON 加载画布 —— 替代原 CanvasEvent.LoadJson
+pub fn canvas_load_canvas(path: String) -> Result<String, String> {
+    let mut guard = CANVAS_ENGINE.lock();
+    let engine = guard.as_mut().ok_or("Canvas engine not initialized")?;
+    let canvas = engine.load_canvas(&path).map_err(|e| e.to_string())?;
+    Ok(serde_json::to_string(&canvas).unwrap_or_default())
+}
+
 // ── 数据库 API ────────────────────────────────────────────────────────
 
 /// 创建数据库 —— 替代原 DatabaseEvent.CreateDatabase
@@ -589,6 +641,30 @@ pub fn evaluate_formula(formula: String, row_values: String, all_rows: String) -
     let ar: Vec<HashMap<String, serde_json::Value>> = serde_json::from_str(&all_rows)
         .map_err(|e| e.to_string())?;
     eval_formula(&formula, &rv, &ar).map_err(|e| e)
+}
+
+/// 添加数据库视图 —— 替代原 DatabaseEvent.AddView
+pub fn database_add_view(db_id: String, name: String, view_type: String) -> Result<String, String> {
+    let did = Uuid::parse_str(&db_id).map_err(|e| e.to_string())?;
+    let vt: devnote_database::ViewType = serde_json::from_value(serde_json::Value::String(view_type))
+        .map_err(|e| e.to_string())?;
+    let guard = DATABASE_ENGINE.lock();
+    let engine = guard.as_ref().ok_or("Database engine not initialized")?;
+    match engine.add_view(&did, &name, vt) {
+        Ok(view) => Ok(serde_json::to_string(&view).unwrap_or_default()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 查询数据库行 —— 替代原 DatabaseEvent.QueryRows
+pub fn database_query_rows(db_id: String) -> Result<String, String> {
+    let did = Uuid::parse_str(&db_id).map_err(|e| e.to_string())?;
+    let guard = DATABASE_ENGINE.lock();
+    let engine = guard.as_ref().ok_or("Database engine not initialized")?;
+    match engine.get_rows(&did) {
+        Ok(rows) => Ok(serde_json::to_string(&rows).unwrap_or_default()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // ── 图谱 API ──────────────────────────────────────────────────────────
@@ -819,4 +895,39 @@ pub fn vault_verify_password(password: String, encrypted: VaultEncryptedDataFfi)
         parallelism: encrypted.parallelism,
     };
     devnote_crypto::vault_verify_password(&password, &encrypted_data)
+}
+
+// ── 手写公式识别 API ─────────────────────────────────────────────────
+// P2-9: 基于 devnote-math-ink crate 的手写 LaTeX 公式识别
+// 替代原 C ABI: math_ink_recognize / math_ink_free_result
+
+/// 手写笔触点
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InkStrokeFfi {
+    pub points: Vec<(f32, f32)>,
+    pub pressure: f32,
+    pub timestamp: u64,
+}
+
+/// 手写公式识别结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MathRecognitionResultFfi {
+    pub latex: String,
+    pub confidence: f32,
+    pub alternatives: Vec<String>,
+}
+
+/// 识别手写公式 —— 替代原 C ABI math_ink_recognize
+///
+/// 输入 JSON 序列化的笔触列表，返回 LaTeX 识别结果。
+pub fn math_ink_recognize(strokes_json: String) -> Result<MathRecognitionResultFfi, String> {
+    let strokes: Vec<devnote_math_ink::InkStroke> = serde_json::from_str(&strokes_json)
+        .map_err(|e| e.to_string())?;
+    let recognizer = devnote_math_ink::MathInkRecognizer::new();
+    let result = recognizer.recognize(strokes);
+    Ok(MathRecognitionResultFfi {
+        latex: result.latex,
+        confidence: result.confidence,
+        alternatives: result.alternatives,
+    })
 }

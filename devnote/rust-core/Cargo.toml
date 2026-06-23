@@ -112,3 +112,4 @@ devnote-persistence = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+tempfile = "3"
