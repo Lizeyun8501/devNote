@@ -2,18 +2,16 @@ package model
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 type Device struct {
-	ID          string         `gorm:"primaryKey" json:"id"`
-	UserID      string         `gorm:"index;size:64" json:"user_id"`
-	DeviceName  string         `gorm:"size:128" json:"device_name"`
-	DeviceType  string         `gorm:"size:32" json:"device_type"`
-	LastSyncAt  time.Time      `json:"last_sync_at"`
-	LastSyncVer int64          `json:"last_sync_ver"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID          string     `db:"id" json:"id"`
+	UserID      string     `db:"user_id" json:"user_id"`
+	DeviceName  string     `db:"device_name" json:"device_name"`
+	DeviceType  string     `db:"device_type" json:"device_type"`
+	LastSyncAt  time.Time  `db:"last_sync_at" json:"last_sync_at"`
+	LastSyncVer int64      `db:"last_sync_ver" json:"last_sync_ver"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	DeletedAt   *time.Time `db:"deleted_at" json:"-"`
 }

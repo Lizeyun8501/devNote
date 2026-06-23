@@ -6,24 +6,28 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/sqlite3"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SQLiteStore wraps a sql.DB connection and provides CRUD operations
+// SQLiteStore wraps a sqlx.DB connection and provides CRUD operations
 // for all business-server domain entities.
 type SQLiteStore struct {
-	DB *sql.DB
+	DB *sqlx.DB
 }
 
 // NewSQLiteStore opens (or creates) a SQLite database at the given path
-// and runs schema migrations.
-func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
+// and runs schema migrations via golang-migrate.
+func NewSQLiteStore(dbPath, migrationsPath string) (*SQLiteStore, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	db, err := sqlx.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -33,7 +37,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	}
 
 	store := &SQLiteStore{DB: db}
-	if err := store.migrate(); err != nil {
+	if err := store.migrate(migrationsPath); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
@@ -44,8 +48,27 @@ func (s *SQLiteStore) Close() error {
 	return s.DB.Close()
 }
 
-// migrate creates all required tables if they do not exist.
-func (s *SQLiteStore) migrate() error {
+// migrate runs golang-migrate migrations from the given source path.
+func (s *SQLiteStore) migrate(migrationsPath string) error {
+	m, err := migrate.New(
+		"file://"+migrationsPath,
+		"sqlite3://"+s.DB.DriverName(),
+	)
+	if err != nil {
+		// Fallback: if migrate instance creation fails, run inline schema
+		return s.migrateInline()
+	}
+	defer m.Close()
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	return nil
+}
+
+// migrateInline is a fallback that runs the schema directly when
+// golang-migrate source files are not available (e.g. in tests).
+func (s *SQLiteStore) migrateInline() error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS note_meta (
 		id            TEXT PRIMARY KEY,
@@ -111,8 +134,6 @@ func (s *SQLiteStore) migrate() error {
 		updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
-	-- P2 修复 (P2-5): validation_rule 和 business_rule 添加 user_id 列实现数据隔离
-	-- 原表无 user_id，所有用户共享规则，存在多租户数据泄漏风险
 	CREATE TABLE IF NOT EXISTS validation_rule (
 		id          TEXT PRIMARY KEY,
 		user_id     TEXT NOT NULL DEFAULT '',
@@ -151,11 +172,14 @@ func (s *SQLiteStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_relation(source_note_id);
 	CREATE INDEX IF NOT EXISTS idx_knowledge_target ON knowledge_relation(target_note_id);
 	CREATE INDEX IF NOT EXISTS idx_knowledge_relation_user_id ON knowledge_relation(user_id);
-	-- P2 修复 (P2-5): 为规则表添加 user_id 索引，加速按用户过滤查询
 	CREATE INDEX IF NOT EXISTS idx_validation_rule_user_id ON validation_rule(user_id);
 	CREATE INDEX IF NOT EXISTS idx_business_rule_user_id ON business_rule(user_id);
 	`
-
 	_, err := s.DB.Exec(schema)
 	return err
+}
+
+// DBConn returns the underlying *sql.DB for backward compatibility.
+func (s *SQLiteStore) DBConn() *sql.DB {
+	return s.DB.DB
 }

@@ -60,6 +60,7 @@ func Load() *Config {
 	return &Config{
 		Port:            getEnv("PORT", "8081"),
 		DBPath:          getEnv("DB_PATH", "./data/business.db"),
+		MigrationsPath:  getEnv("MIGRATIONS_PATH", "./migrations"),
 		JWTSecret:       jwtSecret,
 		AllowedOrigins:  allowedOrigins,
 		LogLevel:        getEnv("LOG_LEVEL", "info"),

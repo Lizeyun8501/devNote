@@ -9,16 +9,17 @@ import (
 
 	"github.com/devnote/business-server/internal/model"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // FolderService provides CRUD, tree management, move/copy, path resolution,
 // and circular-reference detection for folders.
 type FolderService struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
 // NewFolderService creates a new FolderService.
-func NewFolderService(db *sql.DB) *FolderService {
+func NewFolderService(db *sqlx.DB) *FolderService {
 	return &FolderService{db: db}
 }
 

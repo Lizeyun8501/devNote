@@ -2,19 +2,21 @@ package service
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/devnote/business-server/internal/model"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // ValidationService validates note structures, folder hierarchies, tags,
 // and knowledge relationships against defined rules.
 type ValidationService struct {
-	db      *sql.DB
-	cfg     ValidationConfig
+	db  *sqlx.DB
+	cfg ValidationConfig
 }
 
 // ValidationConfig holds configurable limits for validation.
@@ -25,7 +27,7 @@ type ValidationConfig struct {
 }
 
 // NewValidationService creates a new ValidationService.
-func NewValidationService(db *sql.DB, cfg ValidationConfig) *ValidationService {
+func NewValidationService(db *sqlx.DB, cfg ValidationConfig) *ValidationService {
 	return &ValidationService{db: db, cfg: cfg}
 }
 
@@ -47,7 +49,7 @@ func (s *ValidationService) ValidateNote(userID, noteID string) (*model.Validati
 				Type:     "note",
 				Results:  []model.ValidationResult{},
 				Passed:   false,
-			}, fmt.Errorf(msg)
+			}, errors.New(msg)
 		}
 		return nil, err
 	}
@@ -210,7 +212,7 @@ func (s *ValidationService) ValidateTag(userID, tagID string) (*model.Validation
 				Type:     "tag",
 				Results:  []model.ValidationResult{},
 				Passed:   false,
-			}, fmt.Errorf(msg)
+			}, errors.New(msg)
 		}
 		return nil, err
 	}
@@ -327,7 +329,7 @@ func (s *ValidationService) ValidateKnowledgeRelation(userID, relID string) (*mo
 				Type:     "knowledge_relation",
 				Results:  []model.ValidationResult{},
 				Passed:   false,
-			}, fmt.Errorf(msg)
+			}, errors.New(msg)
 		}
 		return nil, err
 	}

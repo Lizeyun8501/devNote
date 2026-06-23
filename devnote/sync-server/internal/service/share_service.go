@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,15 +11,15 @@ import (
 
 	"github.com/devnote/sync-server/internal/model"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 type ShareService struct {
-	db *gorm.DB
+	db *sqlx.DB
 }
 
-func NewShareService(db *gorm.DB) *ShareService {
+func NewShareService(db *sqlx.DB) *ShareService {
 	return &ShareService{db: db}
 }
 
@@ -52,18 +53,30 @@ func (s *ShareService) CreateShare(userID, noteID, title, content, password stri
 		ExpiresAt:    expiresAt,
 	}
 
-	if err := s.db.Create(share).Error; err != nil {
+	now := time.Now()
+	_, err = s.db.Exec(
+		`INSERT INTO shared_notes (id, user_id, note_id, share_token, title, content, password_hash, has_password, expires_at, view_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		share.ID, share.UserID, share.NoteID, share.ShareToken, share.Title, share.Content, share.PasswordHash, share.HasPassword, share.ExpiresAt, now, now,
+	)
+	if err != nil {
 		return nil, fmt.Errorf("create share: %w", err)
 	}
+	share.CreatedAt = now
+	share.UpdatedAt = now
+	share.ViewCount = 0
 	return share, nil
 }
 
 // GetShareByToken 通过 token 获取分享内容（公开访问，需验证密码和有效期）
 func (s *ShareService) GetShareByToken(token, password string) (*model.SharedNote, error) {
 	var share model.SharedNote
-	err := s.db.Where("share_token = ?", token).First(&share).Error
+	err := s.db.Get(&share,
+		`SELECT * FROM shared_notes WHERE share_token = ? AND deleted_at IS NULL`, token)
 	if err != nil {
-		return nil, fmt.Errorf("share not found: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("share not found")
+		}
+		return nil, fmt.Errorf("query share: %w", err)
 	}
 
 	// 检查过期
@@ -84,7 +97,9 @@ func (s *ShareService) GetShareByToken(token, password string) (*model.SharedNot
 	// 增加浏览数
 	// P3 修复 (P3-9): 原实现忽略 UpdateColumn 错误，浏览数统计失败时无任何感知
 	// 浏览数为非关键统计数据，失败时记录日志但不影响分享访问
-	if err := s.db.Model(&share).UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error; err != nil {
+	_, err = s.db.Exec(
+		`UPDATE shared_notes SET view_count = view_count + 1 WHERE id = ?`, share.ID)
+	if err != nil {
 		log.Printf("update share view_count failed (share_id=%s): %v", share.ID, err)
 	}
 
@@ -94,20 +109,26 @@ func (s *ShareService) GetShareByToken(token, password string) (*model.SharedNot
 // ListUserShares 列出用户的所有分享
 func (s *ShareService) ListUserShares(userID string) ([]model.SharedNote, error) {
 	var shares []model.SharedNote
-	err := s.db.Where("user_id = ?", userID).Order("created_at DESC").Find(&shares).Error
+	err := s.db.Select(&shares,
+		`SELECT * FROM shared_notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC`,
+		userID)
 	return shares, err
 }
 
 // DeleteShare 删除分享
 func (s *ShareService) DeleteShare(userID, shareID string) error {
-	return s.db.Where("id = ? AND user_id = ?", shareID, userID).Delete(&model.SharedNote{}).Error
+	_, err := s.db.Exec(
+		`UPDATE shared_notes SET deleted_at = ? WHERE id = ? AND user_id = ?`,
+		time.Now(), shareID, userID)
+	return err
 }
 
 // UpdateShareContent 更新分享内容（重新发布）
 func (s *ShareService) UpdateShareContent(userID, shareID, content string) error {
-	return s.db.Model(&model.SharedNote{}).
-		Where("id = ? AND user_id = ?", shareID, userID).
-		Update("content", content).Error
+	_, err := s.db.Exec(
+		`UPDATE shared_notes SET content = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		content, time.Now(), shareID, userID)
+	return err
 }
 
 func generateShareToken() (string, error) {
