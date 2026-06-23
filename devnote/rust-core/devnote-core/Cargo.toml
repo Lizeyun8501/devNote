@@ -9,7 +9,6 @@ license.workspace = true
 devnote-editor = { workspace = true }
 devnote-crypto = { workspace = true }
 devnote-search = { workspace = true }
-devnote-events = { workspace = true }
 devnote-sync = { workspace = true }
 devnote-crdt = { workspace = true }
 devnote-object = { workspace = true }

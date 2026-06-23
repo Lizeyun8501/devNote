@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 devnote-crypto = { path = "../devnote-crypto" }
-devnote-events = { workspace = true }
 devnote-observe = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

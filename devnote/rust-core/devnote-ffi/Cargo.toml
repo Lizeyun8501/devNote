@@ -12,9 +12,6 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 devnote-core = { workspace = true }
-devnote-events = { workspace = true }
-devnote-grpc = { workspace = true }
-devnote-websocket = { workspace = true }
 devnote-observe = { workspace = true }
 devnote-persistence = { workspace = true }
 devnote-crypto = { workspace = true }
