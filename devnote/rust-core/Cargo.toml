@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [workspace]
-# 23 个核心 crate
+# 17 个核心 crate（原 23 个，合并 6 个扩展 crate 为 devnote-extensions）
 # devnote-qt 是可选的 Qt 桥接 crate(动态加载 libdevnote_qt_bridge.so 作为桌面端 fallback)
 # 当前不通过任何生产代码直接依赖 —— 仅作为 reference 编译,未来可作为 devnote-canvas 的高级渲染后端
 # 编译时可执行 `cargo build -p devnote-qt` 单独验证
@@ -18,12 +18,10 @@ members = [
     "devnote-sync",
     "devnote-search",
     "devnote-editor",
-    "devnote-format",
+    "devnote-extensions",
     "devnote-crdt",
     "devnote-p2p",
     "devnote-plugin",
-    "devnote-canvas",
-    "devnote-workflow",
     "devnote-graph",
     "devnote-flashcard",
     "devnote-perf",
@@ -31,7 +29,6 @@ members = [
     # devnote-websocket removed: 未被任何 crate 依赖，实时通信由 Go sync-server 的 gorilla/websocket 承担
     # devnote-qt removed: Qt 桥接 crate 已从 workspace 中移除，不再作为成员编译
     # "devnote-qt",
-    "devnote-ipfs",
     # devnote-events removed: Event-Dispatch 模式已被 FRB v2 直接函数调用取代，事件枚举为死代码
     "devnote-database",
     "devnote-object",
@@ -39,10 +36,8 @@ members = [
     # 使用了 version.workspace = true 等 workspace 继承字段，非成员无法解析，
     # 导致依赖它的 crate（如 devnote-core）构建失败。
     "devnote-observe",
-    # P0-2: OCR 文字识别 + 图片搜索 —— 纯 Rust OCR 引擎（ocrs/rten），无需 Tesseract
-    "devnote-ocr",
-    # P2-9: 手写公式识别（数学墨迹）—— 基于规则的特征匹配识别器
-    "devnote-math-ink",
+    # P1-5: 以下 6 个 crate 已合并为 devnote-extensions（feature flag 控制）
+    # devnote-math-ink, devnote-ocr, devnote-ipfs, devnote-canvas, devnote-workflow, devnote-format
 ]
 resolver = "2"
 
@@ -61,26 +56,21 @@ devnote-crypto = { path = "devnote-crypto" }
 devnote-sync = { path = "devnote-sync" }
 devnote-search = { path = "devnote-search" }
 devnote-editor = { path = "devnote-editor" }
-devnote-format = { path = "devnote-format" }
+devnote-extensions = { path = "devnote-extensions" }
 devnote-crdt = { path = "devnote-crdt" }
 devnote-p2p = { path = "devnote-p2p" }
 devnote-database = { path = "devnote-database" }
 devnote-object = { path = "devnote-object" }
-devnote-canvas = { path = "devnote-canvas" }
-devnote-workflow = { path = "devnote-workflow" }
 devnote-graph = { path = "devnote-graph" }
 devnote-flashcard = { path = "devnote-flashcard" }
 devnote-perf = { path = "devnote-perf" }
 # devnote-qt removed: Qt 桥接 crate 已从 workspace 依赖中移除
 # devnote-qt = { path = "devnote-qt" }
-devnote-ipfs = { path = "devnote-ipfs" }
 # devnote-grpc removed: gRPC 契约已移除
 # devnote-websocket removed: 未被任何 crate 依赖
 # devnote-events removed: Event-Dispatch 模式已被 FRB v2 取代
-# P0-2: OCR 文字识别 + 图片搜索
-devnote-ocr = { path = "devnote-ocr" }
-# P2-9: 手写公式识别（数学墨迹）
-devnote-math-ink = { path = "devnote-math-ink" }
+# P1-5: 以下 6 个 crate 已合并为 devnote-extensions（feature flag 控制）
+# devnote-format, devnote-canvas, devnote-workflow, devnote-ipfs, devnote-ocr, devnote-math-ink
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
