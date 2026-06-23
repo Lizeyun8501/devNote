@@ -8,6 +8,7 @@ package service
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,8 +21,8 @@ import (
 	"github.com/devnote/sync-server/internal/model"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 // AuthService 认证服务
@@ -29,7 +30,7 @@ import (
 // 借鉴 1Password 认证设计：将"长期凭证"（密码 / SRP verifier）与
 // "短期凭证"（access / refresh token）解耦。
 type AuthService struct {
-	db          *gorm.DB
+	db          *sqlx.DB
 	cfg         *config.Config
 	srpParams   *auth.SRPParams
 	srpSessions map[string]*srpSessionEntry
@@ -56,7 +57,7 @@ const (
 //
 // 借鉴 1Password 的"认证上下文隔离"做法：每个 SRP 会话以 username 为 key
 // 独立存放，避免多用户并发登录时的状态串扰。
-func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
+func NewAuthService(db *sqlx.DB, cfg *config.Config) *AuthService {
 	s := &AuthService{
 		db:          db,
 		cfg:         cfg,
@@ -89,8 +90,12 @@ func (s *AuthService) cleanupSRPSessions() {
 // 即使数据库泄露，攻击者也无法直接获得明文密码。
 func (s *AuthService) Register(username, password string) (*model.User, error) {
 	var existing model.User
-	if err := s.db.Where("username = ?", username).First(&existing).Error; err == nil {
+	err := s.db.Get(&existing, `SELECT id FROM users WHERE username = ?`, username)
+	if err == nil {
 		return nil, errors.New("username already exists")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("query user: %w", err)
 	}
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -104,11 +109,12 @@ func (s *AuthService) Register(username, password string) (*model.User, error) {
 		Password: string(hashed),
 	}
 
-	if err := s.db.Create(user).Error; err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			return nil, errors.New("username already exists")
-		}
-		return nil, err
+	_, err = s.db.Exec(
+		`INSERT INTO users (id, username, password, srp_enabled, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)`,
+		user.ID, user.Username, user.Password, time.Now(), time.Now(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
 	}
 
 	return user, nil
@@ -121,8 +127,12 @@ func (s *AuthService) Register(username, password string) (*model.User, error) {
 // 即使 verifier 泄露，攻击者仍需对每个候选密码执行一次昂贵的模幂运算。
 func (s *AuthService) RegisterWithSRP(username, password string) (*model.User, error) {
 	var existing model.User
-	if err := s.db.Where("username = ?", username).First(&existing).Error; err == nil {
+	err := s.db.Get(&existing, `SELECT id FROM users WHERE username = ?`, username)
+	if err == nil {
 		return nil, errors.New("username already exists")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("query user: %w", err)
 	}
 
 	salt, err := auth.GenerateSalt()
@@ -143,11 +153,12 @@ func (s *AuthService) RegisterWithSRP(username, password string) (*model.User, e
 		SRPEnabled:  true,
 	}
 
-	if err := s.db.Create(user).Error; err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			return nil, errors.New("username already exists")
-		}
-		return nil, err
+	_, err = s.db.Exec(
+		`INSERT INTO users (id, username, srp_salt, srp_verifier, srp_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		user.ID, user.Username, user.SRPSalt, user.SRPVerifier, time.Now(), time.Now(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
 	}
 
 	return user, nil
@@ -161,8 +172,12 @@ func (s *AuthService) RegisterWithSRP(username, password string) (*model.User, e
 // 登录成功签发 JWT access token。
 func (s *AuthService) Login(username, password string) (*model.User, string, error) {
 	var user model.User
-	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
-		return nil, "", errors.New("invalid credentials")
+	err := s.db.Get(&user, `SELECT * FROM users WHERE username = ? AND deleted_at IS NULL`, username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", errors.New("invalid credentials")
+		}
+		return nil, "", fmt.Errorf("query user: %w", err)
 	}
 
 	// Fallback: if SRP is not enabled, use bcrypt password check
@@ -193,8 +208,12 @@ func (s *AuthService) Login(username, password string) (*model.User, string, err
 // **算法来源**: SRP-6a 协议（RFC 5054）。
 func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err error) {
 	var user model.User
-	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
-		return nil, nil, errors.New("user not found")
+	err = s.db.Get(&user, `SELECT * FROM users WHERE username = ? AND deleted_at IS NULL`, username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, errors.New("user not found")
+		}
+		return nil, nil, fmt.Errorf("query user: %w", err)
 	}
 
 	if !user.SRPEnabled {
@@ -225,8 +244,12 @@ func (s *AuthService) InitiateSRP(username string) (salt []byte, B []byte, err e
 // 验证客户端证明 M1 后返回服务端证明 M2，并签发 access token。
 func (s *AuthService) VerifySRP(username string, A, M1 []byte) (M2 []byte, token string, err error) {
 	var user model.User
-	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
-		return nil, "", errors.New("user not found")
+	err = s.db.Get(&user, `SELECT * FROM users WHERE username = ? AND deleted_at IS NULL`, username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", errors.New("user not found")
+		}
+		return nil, "", fmt.Errorf("query user: %w", err)
 	}
 
 	// 借鉴 1Password 的"一次性会话"模式：取出并立刻销毁会话，
@@ -347,16 +370,13 @@ func (s *AuthService) GenerateRefreshToken(userID string) (string, error) {
 		return "", err
 	}
 	tokenHash := hashToken(token)
-	refreshToken := &model.RefreshToken{
-		ID:        uuid.New().String(),
-		UserID:    userID,
-		Token:     tokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour), // 30 days
-		CreatedAt: time.Now(),
-		Revoked:   false,
-	}
-	if err := s.db.Create(refreshToken).Error; err != nil {
-		return "", err
+	now := time.Now()
+	_, err = s.db.Exec(
+		`INSERT INTO refresh_tokens (id, user_id, token, expires_at, created_at, revoked) VALUES (?, ?, ?, ?, ?, 0)`,
+		uuid.New().String(), userID, tokenHash, now.Add(30*24*time.Hour), now,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create refresh token: %w", err)
 	}
 	return token, nil
 }
@@ -375,9 +395,12 @@ func hashToken(token string) string {
 // 限制在单次刷新间隔内。
 func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, error) {
 	var rt model.RefreshToken
-	// P0 修复: 使用哈希查询，不暴露明文 token
-	if err := s.db.Where("token = ?", hashToken(refreshToken)).First(&rt).Error; err != nil {
-		return "", "", errors.New("invalid refresh token")
+	err := s.db.Get(&rt, `SELECT * FROM refresh_tokens WHERE token = ?`, hashToken(refreshToken))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", errors.New("invalid refresh token")
+		}
+		return "", "", fmt.Errorf("query refresh token: %w", err)
 	}
 
 	if rt.Revoked {
@@ -389,14 +412,19 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, e
 	}
 
 	// Revoke old refresh token (rotation)
-	if err := s.db.Model(&rt).Update("revoked", true).Error; err != nil {
+	_, err = s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE id = ?`, rt.ID)
+	if err != nil {
 		return "", "", fmt.Errorf("revoke old refresh token: %w", err)
 	}
 
 	// Find user
 	var user model.User
-	if err := s.db.Where("id = ?", rt.UserID).First(&user).Error; err != nil {
-		return "", "", errors.New("user not found")
+	err = s.db.Get(&user, `SELECT * FROM users WHERE id = ? AND deleted_at IS NULL`, rt.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", errors.New("user not found")
+		}
+		return "", "", fmt.Errorf("query user: %w", err)
 	}
 
 	// Generate new access token
@@ -424,13 +452,12 @@ func (s *AuthService) RefreshAccessToken(refreshToken string) (string, string, e
 // 现改为哈希后查询，与存储逻辑一致。
 func (s *AuthService) RevokeRefreshToken(token string) error {
 	tokenHash := hashToken(token)
-	result := s.db.Model(&model.RefreshToken{}).Where("token = ?", tokenHash).Update("revoked", true)
-	if result.Error != nil {
-		return fmt.Errorf("revoke refresh token: %w", result.Error)
+	result, err := s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE token = ?`, tokenHash)
+	if err != nil {
+		return fmt.Errorf("revoke refresh token: %w", err)
 	}
-	if result.RowsAffected == 0 {
-		// 未匹配到记录：token 已被吊销、已过期清理或输入错误
-		// 返回错误以便调用方知晓吊销未生效（避免静默失败）
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
 		return errors.New("refresh token not found or already revoked")
 	}
 	return nil
@@ -441,7 +468,8 @@ func (s *AuthService) RevokeRefreshToken(token string) error {
 // 借鉴 1Password 的"修改主密码即登出全部设备"做法：密码变更或账号被盗时，
 // 通过一次性吊销所有 token 强制重新登录。
 func (s *AuthService) RevokeAllUserTokens(userID string) error {
-	if err := s.db.Model(&model.RefreshToken{}).Where("user_id = ?", userID).Update("revoked", true).Error; err != nil {
+	_, err := s.db.Exec(`UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?`, userID)
+	if err != nil {
 		return fmt.Errorf("revoke all tokens: %w", err)
 	}
 	return nil

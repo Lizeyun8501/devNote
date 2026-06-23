@@ -56,8 +56,8 @@ func main() {
 	// Initialize metrics
 	metrics := observability.NewMetrics()
 
-	// Initialize storage
-	sqliteStore, err := storage.NewSQLiteStorage(cfg.DBPath)
+	// Initialize storage (sqlx + golang-migrate)
+	sqliteStore, err := storage.NewSQLiteStorage(cfg.DBPath, cfg.MigrationsPath)
 	if err != nil {
 		logger.Fatal("failed to init sqlite", zap.Error(err))
 	}

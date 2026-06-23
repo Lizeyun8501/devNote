@@ -9,16 +9,17 @@ import (
 
 	"github.com/devnote/business-server/internal/model"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // TagService provides CRUD, hierarchy, association, merge/split,
 // and statistics operations for tags.
 type TagService struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
 // NewTagService creates a new TagService.
-func NewTagService(db *sql.DB) *TagService {
+func NewTagService(db *sqlx.DB) *TagService {
 	return &TagService{db: db}
 }
 

@@ -12,25 +12,44 @@ import (
 
 	"github.com/devnote/sync-server/internal/config"
 	"github.com/devnote/sync-server/internal/middleware"
-	"github.com/devnote/sync-server/internal/model"
 	"github.com/devnote/sync-server/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, *service.AuthService) {
 	gin.SetMode(gin.TestMode)
 
-	// 使用内存 SQLite 数据库
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	// 使用内存 SQLite 数据库 (sqlx)
+	db, err := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 
-	// 自动迁移表结构
-	err = db.AutoMigrate(&model.User{}, &model.RefreshToken{})
+	// 创建表结构（与迁移脚本一致）
+	schema := `
+	CREATE TABLE IF NOT EXISTS users (
+		id            TEXT PRIMARY KEY,
+		username      TEXT NOT NULL UNIQUE,
+		password      TEXT NOT NULL DEFAULT '',
+		srp_salt      BLOB,
+		srp_verifier  BLOB,
+		srp_enabled   INTEGER NOT NULL DEFAULT 0,
+		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		deleted_at    DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS refresh_tokens (
+		id          TEXT PRIMARY KEY,
+		user_id     TEXT NOT NULL,
+		token       TEXT NOT NULL UNIQUE,
+		expires_at  DATETIME NOT NULL,
+		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		revoked     INTEGER NOT NULL DEFAULT 0
+	);
+	`
+	_, err = db.Exec(schema)
 	require.NoError(t, err)
 
 	// 测试配置

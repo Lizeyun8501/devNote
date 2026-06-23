@@ -2,21 +2,19 @@ package model
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 type SyncRecord struct {
-	ID         string         `gorm:"primaryKey" json:"id"`
-	UserID     string         `gorm:"index;size:64" json:"user_id"`
-	DeviceID   string         `gorm:"index;size:64" json:"device_id"`
-	NoteID     string         `gorm:"index;size:64" json:"note_id"`
-	Action     string         `gorm:"size:16" json:"action"`
-	Version    int64          `gorm:"index" json:"version"`
-	Timestamp  time.Time      `json:"timestamp"`
-	Payload    string         `gorm:"type:text" json:"payload"`
-	CreatedAt  time.Time      `json:"created_at"`
-	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+	ID         string     `db:"id" json:"id"`
+	UserID     string     `db:"user_id" json:"user_id"`
+	DeviceID   string     `db:"device_id" json:"device_id"`
+	NoteID     string     `db:"note_id" json:"note_id"`
+	Action     string     `db:"action" json:"action"`
+	Version    int64      `db:"version" json:"version"`
+	Timestamp  time.Time  `db:"timestamp" json:"timestamp"`
+	Payload    string     `db:"payload" json:"payload"`
+	CreatedAt  time.Time  `db:"created_at" json:"created_at"`
+	DeletedAt  *time.Time `db:"deleted_at" json:"-"`
 }
 
 const (

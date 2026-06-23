@@ -13,6 +13,7 @@ type Config struct {
 	Port           string
 	HTTPPort       string
 	DBPath         string
+	MigrationsPath string
 	JWTSecret      string
 	AllowedOrigins []string
 	S3Endpoint     string
@@ -60,6 +61,7 @@ func Load() *Config {
 		Port:           getEnv("PORT", "8080"),
 		HTTPPort:       getEnv("HTTP_PORT", "8081"),
 		DBPath:         getEnv("DB_PATH", "./data/sync.db"),
+		MigrationsPath: getEnv("MIGRATIONS_PATH", "./migrations"),
 		JWTSecret:      jwtSecret,
 		AllowedOrigins: allowedOrigins,
 		S3Endpoint:     getEnv("S3_ENDPOINT", ""),

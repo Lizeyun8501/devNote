@@ -39,14 +39,14 @@ func main() {
 		zap.String("db_path", cfg.DBPath),
 	)
 
-	// Init SQLite store
-	store, err := storage.NewSQLiteStore(cfg.DBPath)
+	// Init SQLite store (sqlx + golang-migrate)
+	store, err := storage.NewSQLiteStore(cfg.DBPath, cfg.MigrationsPath)
 	if err != nil {
 		log.Fatalf("failed to init sqlite: %v", err)
 	}
 	defer store.Close()
 
-	// Init services
+	// Init services (unified sqlx persistence layer)
 	metadataSvc := service.NewMetadataService(store.DB)
 	tagSvc := service.NewTagService(store.DB)
 	folderSvc := service.NewFolderService(store.DB)

@@ -4,19 +4,18 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"gorm.io/gorm"
 )
 
 type User struct {
-	ID          string         `gorm:"primaryKey" json:"id"`
-	Username    string         `gorm:"uniqueIndex;size:64" json:"username"`
-	Password    string         `gorm:"size:256" json:"-"`
-	SRPSalt     []byte         `gorm:"type:blob" json:"-"`
-	SRPVerifier []byte         `gorm:"type:blob" json:"-"`
-	SRPEnabled  bool           `gorm:"default:false" json:"srp_enabled"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID          string    `db:"id" json:"id"`
+	Username    string    `db:"username" json:"username"`
+	Password    string    `db:"password" json:"-"`
+	SRPSalt     []byte    `db:"srp_salt" json:"-"`
+	SRPVerifier []byte    `db:"srp_verifier" json:"-"`
+	SRPEnabled  bool      `db:"srp_enabled" json:"srp_enabled"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+	DeletedAt   *time.Time `db:"deleted_at" json:"-"`
 }
 
 type Claims struct {
@@ -26,10 +25,10 @@ type Claims struct {
 }
 
 type RefreshToken struct {
-	ID        string    `json:"id" gorm:"primaryKey"`
-	UserID    string    `json:"user_id" gorm:"index"`
-	Token     string    `json:"token" gorm:"uniqueIndex"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
-	Revoked   bool      `json:"revoked"`
+	ID        string    `db:"id" json:"id"`
+	UserID    string    `db:"user_id" json:"user_id"`
+	Token     string    `db:"token" json:"token"`
+	ExpiresAt time.Time `db:"expires_at" json:"expires_at"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	Revoked   bool      `db:"revoked" json:"revoked"`
 }

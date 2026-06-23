@@ -17,12 +17,13 @@ import (
 
 	"github.com/devnote/business-server/internal/model"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // KnowledgeService computes knowledge relationships, graph metrics,
 // centrality scores, clusters, and suggestions.
 type KnowledgeService struct {
-	db     *sql.DB
+	db     *sqlx.DB
 	config KnowledgeConfig
 }
 
@@ -33,7 +34,7 @@ type KnowledgeConfig struct {
 }
 
 // NewKnowledgeService creates a new KnowledgeService.
-func NewKnowledgeService(db *sql.DB, cfg KnowledgeConfig) *KnowledgeService {
+func NewKnowledgeService(db *sqlx.DB, cfg KnowledgeConfig) *KnowledgeService {
 	return &KnowledgeService{db: db, config: cfg}
 }
 

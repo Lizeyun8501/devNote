@@ -8,15 +8,16 @@ import (
 
 	"github.com/devnote/business-server/internal/model"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 // MetadataService provides CRUD and search operations for note metadata.
 type MetadataService struct {
-	db *sql.DB
+	db *sqlx.DB
 }
 
 // NewMetadataService creates a new MetadataService.
-func NewMetadataService(db *sql.DB) *MetadataService {
+func NewMetadataService(db *sqlx.DB) *MetadataService {
 	return &MetadataService{db: db}
 }
 

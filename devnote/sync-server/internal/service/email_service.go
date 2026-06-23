@@ -2,48 +2,45 @@ package service
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
+	"github.com/jmoiron/sqlx"
 )
 
 // EmailService 邮件转笔记服务
 type EmailService struct {
-	db          *gorm.DB
+	db          *sqlx.DB
 	syncService *SyncService
 	domain      string // 邮件域名，如 mail.devnote.app
 }
 
-// NewEmailService 创建邮件转笔记服务，并自动迁移别名表
-// P3 修复 (P3-13): 原实现 AutoMigrate 失败仅 log.Printf，服务继续启动但表结构可能不存在，
-// 后续邮件转笔记操作会失败。现改为返回 error，启动时若迁移失败则 fatal 退出
-func NewEmailService(db *gorm.DB, syncService *SyncService, domain string) (*EmailService, error) {
+// NewEmailService 创建邮件转笔记服务
+// 迁移已由 golang-migrate 统一管理，此处不再单独 AutoMigrate
+func NewEmailService(db *sqlx.DB, syncService *SyncService, domain string) (*EmailService, error) {
 	s := &EmailService{
 		db:          db,
 		syncService: syncService,
 		domain:      domain,
-	}
-	// 自动迁移邮件别名表
-	if err := db.AutoMigrate(&UserEmailAlias{}); err != nil {
-		return nil, fmt.Errorf("migrate email alias table: %w", err)
 	}
 	return s, nil
 }
 
 // UserEmailAlias 用户邮件别名
 type UserEmailAlias struct {
-	ID        string    `gorm:"primaryKey" json:"id"`
-	UserID    string    `gorm:"index" json:"user_id"`
-	Alias     string    `gorm:"uniqueIndex" json:"alias"`      // 别名，如 abc123
-	EmailAddr string    `gorm:"uniqueIndex" json:"email_addr"` // 完整邮箱 abc123@mail.devnote.app
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string    `db:"id" json:"id"`
+	UserID    string    `db:"user_id" json:"user_id"`
+	Alias     string    `db:"alias" json:"alias"`
+	EmailAddr string    `db:"email_addr" json:"email_addr"`
+	Active    bool      `db:"active" json:"active"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
 
 // GenerateAlias 为用户生成邮件别名
@@ -61,10 +58,14 @@ func (s *EmailService) GenerateAlias(userID string) (*UserEmailAlias, error) {
 		Alias:     alias,
 		EmailAddr: emailAddr,
 		Active:    true,
-		CreatedAt: time.Now(),
+		CreatedAt:  time.Now(),
 	}
 
-	if err := s.db.Create(userAlias).Error; err != nil {
+	_, err = s.db.Exec(
+		`INSERT INTO user_email_aliases (id, user_id, alias, email_addr, active, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		userAlias.ID, userAlias.UserID, userAlias.Alias, userAlias.EmailAddr, userAlias.Active, userAlias.CreatedAt,
+	)
+	if err != nil {
 		return nil, fmt.Errorf("create alias: %w", err)
 	}
 	return userAlias, nil
@@ -73,7 +74,8 @@ func (s *EmailService) GenerateAlias(userID string) (*UserEmailAlias, error) {
 // GetAliasByUserID 获取用户的邮件别名
 func (s *EmailService) GetAliasByUserID(userID string) (*UserEmailAlias, error) {
 	var alias UserEmailAlias
-	err := s.db.Where("user_id = ? AND active = ?", userID, true).First(&alias).Error
+	err := s.db.Get(&alias,
+		`SELECT * FROM user_email_aliases WHERE user_id = ? AND active = 1`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +84,9 @@ func (s *EmailService) GetAliasByUserID(userID string) (*UserEmailAlias, error) 
 
 // DeactivateAlias 停用别名
 func (s *EmailService) DeactivateAlias(aliasID string) error {
-	return s.db.Model(&UserEmailAlias{}).Where("id = ?", aliasID).Update("active", false).Error
+	_, err := s.db.Exec(
+		`UPDATE user_email_aliases SET active = 0 WHERE id = ?`, aliasID)
+	return err
 }
 
 // ProcessIncomingEmail 处理收到的邮件
@@ -94,8 +98,13 @@ func (s *EmailService) DeactivateAlias(aliasID string) error {
 func (s *EmailService) ProcessIncomingEmail(to, from, subject, textBody, htmlBody string) error {
 	// 查找别名对应的用户
 	var alias UserEmailAlias
-	if err := s.db.Where("email_addr = ? AND active = ?", to, true).First(&alias).Error; err != nil {
-		return fmt.Errorf("alias not found: %w", err)
+	err := s.db.Get(&alias,
+		`SELECT * FROM user_email_aliases WHERE email_addr = ? AND active = 1`, to)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("alias not found")
+		}
+		return fmt.Errorf("query alias: %w", err)
 	}
 
 	// 转换邮件内容为 Markdown

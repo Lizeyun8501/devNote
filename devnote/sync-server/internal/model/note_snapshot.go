@@ -2,17 +2,15 @@ package model
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 type NoteSnapshot struct {
-	ID        string         `gorm:"primaryKey" json:"id"`
-	NoteID    string         `gorm:"index;size:64" json:"note_id"`
-	UserID    string         `gorm:"index;size:64" json:"user_id"`
-	Version   int64          `json:"version"`
-	Content   string         `gorm:"type:text" json:"content"`
-	Checksum  string         `gorm:"size:64" json:"checksum"`
-	CreatedAt time.Time      `json:"created_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        string     `db:"id" json:"id"`
+	NoteID    string     `db:"note_id" json:"note_id"`
+	UserID    string     `db:"user_id" json:"user_id"`
+	Version   int64      `db:"version" json:"version"`
+	Content   string     `db:"content" json:"content"`
+	Checksum  string     `db:"checksum" json:"checksum"`
+	CreatedAt time.Time  `db:"created_at" json:"created_at"`
+	DeletedAt *time.Time `db:"deleted_at" json:"-"`
 }
