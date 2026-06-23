@@ -1,0 +1,38 @@
+# DevNote Business Server 配置文件
+# P2-7: Viper 统一配置管理
+#
+# 配置优先级: 环境变量 > 配置文件 > 默认值
+# 环境变量名见 config.go 中 BindEnv 调用（保持向后兼容）
+#
+# 部署: 将此文件放置于以下任一路径（按搜索顺序）:
+#   ./config.yaml
+#   ./config/config.yaml
+#   /etc/devnote/business-server/config.yaml
+
+# 服务端口
+port: "8081"
+
+# 数据库
+db_path: "./data/business.db"
+migrations_path: "./migrations"
+
+# JWT 密钥（生产环境必须设置，至少 32 字节）
+# 建议通过环境变量 BUSINESS_JWT_SECRET 注入，避免写入配置文件
+jwt_secret: ""
+
+# CORS
+allowed_origins:
+  - "*"
+
+# 日志
+log_level: "info"  # debug | info | warn | error
+
+# 业务参数
+max_tag_depth: 5
+max_folder_depth: 10
+max_note_size: 10485760  # 10MB
+pagerank_damping: 0.85
+pagerank_iters: 100
+
+# 限流（每秒请求数）
+rate_limit: 100

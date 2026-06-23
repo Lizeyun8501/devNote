@@ -145,6 +145,15 @@ dependencies:
   # ============================================================
   flutter_local_notifications: ^17.2.2
   timezone: ^0.9.4
+  # ============================================================
+  # P2-9: OpenAPI 契约驱动 Dart 客户端
+  # 由 openapi-generator 从 docs/api/*.yaml 自动生成
+  # 运行 ./scripts/generate_api_client.sh 重新生成
+  # ============================================================
+  devnote_sync_api:
+    path: lib/api/generated/sync_server
+  devnote_business_api:
+    path: lib/api/generated/business_server
 
 dev_dependencies:
   flutter_test:
