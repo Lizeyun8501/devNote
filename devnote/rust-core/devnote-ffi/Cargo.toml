@@ -6,7 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["cdylib", "staticlib", "lib"]
+# cdylib: 供 Flutter 加载的动态库
+# lib: 供 Rust 集成测试使用
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
 devnote-core = { workspace = true }
@@ -27,6 +29,7 @@ devnote-graph = { workspace = true }
 devnote-crdt = { workspace = true }
 devnote-flashcard = { workspace = true }
 devnote-ocr = { workspace = true }
+devnote-math-ink = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -40,12 +43,9 @@ lazy_static = "1"
 sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "tracing"] }
 sentry-anyhow = "0.34"
 # ============================================================
-# flutter_rust_bridge v2 —— 替代自研 C ABI FFI 桥接层
-# 自动生成类型安全的 Dart 绑定，消除手写 malloc/free 和 JSON 序列化
+# flutter_rust_bridge v2 —— 类型安全 FFI 绑定
+# 自动生成 Dart 绑定，消除手写 malloc/free 和 JSON 序列化
 # 支持 async/await、Stream、SSE 编解码器
 # 来源: https://crates.io/crates/flutter_rust_bridge
 # ============================================================
 flutter_rust_bridge = "2.12"
-
-[build-dependencies]
-cbindgen = "0.27"

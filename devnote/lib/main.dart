@@ -103,6 +103,9 @@ Future<void> _initializeApp() async {
   // 原问题: 多个 feature service（OcrService/VaultService/SpeechToTextService/MathInkService）
   // 依赖 FFIBridge，但 init() 在 feature 注册之后才调用，若注册过程中触发 FFI 调用
   // 会因 isAvailable=false 而失败。
+  //
+  // FRB v2 迁移: init() 现在调用 RustLib.init() 加载 native 动态库 + 初始化 SSE 编解码器，
+  // 然后调用 initEngines() 初始化所有 Rust 核心引擎（持久化/搜索/同步等）。
   try {
     await getIt<FFIBridge>().init();
   } catch (e) {

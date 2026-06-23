@@ -1,5 +1,8 @@
 #!/bin/bash
 # 测试基线 —— 建立 Rust/Go/Flutter 三层测试体系，确保架构变更不引入回归
+#
+# FRB v2 迁移: Rust 集成测试已改为直接调用 frb_api.rs 中的 pub fn 函数，
+# 替代原 C ABI dispatch 测试。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -27,6 +30,7 @@ run_step() {
 echo "=== Rust 测试 ==="
 cd "$PROJECT_ROOT/rust-core"
 
+# FRB v2 迁移: 集成测试现在调用 frb_api.rs 函数，替代 C ABI dispatch
 if cargo test --workspace 2>&1; then
     echo "✓ Rust 测试通过"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -51,6 +55,8 @@ echo "=== Flutter 测试 ==="
 
 if command -v flutter &>/dev/null; then
     cd "$PROJECT_ROOT"
+    # FRB codegen 生成的文件应已提交到仓库，无需每次测试时重新生成
+    # 如需重新生成，运行: ./scripts/codegen.sh
     if flutter test 2>&1; then
         echo "✓ Flutter 测试通过"
         PASS_COUNT=$((PASS_COUNT + 1))

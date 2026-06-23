@@ -1,26 +1,27 @@
-/// FFIBridge - 基于 dart:ffi 的 C ABI 桥接层
+/// FFIBridge - 基于 flutter_rust_bridge v2 的类型安全桥接层
 ///
-/// 直接调用 Rust 编译的动态库（libdevnote_ffi.so/.dylib/.dll），
-/// 通过 `devnote_dispatch` C ABI 函数与 Rust 核心引擎通信。
+/// 通过 FRB v2 自动生成的 Dart 绑定调用 Rust 核心引擎。
+/// 消除了手写 dart:ffi C ABI 代码（DynamicLibrary/lookupFunction/FFIResponseC）。
 ///
 /// ## 架构
-/// Dart → dart:ffi → devnote_dispatch(event, payload) → Rust handlers → 引擎
+/// Dart → FRB 生成绑定 → SSE 编解码器 → Rust frb_api.rs → 引擎
 ///
 /// ## 优势
-/// - 无需 flutter_rust_bridge codegen，零代码生成依赖
-/// - 直接 C ABI 调用，无中间序列化层
-/// - 编译时函数查找，运行时零开销
+/// - 类型安全：FRB 自动生成 Dart ↔ Rust 类型映射
+/// - 内存安全：FRB 自动管理跨语言内存分配/释放
+/// - 性能：SSE 编解码器比 JSON 序列化快数倍
+/// - 异步原生支持：FRB 原生支持 Future
 ///
 /// 借鉴: AppFlowy FFI 桥接模式 (https://github.com/AppFlowy-IO/AppFlowy)
+/// 来源: https://pub.dev/packages/flutter_rust_bridge
 
 import 'dart:convert';
 import 'dart:developer';
-import 'dart:ffi';
-import 'dart:io';
 
-import 'package:ffi/ffi.dart' hide Utf16Pointer;
-
-import 'ffi_response.dart';
+import 'package:devnote/src/rust/frb_generated.dart';
+import 'package:devnote/src/rust/library.dart' as rust;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'mixins/canvas_mixin.dart';
 import 'mixins/flashcard_mixin.dart';
 import 'mixins/git_mixin.dart';
@@ -29,35 +30,15 @@ import 'mixins/knowledge_mixin.dart';
 import 'mixins/p2p_mixin.dart';
 import 'mixins/vault_mixin.dart';
 
-// P1 修复 (P1-2): 重新导出 VaultEncryptedData，保持向后兼容
+// 重新导出 VaultEncryptedData，保持向后兼容
 // vault_service.dart 等调用方仍可通过 ffi_bridge.dart 导入该类型
 export 'mixins/vault_mixin.dart' show VaultEncryptedData;
-
-// ============================================================
-// C ABI 函数类型定义
-// ============================================================
-
-// devnote_init() -> *mut FFIResponse
-typedef _InitNative = Pointer<FFIResponseC> Function();
-typedef _InitDart = Pointer<FFIResponseC> Function();
-
-// devnote_destroy(*mut FFIResponse) -> void
-typedef _DestroyNative = Void Function(Pointer<FFIResponseC>);
-typedef _DestroyDart = void Function(Pointer<FFIResponseC>);
-
-// devnote_dispatch(*const c_char) -> *mut c_char
-typedef _DispatchNative = Pointer<Utf8> Function(Pointer<Utf8>);
-typedef _DispatchDart = Pointer<Utf8> Function(Pointer<Utf8>);
-
-// devnote_free_string(*mut c_char) -> void
-typedef _FreeStringNative = Void Function(Pointer<Utf8>);
-typedef _FreeStringDart = void Function(Pointer<Utf8>);
 
 // ============================================================
 // 数据类型
 // ============================================================
 
-/// FFI 协议版本 —— 与 Rust 端 handlers.rs 中 FFI_API_VERSION 常量严格一致
+/// FFI 协议版本 —— 与 Rust 端 frb_api.rs 中 VersionInfo.api_version 一致
 const int kFFIApiVersion = 1;
 
 /// 协议协商结果
@@ -74,14 +55,15 @@ class FfiVersionInfo {
     required this.features,
   });
 
-  bool get isCompatible => apiVersion >= compatibleMin && kFFIApiVersion >= compatibleMin;
+  bool get isCompatible =>
+      apiVersion >= compatibleMin && kFFIApiVersion >= compatibleMin;
 
-  factory FfiVersionInfo.fromJson(Map<String, dynamic> json) {
+  factory FfiVersionInfo.fromRust(rust.VersionInfo v) {
     return FfiVersionInfo(
-      apiVersion: (json['api_version'] as num).toInt(),
-      rustVersion: json['rust_version'] as String,
-      compatibleMin: (json['compatible_min'] as num).toInt(),
-      features: List<String>.from(json['features'] as List),
+      apiVersion: v.apiVersion,
+      rustVersion: v.rustVersion,
+      compatibleMin: v.compatibleMin,
+      features: v.features,
     );
   }
 }
@@ -112,9 +94,6 @@ class TranscriptSegmentFfi {
   });
 }
 
-// P1 修复 (P1-2): VaultEncryptedData 已迁移至 mixins/vault_mixin.dart
-// 并通过本文件顶部的 export 语句重新导出，保持向后兼容。
-
 // ============================================================
 // FFI 错误
 // ============================================================
@@ -122,75 +101,47 @@ class TranscriptSegmentFfi {
 /// FFI 调用异常
 class FfiException implements Exception {
   final String event;
-  final int code;
   final String message;
 
-  const FfiException(this.event, this.code, this.message);
+  const FfiException(this.event, this.message);
 
   @override
-  String toString() => 'FfiException($event, code=$code): $message';
+  String toString() => 'FfiException($event): $message';
 }
 
 // ============================================================
 // FFIBridge —— Flutter 与 Rust 核心通信桥接
 // ============================================================
 
-// P1 修复 (P1-2) + P2 修复 (P2-4): 应用领域 Mixin 拆分 God Class
-// - VaultMixin: 纯 Dart 加密实现，无 C ABI 依赖
-// - GitMixin: 全 stub，Rust 端无 handler
+// Mixin 拆分 God Class：
+// - VaultMixin: 纯 Dart 加密实现，无 FFI 依赖
+// - GitMixin: 全 stub
 // - P2PMixin: 全 stub，P2P 在 Dart 端独立实现
 // - KnowledgeMixin: 全 stub，KnowledgeService 走 sqflite 兜底
-// - CanvasMixin: 6 个 FFI + 10 个 stub
-// - GraphMixin: 2 个 FFI + 7 个 stub
-// - FlashcardMixin: 3 个 FFI + 7 个 stub
+// - CanvasMixin: 调用 FRB Canvas API
+// - GraphMixin: 调用 FRB Graph API
+// - FlashcardMixin: 调用 FRB Flashcard API
 // 对外 API 完全不变，所有调用方零改动。
-class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin, GraphMixin, FlashcardMixin {
+class FFIBridge
+    with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin, GraphMixin, FlashcardMixin {
   FFIBridge();
 
   bool _isAvailable = false;
   bool get isAvailable => _isAvailable;
 
-  DynamicLibrary? _dylib;
-
-  // C ABI 函数引用
-  late final _InitDart _devnoteInit;
-  late final _DestroyDart _devnoteDestroy;
-  late final _DispatchDart _devnoteDispatch;
-  late final _FreeStringDart _devnoteFreeString;
-
-  /// 初始化 FFI 桥接：加载动态库 + 查找函数 + 调用 devnote_init 注册处理器
+  /// 初始化 FRB 桥接：加载动态库 + 初始化 FRB 运行时 + 初始化 Rust 引擎
   Future<void> init() async {
     try {
-      final dylib = _openNativeLibrary();
-      if (dylib == null) {
-        throw StateError('Native library not found');
-      }
-      _dylib = dylib;
+      // 初始化 FRB 运行时（加载 native 动态库 + SSE 编解码器）
+      await RustLib.instance.init();
 
-      // 查找 C ABI 函数
-      _devnoteInit = _dylib!.lookupFunction<_InitNative, _InitDart>('devnote_init');
-      _devnoteDestroy = _dylib!.lookupFunction<_DestroyNative, _DestroyDart>('devnote_destroy');
-      _devnoteDispatch = _dylib!.lookupFunction<_DispatchNative, _DispatchDart>('devnote_dispatch');
-      _devnoteFreeString = _dylib!.lookupFunction<_FreeStringNative, _FreeStringDart>('devnote_free_string');
-
-      // 调用 devnote_init 注册所有事件处理器并初始化引擎
-      final responsePtr = _devnoteInit();
-      try {
-        if (responsePtr == nullptr) {
-          throw StateError('devnote_init returned null pointer');
-        }
-        final code = responsePtr.ref.code;
-        final message = responsePtr.ref.message.toDartString();
-        if (code != 0) {
-          throw StateError('FFI init failed ($code): $message');
-        }
-      } finally {
-        // P0 修复: 无论 toDartString 是否抛异常都释放 responsePtr
-        _devnoteDestroy(responsePtr);
-      }
+      // 初始化 Rust 核心引擎（持久化/搜索/同步等）
+      // 使用应用文档目录下的 devnote.db，确保数据持久化
+      final dbPath = await _getDbPath();
+      await rust.initEngines(dbPath: dbPath);
 
       _isAvailable = true;
-      log('FFIBridge initialized successfully', name: 'FFIBridge');
+      log('FFIBridge initialized successfully (FRB v2)', name: 'FFIBridge');
     } catch (e) {
       _isAvailable = false;
       log('FFIBridge init failed: $e', name: 'FFIBridge', level: 900);
@@ -198,89 +149,15 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     }
   }
 
-  /// 跨平台加载 native 动态库
-  DynamicLibrary? _openNativeLibrary() {
+  /// 获取数据库路径 —— 使用应用文档目录
+  Future<String> _getDbPath() async {
     try {
-      if (Platform.isAndroid) {
-        return DynamicLibrary.open('libdevnote_ffi.so');
-      }
-      if (Platform.isIOS) {
-        return DynamicLibrary.process();
-      }
-      if (Platform.isMacOS) {
-        return DynamicLibrary.open('libdevnote_ffi.dylib');
-      }
-      if (Platform.isLinux) {
-        return DynamicLibrary.open('libdevnote_ffi.so');
-      }
-      if (Platform.isWindows) {
-        return DynamicLibrary.open('devnote_ffi.dll');
-      }
-      throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
+      final dir = await getApplicationDocumentsDirectory();
+      return p.join(dir.path, 'devnote.db');
     } catch (_) {
-      return null;
+      // path_provider 不可用时使用默认路径
+      return 'devnote.db';
     }
-  }
-
-  // ============================================================
-  // 核心分发方法 —— 通过 C ABI 调用 Rust dispatch
-  // ============================================================
-
-  /// 调用 Rust 端 devnote_dispatch，返回解析后的 JSON 数据
-  dynamic _dispatch(String event, [Map<String, dynamic>? payload]) {
-    final requestJson = jsonEncode({
-      'event': event,
-      'payload': payload != null ? jsonEncode(payload) : null,
-    });
-
-    final requestPtr = requestJson.toNativeUtf8();
-    try {
-      final responsePtr = _devnoteDispatch(requestPtr);
-      if (responsePtr == nullptr) {
-        throw StateError('FFI dispatch returned null for event: $event');
-      }
-
-      try {
-        final responseJson = responsePtr.toDartString();
-        final response = jsonDecode(responseJson) as Map<String, dynamic>;
-        final code = (response['code'] as num).toInt();
-        if (code != 0) {
-          throw FfiException(event, code, response['message'] as String? ?? 'Unknown error');
-        }
-
-        final data = response['data'] as String?;
-        if (data == null || data.isEmpty) return null;
-        return jsonDecode(data);
-      } finally {
-        // P0 修复: 无论 toDartString/jsonDecode 是否抛异常都释放 responsePtr
-        // 避免 Rust 端 CString::into_raw() 分配的内存泄漏
-        _devnoteFreeString(responsePtr);
-      }
-    } finally {
-      malloc.free(requestPtr);
-    }
-  }
-
-  /// 分发并返回 Map
-  Map<String, dynamic> _dispatchMap(String event, [Map<String, dynamic>? payload]) {
-    final result = _dispatch(event, payload);
-    if (result == null) return {};
-    return Map<String, dynamic>.from(result as Map);
-  }
-
-  /// 分发并返回 List<Map>
-  List<Map<String, dynamic>> _dispatchList(String event, [Map<String, dynamic>? payload]) {
-    final result = _dispatch(event, payload);
-    if (result == null) return [];
-    return (result as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
-  }
-
-  /// 分发并返回 String
-  String _dispatchString(String event, [Map<String, dynamic>? payload]) {
-    final result = _dispatch(event, payload);
-    if (result == null) return '';
-    if (result is String) return result;
-    return result.toString();
   }
 
   void _checkAvailable() {
@@ -289,14 +166,9 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     }
   }
 
-  // P2 修复 (P2-4): CanvasMixin/GraphMixin/FlashcardMixin 的抽象方法实现
-  // 委托给现有的 _checkAvailable 和 _dispatch，保持单一 FDI 入口
+  // Mixin 宿主接口实现
   @override
   void ffiCheckAvailable() => _checkAvailable();
-
-  @override
-  dynamic ffiDispatch(String event, [Map<String, dynamic>? payload]) =>
-      _dispatch(event, payload);
 
   // ============================================================
   // 系统 API
@@ -305,8 +177,8 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
   Future<FfiVersionInfo?> negotiateVersion() async {
     if (!_isAvailable) return null;
     try {
-      final result = _dispatchMap('SystemEvent.GetVersion');
-      return FfiVersionInfo.fromJson(result);
+      final version = await rust.getVersion();
+      return FfiVersionInfo.fromRust(version);
     } catch (e) {
       log('FFI negotiateVersion failed: $e', name: 'FFIBridge');
       return null;
@@ -316,9 +188,8 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
   Future<Map<String, bool>?> healthCheck() async {
     if (!_isAvailable) return null;
     try {
-      final result = _dispatchMap('SystemEvent.HealthCheck');
-      final engines = result['engines'] as Map<String, dynamic>;
-      return engines.map((k, v) => MapEntry(k, v as bool));
+      final result = await rust.healthCheck();
+      return result.engines;
     } catch (e) {
       log('FFI healthCheck failed: $e', name: 'FFIBridge');
       return null;
@@ -326,7 +197,7 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
   }
 
   // ============================================================
-  // 笔记 API
+  // 笔记 API —— 调用 FRB 生成函数，转换为 Map 保持向后兼容
   // ============================================================
 
   Future<Map<String, dynamic>> createNote({
@@ -335,18 +206,18 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     required String folderId,
   }) async {
     _checkAvailable();
-    return _dispatchMap('NoteEvent.CreateNote', {
-      'title': title,
-      'content': content,
-      'folder_id': folderId,
-    });
+    final note = await rust.createNote(
+      title: title,
+      content: content,
+      folderId: folderId,
+    );
+    return note.toJson();
   }
 
   Future<Map<String, dynamic>?> getNote(String id) async {
     _checkAvailable();
-    final result = _dispatch('NoteEvent.GetNote', {'id': id});
-    if (result == null) return null;
-    return Map<String, dynamic>.from(result as Map);
+    final note = await rust.getNote(id: id);
+    return note?.toJson();
   }
 
   Future<Map<String, dynamic>> updateNote({
@@ -355,21 +226,19 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     required String content,
   }) async {
     _checkAvailable();
-    return _dispatchMap('NoteEvent.UpdateNote', {
-      'id': id,
-      'title': title,
-      'content': content,
-    });
+    final note = await rust.updateNote(id: id, title: title, content: content);
+    return note.toJson();
   }
 
   Future<void> deleteNote(String id) async {
     _checkAvailable();
-    _dispatch('NoteEvent.DeleteNote', {'id': id});
+    await rust.deleteNote(id: id);
   }
 
   Future<List<Map<String, dynamic>>> listNotes(String folderId) async {
     _checkAvailable();
-    return _dispatchList('NoteEvent.ListNotes', {'folder_id': folderId});
+    final notes = await rust.listNotes(folderId: folderId);
+    return notes.map((n) => n.toJson()).toList();
   }
 
   // ============================================================
@@ -381,30 +250,25 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     String? parentId,
   }) async {
     _checkAvailable();
-    return _dispatchMap('FolderEvent.CreateFolder', {
-      'name': name,
-      'parent_id': parentId,
-    });
+    final folder = await rust.createFolder(name: name, parentId: parentId);
+    return folder.toJson();
   }
 
   Future<List<Map<String, dynamic>>> listFolders({String? parentId}) async {
     _checkAvailable();
-    return _dispatchList('FolderEvent.ListFolders', {
-      'parent_id': parentId,
-    });
+    final folders = await rust.listFolders(parentId: parentId);
+    return folders.map((f) => f.toJson()).toList();
   }
 
-  /// 修复(P0): 补全 getFolder，原缺失导致 PersistenceDispatch.get(entity:'folder') 抛 UnimplementedError
   Future<Map<String, dynamic>?> getFolder(String id) async {
     _checkAvailable();
-    final result = _dispatch('FolderEvent.GetFolder', {'id': id});
-    if (result == null) return null;
-    return Map<String, dynamic>.from(result as Map);
+    final folder = await rust.getFolder(id: id);
+    return folder?.toJson();
   }
 
   Future<void> deleteFolder(String id) async {
     _checkAvailable();
-    _dispatch('FolderEvent.DeleteFolder', {'id': id});
+    await rust.deleteFolder(id: id);
   }
 
   Future<Map<String, dynamic>> updateFolder({
@@ -413,11 +277,12 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     String? parentId,
   }) async {
     _checkAvailable();
-    return _dispatchMap('FolderEvent.UpdateFolder', {
-      'id': id,
-      'name': name,
-      'parent_id': parentId,
-    });
+    final folder = await rust.updateFolder(
+      id: id,
+      name: name,
+      parentId: parentId,
+    );
+    return folder.toJson();
   }
 
   // ============================================================
@@ -426,17 +291,19 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
 
   Future<Map<String, dynamic>> createTag(String name) async {
     _checkAvailable();
-    return _dispatchMap('TagEvent.CreateTag', {'name': name});
+    final tag = await rust.createTag(name: name);
+    return tag.toJson();
   }
 
   Future<List<Map<String, dynamic>>> listTags() async {
     _checkAvailable();
-    return _dispatchList('TagEvent.ListTags');
+    final tags = await rust.listTags();
+    return tags.map((t) => t.toJson()).toList();
   }
 
   Future<void> deleteTag(String id) async {
     _checkAvailable();
-    _dispatch('TagEvent.DeleteTag', {'id': id});
+    await rust.deleteTag(id: id);
   }
 
   // ============================================================
@@ -450,27 +317,29 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     int? position,
   }) async {
     _checkAvailable();
-    return _dispatchMap('EditorEvent.InsertBlock', {
-      'note_id': noteId,
-      'block_type': blockType,
-      'content': content,
-      'position': position,
-    });
+    final block = await rust.insertBlock(
+      noteId: noteId,
+      blockType: blockType,
+      content: content,
+      position: position,
+    );
+    return block.toJson();
   }
 
   Future<void> updateBlock({required String id, required String content}) async {
     _checkAvailable();
-    _dispatch('EditorEvent.UpdateBlock', {'id': id, 'content': content});
+    await rust.updateBlock(id: id, content: content);
   }
 
   Future<void> deleteBlock(String id) async {
     _checkAvailable();
-    _dispatch('EditorEvent.DeleteBlock', {'id': id});
+    await rust.deleteBlock(id: id);
   }
 
   Future<List<Map<String, dynamic>>> getBlocks(String noteId) async {
     _checkAvailable();
-    return _dispatchList('EditorEvent.GetBlocks', {'note_id': noteId});
+    final blocks = await rust.getBlocks(noteId: noteId);
+    return blocks.map((b) => b.toJson()).toList();
   }
 
   // ============================================================
@@ -483,39 +352,40 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     int? offset,
   }) async {
     _checkAvailable();
-    return _dispatchList('SearchEvent.Search', {
-      'query': query,
-      'limit': limit,
-      'offset': offset,
-    });
+    final results = await rust.searchNotes(
+      query: query,
+      limit: limit,
+      offset: offset,
+    );
+    return results.map((r) => r.toJson()).toList();
   }
 
   // ============================================================
   // 加密 API
   // ============================================================
 
-  Future<String> encrypt({required String plaintextBase64, required String keyBase64}) async {
+  Future<String> encrypt({
+    required String plaintextBase64,
+    required String keyBase64,
+  }) async {
     _checkAvailable();
-    return _dispatchString('CryptoEvent.Encrypt', {
-      'plaintext_base64': plaintextBase64,
-      'key_base64': keyBase64,
-    });
+    return rust.encrypt(plaintextBase64: plaintextBase64, keyBase64: keyBase64);
   }
 
-  Future<String> decrypt({required String ciphertextBase64, required String keyBase64}) async {
+  Future<String> decrypt({
+    required String ciphertextBase64,
+    required String keyBase64,
+  }) async {
     _checkAvailable();
-    return _dispatchString('CryptoEvent.Decrypt', {
-      'ciphertext_base64': ciphertextBase64,
-      'key_base64': keyBase64,
-    });
+    return rust.decrypt(ciphertextBase64: ciphertextBase64, keyBase64: keyBase64);
   }
 
-  Future<String> deriveKey({required String password, required String saltBase64}) async {
+  Future<String> deriveKey({
+    required String password,
+    required String saltBase64,
+  }) async {
     _checkAvailable();
-    return _dispatchString('CryptoEvent.DeriveKey', {
-      'password': password,
-      'salt_base64': saltBase64,
-    });
+    return rust.deriveKey(password: password, saltBase64: saltBase64);
   }
 
   // ============================================================
@@ -524,22 +394,19 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
 
   Future<void> pushChanges() async {
     _checkAvailable();
-    _dispatch('SyncEvent.PushChanges');
+    await rust.pushChanges();
   }
 
   Future<void> pullChanges() async {
     _checkAvailable();
-    _dispatch('SyncEvent.PullChanges');
+    await rust.pullChanges();
   }
 
   Future<Map<String, dynamic>> getSyncStatus() async {
     _checkAvailable();
-    return _dispatchMap('SyncEvent.GetStatus');
+    final status = await rust.getSyncStatus();
+    return status.toJson();
   }
-
-  // ============================================================
-  // Canvas API —— 已迁移到 CanvasMixin (P2-4)
-  // ============================================================
 
   // ============================================================
   // 数据库 API
@@ -547,8 +414,7 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
 
   Future<String> createDatabase(String name) async {
     _checkAvailable();
-    final result = _dispatch('DatabaseEvent.CreateDatabase', {'name': name});
-    return jsonEncode(result);
+    return rust.createDatabase(name: name);
   }
 
   Future<String> evaluateFormula({
@@ -557,21 +423,13 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     required String allRows,
   }) async {
     _checkAvailable();
-    final result = _dispatch('DatabaseEvent.EvaluateFormula', {
-      'formula': formula,
-      'row_values': jsonDecode(rowValues),
-      'all_rows': jsonDecode(allRows),
-    });
+    final result = await rust.evaluateFormula(
+      formula: formula,
+      rowValues: rowValues,
+      allRows: allRows,
+    );
     return jsonEncode(result);
   }
-
-  // ============================================================
-  // 图谱 API —— 已迁移到 GraphMixin (P2-4)
-  // ============================================================
-
-  // ============================================================
-  // 闪卡 API —— 已迁移到 FlashcardMixin (P2-4)
-  // ============================================================
 
   // ============================================================
   // CRDT API
@@ -583,17 +441,13 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
     required String remoteOpsJson,
   }) async {
     _checkAvailable();
-    return _dispatchMap('CRDTEvent.Merge', {
-      'doc_id': docId,
-      'device_id': deviceId,
-      'remote_ops': jsonDecode(remoteOpsJson),
-    });
+    final result = await rust.crdtMerge(
+      docId: docId,
+      deviceId: deviceId,
+      remoteOpsJson: remoteOpsJson,
+    );
+    return result.toJson();
   }
-
-  // P1 修复 (P1-2): Git/P2P/Knowledge API 已迁移至 Mixin
-  // - GitMixin (mixins/git_mixin.dart)
-  // - P2PMixin (mixins/p2p_mixin.dart)
-  // - KnowledgeMixin (mixins/knowledge_mixin.dart)
 
   // ============================================================
   // 格式 API
@@ -601,19 +455,19 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
 
   Future<String> importMarkdown(String path) async {
     _checkAvailable();
-    return jsonEncode(_dispatch('FormatEvent.ImportMarkdown', {'path': path}));
+    return rust.importMarkdown(path: path);
   }
 
-  Future<void> exportMarkdown({required String notesJson, required String path}) async {
+  Future<void> exportMarkdown({
+    required String notesJson,
+    required String path,
+  }) async {
     _checkAvailable();
-    _dispatch('FormatEvent.ExportMarkdown', {
-      'notes': jsonDecode(notesJson),
-      'path': path,
-    });
+    await rust.exportMarkdown(notesJson: notesJson, path: path);
   }
 
   // ============================================================
-  // 语音转文字 API —— 无对应 C ABI handler
+  // 语音转文字 API —— Rust 端尚未集成 whisper-rs
   // ============================================================
 
   Future<TranscribeResultFfi> transcribeAudio({
@@ -627,46 +481,40 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
 
   Future<String> ocrRecognizeImage({required String imageBase64}) async {
     _checkAvailable();
-    return _dispatchString('OcrEvent.Recognize', {'image_base64': imageBase64});
+    return rust.ocrRecognizeImage(imageBase64: imageBase64);
   }
 
-  Future<Map<String, dynamic>> ocrRecognizeImageDetailed({required String imageBase64}) async => {'text': '', 'blocks': []};
-
-  Future<void> indexOcrText({required String noteId, required String ocrText}) async {
+  Future<Map<String, dynamic>> ocrRecognizeImageDetailed({
+    required String imageBase64,
+  }) async {
     _checkAvailable();
-    _dispatch('OcrEvent.IndexImage', {
-      'note_id': noteId,
-      'image_base64': '',
-    });
+    final result = await rust.ocrRecognizeImageDetailed(imageBase64: imageBase64);
+    return {
+      'text': result.text,
+      'lines': result.lines,
+      'confidence': result.confidence,
+    };
+  }
+
+  Future<void> indexOcrText({
+    required String noteId,
+    required String ocrText,
+  }) async {
+    _checkAvailable();
+    await rust.indexOcrText(noteId: noteId, ocrText: ocrText);
   }
 
   // ============================================================
-  // FeatureFlag API —— 修复(P1/R10-04): 补全 FFI 桥接，原 UI 为空壳
+  // FeatureFlag API —— Rust 端 frb_api.rs 暂未实现，返回空结果
   // ============================================================
 
-  Future<List<Map<String, dynamic>>> listFeatureFlags() async {
-    _checkAvailable();
-    return _dispatchList('FeatureFlagEvent.ListFlags');
-  }
+  Future<List<Map<String, dynamic>>> listFeatureFlags() async => [];
 
   Future<void> setFeatureFlag({
     required String key,
     required bool enabled,
     String description = '',
-  }) async {
-    _checkAvailable();
-    _dispatch('FeatureFlagEvent.SetFlag', {
-      'key': key,
-      'enabled': enabled,
-      'description': description,
-    });
-  }
-
-  // P1 修复 (P1-2): Vault API 已迁移至 mixins/vault_mixin.dart (VaultMixin)
-  // - vaultEncrypt / vaultDecrypt / vaultVerifyPassword
-  // - _generateSecureRandom / _deriveVaultKey
-  // - VaultEncryptedData 数据类
-  // 通过本文件顶部的 export 语句重新导出 VaultEncryptedData。
+  }) async {}
 
   // ============================================================
   // 工具方法
@@ -674,6 +522,5 @@ class FFIBridge with VaultMixin, GitMixin, P2PMixin, KnowledgeMixin, CanvasMixin
 
   void dispose() {
     _isAvailable = false;
-    _dylib = null;
   }
 }

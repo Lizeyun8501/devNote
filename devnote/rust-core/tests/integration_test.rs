@@ -1,340 +1,239 @@
 // 测试基线 —— 建立 Rust/Go/Flutter 三层测试体系，确保架构变更不引入回归
-// 集成测试：覆盖 FFI 生命周期、CRDT HLC 排序、持久化 Schema CRUD
+// 集成测试：覆盖 FRB API 生命周期、CRDT HLC 排序、持久化 Schema CRUD
+//
+// FRB v2 迁移: 原 C ABI dispatch 测试（devnote_init/devnote_dispatch/devnote_free_string）
+// 已替换为直接调用 frb_api.rs 中的 pub fn 函数，与 Dart 端 FRB 绑定调用方式一致。
 
 #[cfg(test)]
 // 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
 // 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod integration_tests {
-    use std::ffi::CStr;
-    use serde_json::json;
+    // ── FRB API 生命周期测试 ──────────────────────────────────────────────
+    // 直接调用 frb_api.rs 中的 pub fn，替代原 C ABI dispatch 测试
 
-    // ── FFI 生命周期测试 ──────────────────────────────────────────────────
-
-    #[test]
-    fn test_ffi_init_success() {
-        let result = devnote_ffi::devnote_init();
-        assert!(!result.is_null(), "init returned null");
-        let resp = unsafe { &*result };
-        assert_eq!(
-            resp.code,
-            devnote_ffi::FFIErrorCode::Success as i32,
-            "init failed: {}",
-            unsafe { CStr::from_ptr(resp.message).to_str().unwrap_or("") }
-        );
-        devnote_ffi::devnote_destroy(result);
+    /// 初始化引擎 —— 使用临时文件数据库，测试结束后自动清理
+    fn init_test_engines() -> tempfile::TempPath {
+        let tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        let path = tmp.path().to_str().unwrap().to_string();
+        devnote_ffi::frb_api::init_engines(path).expect("init_engines failed");
+        // 返回临时文件句柄，测试结束后自动删除
+        tmp.into_temp_path()
     }
 
     #[test]
-    fn test_ffi_create_note() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_init_engines_success() {
+        let _tmp = init_test_engines();
+        // init_engines 成功后，各引擎应已初始化
+        let health = devnote_ffi::frb_api::health_check();
+        assert_eq!(health.status, "ok");
+        assert!(
+            health.engines.get("persistence").copied().unwrap_or(false),
+            "persistence engine should be initialized"
+        );
+    }
+
+    #[test]
+    fn test_get_version() {
+        let version = devnote_ffi::frb_api::get_version();
+        assert_eq!(version.api_version, 1);
+        assert!(!version.rust_version.is_empty());
+        assert!(!version.features.is_empty());
+    }
+
+    #[test]
+    fn test_create_note() {
+        let _tmp = init_test_engines();
 
         // 创建文件夹
-        let folder_req = std::ffi::CString::new(
-            r#"{"event":"FolderEvent.CreateFolder","payload":"{\"name\":\"TestFolder\"}"}"#,
-        ).unwrap();
-        let result = dispatch_and_parse(folder_req.as_ptr());
-        assert_eq!(result.code, 0, "create folder failed: {}: {}", result.code, result.message);
-        let folder_data = get_data(&result);
-        let folder_id = folder_data["id"].as_str().expect("missing folder id");
+        let folder = devnote_ffi::frb_api::create_folder("TestFolder".to_string(), None)
+            .expect("create folder failed");
+        assert!(!folder.id.is_empty());
+        assert_eq!(folder.name, "TestFolder");
 
         // 创建笔记
-        let payload = json!({
-            "event": "NoteEvent.CreateNote",
-            "payload": json!({
-                "title": "测试笔记",
-                "content": "Hello DevNote",
-                "folder_id": folder_id
-            }).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-
-        assert_eq!(result.code, 0, "create note failed: {}: {}", result.code, result.message);
-        let data = get_data(&result);
-        assert!(!data["id"].as_str().unwrap_or("").is_empty());
-        assert_eq!(data["title"], "测试笔记");
+        let note = devnote_ffi::frb_api::create_note(
+            "测试笔记".to_string(),
+            "Hello DevNote".to_string(),
+            folder.id.clone(),
+        ).expect("create note failed");
+        assert!(!note.id.is_empty());
+        assert_eq!(note.title, "测试笔记");
     }
 
     #[test]
-    fn test_ffi_list_notes() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_list_notes() {
+        let _tmp = init_test_engines();
 
         // 创建文件夹
-        let folder_req = std::ffi::CString::new(
-            r#"{"event":"FolderEvent.CreateFolder","payload":"{\"name\":\"ListTestFolder\"}"}"#,
-        ).unwrap();
-        let result = dispatch_and_parse(folder_req.as_ptr());
-        let folder_id = get_data(&result)["id"].as_str().unwrap();
+        let folder = devnote_ffi::frb_api::create_folder("ListTestFolder".to_string(), None)
+            .expect("create folder failed");
 
         // 创建两条笔记
         for i in 1..=2 {
-            let payload = json!({
-                "event": "NoteEvent.CreateNote",
-                "payload": json!({
-                    "title": format!("Note{}", i),
-                    "content": format!("Content{}", i),
-                    "folder_id": folder_id
-                }).to_string()
-            }).to_string();
-            let req = std::ffi::CString::new(payload).unwrap();
-            let result = dispatch_and_parse(req.as_ptr());
-            assert_eq!(result.code, 0, "create note {} failed: {}: {}", i, result.code, result.message);
+            devnote_ffi::frb_api::create_note(
+                format!("Note{}", i),
+                format!("Content{}", i),
+                folder.id.clone(),
+            ).expect(&format!("create note {} failed", i));
         }
 
         // 列出笔记
-        let list_payload = json!({
-            "event": "NoteEvent.ListNotes",
-            "payload": json!({"folder_id": folder_id}).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(list_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-
-        assert_eq!(result.code, 0, "list notes failed: {}: {}", result.code, result.message);
-        let notes = get_data(&result).as_array().expect("data should be array");
+        let notes = devnote_ffi::frb_api::list_notes(folder.id)
+            .expect("list notes failed");
         assert_eq!(notes.len(), 2, "expected 2 notes, got {:?}", notes);
     }
 
     #[test]
-    fn test_ffi_update_note() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_update_note() {
+        let _tmp = init_test_engines();
 
         // 创建文件夹
-        let folder_req = std::ffi::CString::new(
-            r#"{"event":"FolderEvent.CreateFolder","payload":"{\"name\":\"UpdateTestFolder\"}"}"#,
-        ).unwrap();
-        let result = dispatch_and_parse(folder_req.as_ptr());
-        let folder_id = get_data(&result)["id"].as_str().unwrap();
+        let folder = devnote_ffi::frb_api::create_folder("UpdateTestFolder".to_string(), None)
+            .expect("create folder failed");
 
         // 创建笔记
-        let create_payload = json!({
-            "event": "NoteEvent.CreateNote",
-            "payload": json!({
-                "title": "旧标题",
-                "content": "旧内容",
-                "folder_id": folder_id
-            }).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(create_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        let note_id = get_data(&result)["id"].as_str().unwrap();
+        let note = devnote_ffi::frb_api::create_note(
+            "旧标题".to_string(),
+            "旧内容".to_string(),
+            folder.id.clone(),
+        ).expect("create note failed");
 
         // 更新笔记
-        let update_payload = json!({
-            "event": "NoteEvent.UpdateNote",
-            "payload": json!({
-                "id": note_id,
-                "title": "新标题",
-                "content": "新内容"
-            }).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(update_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-
-        assert_eq!(result.code, 0, "update note failed: {}: {}", result.code, result.message);
-        let data = get_data(&result);
-        assert_eq!(data["title"], "新标题");
-        // Note 模型没有 content 字段，内容存储在 blocks 中
-        assert!(data["blocks"].is_array(), "blocks should be an array");
+        let updated = devnote_ffi::frb_api::update_note(
+            note.id.clone(),
+            "新标题".to_string(),
+            "新内容".to_string(),
+        ).expect("update note failed");
+        assert_eq!(updated.title, "新标题");
     }
 
     #[test]
-    fn test_ffi_delete_note() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_delete_note() {
+        let _tmp = init_test_engines();
 
         // 创建文件夹
-        let folder_req = std::ffi::CString::new(
-            r#"{"event":"FolderEvent.CreateFolder","payload":"{\"name\":\"DeleteTestFolder\"}"}"#,
-        ).unwrap();
-        let result = dispatch_and_parse(folder_req.as_ptr());
-        let folder_id = get_data(&result)["id"].as_str().unwrap();
+        let folder = devnote_ffi::frb_api::create_folder("DeleteTestFolder".to_string(), None)
+            .expect("create folder failed");
 
         // 创建笔记
-        let create_payload = json!({
-            "event": "NoteEvent.CreateNote",
-            "payload": json!({
-                "title": "待删除",
-                "content": "bye",
-                "folder_id": folder_id
-            }).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(create_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        let note_id = get_data(&result)["id"].as_str().unwrap();
+        let note = devnote_ffi::frb_api::create_note(
+            "待删除".to_string(),
+            "bye".to_string(),
+            folder.id.clone(),
+        ).expect("create note failed");
 
         // 删除笔记
-        let delete_payload = json!({
-            "event": "NoteEvent.DeleteNote",
-            "payload": json!({"id": note_id}).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(delete_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(result.code, 0, "delete note failed: {}: {}", result.code, result.message);
-        assert_eq!(get_data(&result).as_bool(), Some(true));
+        devnote_ffi::frb_api::delete_note(note.id.clone())
+            .expect("delete note failed");
 
         // 验证已删除
-        let get_payload = json!({
-            "event": "NoteEvent.GetNote",
-            "payload": json!({"id": note_id}).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(get_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(
-            result.code,
-            devnote_ffi::FFIErrorCode::NotFound as i64,
-            "deleted note should not be found: code={}, msg={}",
-            result.code, result.message
-        );
+        let result = devnote_ffi::frb_api::get_note(note.id)
+            .expect("get_note should not error");
+        assert!(result.is_none(), "deleted note should not be found");
     }
 
     #[test]
-    fn test_ffi_full_lifecycle() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_full_lifecycle() {
+        let _tmp = init_test_engines();
 
         // 1. Create folder
-        let folder_req = std::ffi::CString::new(
-            r#"{"event":"FolderEvent.CreateFolder","payload":"{\"name\":\"FullLifecycle\"}"}"#,
-        ).unwrap();
-        let result = dispatch_and_parse(folder_req.as_ptr());
-        let folder_id = get_data(&result)["id"].as_str().unwrap();
+        let folder = devnote_ffi::frb_api::create_folder("FullLifecycle".to_string(), None)
+            .expect("create folder failed");
 
         // 2. Create note
-        let create_payload = json!({
-            "event": "NoteEvent.CreateNote",
-            "payload": json!({
-                "title": "Lifecycle",
-                "content": "Test",
-                "folder_id": folder_id
-            }).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(create_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(result.code, 0);
-        let note_id = get_data(&result)["id"].as_str().unwrap().to_string();
+        let note = devnote_ffi::frb_api::create_note(
+            "Lifecycle".to_string(),
+            "Test".to_string(),
+            folder.id.clone(),
+        ).expect("create note failed");
 
         // 3. Get note
-        let get_payload = json!({
-            "event": "NoteEvent.GetNote",
-            "payload": json!({"id": note_id}).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(get_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(result.code, 0);
-        assert_eq!(get_data(&result)["title"], "Lifecycle");
+        let fetched = devnote_ffi::frb_api::get_note(note.id.clone())
+            .expect("get_note failed")
+            .expect("note should exist");
+        assert_eq!(fetched.title, "Lifecycle");
 
         // 4. Update note
-        let update_payload = json!({
-            "event": "NoteEvent.UpdateNote",
-            "payload": json!({
-                "id": note_id,
-                "title": "Updated",
-                "content": "Updated content"
-            }).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(update_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(result.code, 0);
-        assert_eq!(get_data(&result)["title"], "Updated");
+        let updated = devnote_ffi::frb_api::update_note(
+            note.id.clone(),
+            "Updated".to_string(),
+            "Updated content".to_string(),
+        ).expect("update note failed");
+        assert_eq!(updated.title, "Updated");
 
         // 5. List notes
-        let list_payload = json!({
-            "event": "NoteEvent.ListNotes",
-            "payload": json!({"folder_id": folder_id}).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(list_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(result.code, 0);
-        assert_eq!(get_data(&result).as_array().unwrap().len(), 1);
+        let notes = devnote_ffi::frb_api::list_notes(folder.id)
+            .expect("list notes failed");
+        assert_eq!(notes.len(), 1);
 
         // 6. Delete note
-        let delete_payload = json!({
-            "event": "NoteEvent.DeleteNote",
-            "payload": json!({"id": note_id}).to_string()
-        }).to_string();
-        let req = std::ffi::CString::new(delete_payload).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(result.code, 0);
-        assert_eq!(get_data(&result).as_bool(), Some(true));
+        devnote_ffi::frb_api::delete_note(note.id.clone())
+            .expect("delete note failed");
+        let notes = devnote_ffi::frb_api::list_notes(folder.id)
+            .expect("list notes after delete failed");
+        assert!(notes.is_empty(), "folder should be empty after delete");
     }
 
     #[test]
-    fn test_ffi_unknown_event() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_folder_crud() {
+        let _tmp = init_test_engines();
 
-        let req = std::ffi::CString::new(r#"{"event":"UnknownEvent.Foo","payload":"{}"}"#).unwrap();
-        let result = dispatch_and_parse(req.as_ptr());
-        assert_eq!(
-            result.code,
-            devnote_ffi::FFIErrorCode::NotFound as i64,
-            "unknown event should return NotFound"
-        );
+        // Create
+        let folder = devnote_ffi::frb_api::create_folder("FolderCRUD".to_string(), None)
+            .expect("create folder failed");
+
+        // Read
+        let fetched = devnote_ffi::frb_api::get_folder(folder.id.clone())
+            .expect("get_folder failed")
+            .expect("folder should exist");
+        assert_eq!(fetched.name, "FolderCRUD");
+
+        // Update
+        let updated = devnote_ffi::frb_api::update_folder(
+            folder.id.clone(),
+            "UpdatedFolder".to_string(),
+            None,
+            None,
+        ).expect("update folder failed");
+        assert_eq!(updated.name, "UpdatedFolder");
+
+        // Delete
+        devnote_ffi::frb_api::delete_folder(folder.id)
+            .expect("delete folder failed");
     }
 
     #[test]
-    fn test_ffi_null_request() {
-        devnote_ffi::devnote_destroy(devnote_ffi::devnote_init());
+    fn test_tag_crud() {
+        let _tmp = init_test_engines();
 
-        let ptr = devnote_ffi::devnote_dispatch(std::ptr::null());
-        let result = parse_response(ptr);
-        assert_eq!(
-            result.code,
-            devnote_ffi::FFIErrorCode::InvalidArgument as i64,
-            "null request should return InvalidArgument"
+        // Create
+        let tag = devnote_ffi::frb_api::create_tag("rust".to_string())
+            .expect("create tag failed");
+        assert_eq!(tag.name, "rust");
+
+        // List
+        let tags = devnote_ffi::frb_api::list_tags()
+            .expect("list tags failed");
+        assert_eq!(tags.len(), 1);
+
+        // Delete
+        devnote_ffi::frb_api::delete_tag(tag.id)
+            .expect("delete tag failed");
+        let tags = devnote_ffi::frb_api::list_tags()
+            .expect("list tags after delete failed");
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_health_check() {
+        let _tmp = init_test_engines();
+        let result = devnote_ffi::frb_api::health_check();
+        assert_eq!(result.status, "ok");
+        // persistence 引擎应已初始化
+        assert!(
+            result.engines.get("persistence").copied().unwrap_or(false),
+            "persistence engine should be healthy"
         );
-    }
-
-    // ── 辅助函数 ──────────────────────────────────────────────────────────
-
-    /// 调用 devnote_dispatch 并解析返回的 JSON（含内层 data 解析），自动释放字符串
-    fn dispatch_and_parse(request: *const std::os::raw::c_char) -> DispatchResult {
-        let ptr = devnote_ffi::devnote_dispatch(request);
-        parse_response(ptr)
-    }
-
-    /// 解析后的调度响应
-    struct DispatchResult {
-        code: i64,
-        message: String,
-        /// 内层 data 已从 JSON 字符串解析为 Value（None 表示无数据/null）
-        data: Option<serde_json::Value>,
-    }
-
-    fn parse_response(ptr: *mut std::os::raw::c_char) -> DispatchResult {
-        assert!(!ptr.is_null(), "dispatch returned null pointer");
-        let json_str = unsafe { CStr::from_ptr(ptr) }
-            .to_str()
-            .expect("invalid UTF-8 in dispatch response");
-        let outer: serde_json::Value =
-            serde_json::from_str(json_str).expect("failed to parse dispatch JSON");
-        devnote_ffi::devnote_free_string(ptr);
-
-        let code = outer["code"].as_i64().unwrap_or(-1);
-        let message = outer["message"].as_str().unwrap_or("").to_string();
-
-        // DispatchResponse 的 data 字段是 Option<String>，
-        // 内层数据是 JSON 字符串，需要二次解析
-        let data = if let Some(inner_str) = outer["data"].as_str() {
-            match serde_json::from_str::<serde_json::Value>(inner_str) {
-                Ok(v) => Some(v),
-                Err(_) => {
-                    // 如果内层不是有效 JSON（例如 "true"），保留原始字符串
-                    Some(serde_json::Value::String(inner_str.to_string()))
-                }
-            }
-        } else {
-            None
-        };
-
-        DispatchResult { code, message, data }
-    }
-
-    /// 从 DispatchResult 中获取 data 字段，若不存在则 panic
-    fn get_data(result: &DispatchResult) -> &serde_json::Value {
-        result.data.as_ref().unwrap_or_else(|| {
-            panic!(
-                "expected data but got code={}, message={}",
-                result.code, result.message
-            )
-        })
     }
 
     // ── CRDT HLC 排序测试 ──────────────────────────────────────────────────

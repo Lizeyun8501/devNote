@@ -1,54 +1,41 @@
-// P2 修复 (P2-4): FFIBridge God Class 进一步拆分 —— Flashcard 领域 Mixin
+// Flashcard API Mixin —— 基于 flutter_rust_bridge v2
 //
-// 从 FFIBridge 中抽取的闪卡 API。部分方法通过 C ABI 调用 Rust，
-// 部分（无对应 handler）为 stub 返回降级结果。
+// 从 FFIBridge 中抽取的闪卡 API。通过 FRB 生成的类型安全绑定调用 Rust。
 //
 // 拆分理由:
-// - Flashcard 操作与 FFI 核心职责（C ABI 分发）无关，属领域 API
-// - 9 个方法（3 个 FFI + 6 个 stub），约 30 行
+// - Flashcard 操作属领域 API，独立后便于维护
+// - 9 个方法（3 个 FRB + 6 个 stub），约 30 行
 // - 独立后便于未来对接 Dart 端 sqflite 兜底实现
 
-import 'dart:convert';
+import 'package:devnote/src/rust/library.dart' as rust;
 
 /// Flashcard API Mixin
 ///
-/// 宿主类需实现 [ffiCheckAvailable] 和 [ffiDispatch] 提供 C ABI 访问能力。
-/// 无对应 C ABI handler 的方法返回空结果，调用方应使用 Dart 端 sqflite 兜底。
+/// 宿主类需实现 [ffiCheckAvailable] 提供 FFI 可用性检查。
+/// 无对应 FRB 函数的方法返回空结果，调用方应使用 Dart 端 sqflite 兜底。
 mixin FlashcardMixin {
   /// 宿主类提供：检查 FFI 是否可用，不可用则抛 StateError
   void ffiCheckAvailable();
 
-  /// 宿主类提供：通过 C ABI 调用 Rust dispatch，返回解析后的 JSON 数据
-  dynamic ffiDispatch(String event, [Map<String, dynamic>? payload]);
-
-  // ── 有 C ABI handler 的方法 ──────────────────────────────
+  // ── 有 FRB 绑定的方法 ───────────────────────────────────
 
   Future<String> createDeck({required String name, required String description}) async {
     ffiCheckAvailable();
-    return jsonEncode(ffiDispatch('FlashcardEvent.CreateDeck', {
-      'name': name,
-      'description': description,
-    }));
+    return rust.createDeck(name: name, description: description);
   }
 
   Future<String> reviewFlashcard({required String flashcardId, required int quality}) async {
     ffiCheckAvailable();
-    return jsonEncode(ffiDispatch('FlashcardEvent.ReviewCard', {
-      'flashcard_id': flashcardId,
-      'quality': quality,
-    }));
+    return rust.reviewFlashcard(flashcardId: flashcardId, quality: quality);
   }
 
   Future<String> getDueCards({required String deckId, int? limit}) async {
     ffiCheckAvailable();
-    return jsonEncode(ffiDispatch('FlashcardEvent.GetDueCards', {
-      'deck_id': deckId,
-      'limit': limit,
-    }));
+    return rust.getDueCards(deckId: deckId, limit: limit);
   }
 
-  // ── 无 C ABI handler 的 stub 方法（返回空结果）──────────
-  // P0 修复: 返回空结果而非抛异常，调用方应使用 Dart 端 sqflite 兜底
+  // ── 无 FRB 绑定的 stub 方法（返回空结果）──────────
+  // 调用方应使用 Dart 端 sqflite 兜底
 
   Future<void> deleteDeck({required String deckId}) async {}
   Future<List<Map<String, dynamic>>> listDecks() async => [];

@@ -8,6 +8,9 @@
 # 支持的平台:
 #   linux-x86_64   macos-x86_64   macos-aarch64
 #   windows-x86_64 android-arm64   ios-aarch64
+#
+# 注意: flutter_rust_bridge codegen 需要单独运行：
+#   flutter_rust_bridge_codegen generate
 ###############################################################################
 set -euo pipefail
 
@@ -63,6 +66,9 @@ usage() {
   --debug               以 Debug 模式构建
   --output-dir <dir>    输出目录 (默认: rust-ffi-libs/)
   -h, --help            显示帮助信息
+
+注意: flutter_rust_bridge codegen 需要单独运行:
+  flutter_rust_bridge_codegen generate
 EOF
   exit 0
 }
@@ -165,6 +171,7 @@ echo "       Target:    ${TRIPLE}"
 echo "[2/4] 构建模式:   ${CARGO_PROFILE}"
 echo "[3/4] 输出目录:   ${OUTPUT_DIR}/${TARGET}/"
 echo "       产物名称:   ${LIB_NAME}"
+echo "[4/4] 注意: FRB codegen 请单独运行 flutter_rust_bridge_codegen generate"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
