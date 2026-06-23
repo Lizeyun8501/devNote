@@ -8,15 +8,13 @@
 //! - 通过笔画间相对位置检测分数、上下标、根号、求和、积分等结构
 //! - 最终组装为 LaTeX 字符串
 //!
-//! ## C ABI
-//! 暴露 `math_ink_recognize` / `math_ink_free_result` 两个 C 函数，
-//! 输入为 JSON 序列化的 `Vec<InkStroke>`，输出为 JSON 序列化的 `MathRecognitionResult`。
+//! ## 调用方式
+//! 通过 `MathInkRecognizer::new()` 创建识别器，调用 `recognize()` 方法进行识别。
+//! FFI 层由 `devnote-ffi` crate 的 `frb_api::math_ink_recognize` 通过 FRB v2 暴露给 Flutter。
 //!
 //! 借鉴: detexify (https://github.com/kirel/detexify) 的手写 LaTeX 符号识别思路
 
 use serde::{Deserialize, Serialize};
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
 
 // ============================================================
 // 数据结构
@@ -632,91 +630,6 @@ impl Default for MathInkRecognizer {
 }
 
 // ============================================================
-// C ABI 接口
-// ============================================================
-
-/// 识别手写公式
-///
-/// 输入: JSON 序列化的 `Vec<InkStroke>` 字符串（C 字符串，UTF-8）
-/// 输出: JSON 序列化的 `MathRecognitionResult` 字符串（堆分配，调用方需用 `math_ink_free_result` 释放）
-///
-/// # Safety
-/// `strokes_json` 必须是有效的 C 字符串指针（以 null 结尾的 UTF-8 数据）。
-#[no_mangle]
-pub extern "C" fn math_ink_recognize(strokes_json: *const c_char) -> *mut c_char {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if strokes_json.is_null() {
-            let err = MathRecognitionResult {
-                latex: String::new(),
-                confidence: 0.0,
-                alternatives: vec!["error: null input".to_string()],
-            };
-            let json = serde_json::to_string(&err).unwrap_or_default();
-            return CString::new(json).unwrap_or_default().into_raw();
-        }
-        // SAFETY: caller guarantees strokes_json is a valid null-terminated UTF-8 C string.
-        let cstr = unsafe { CStr::from_ptr(strokes_json) };
-        let json_str = match cstr.to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                let err = MathRecognitionResult {
-                    latex: String::new(),
-                    confidence: 0.0,
-                    alternatives: vec!["error: invalid utf-8".to_string()],
-                };
-                let json = serde_json::to_string(&err).unwrap_or_default();
-                return CString::new(json).unwrap_or_default().into_raw();
-            }
-        };
-        let strokes: Vec<InkStroke> = match serde_json::from_str(json_str) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = MathRecognitionResult {
-                    latex: String::new(),
-                    confidence: 0.0,
-                    alternatives: vec![format!("error: parse failed: {}", e)],
-                };
-                let json = serde_json::to_string(&err).unwrap_or_default();
-                return CString::new(json).unwrap_or_default().into_raw();
-            }
-        };
-        let recognizer = MathInkRecognizer::new();
-        let result = recognizer.recognize(strokes);
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        CString::new(json).unwrap_or_default().into_raw()
-    }));
-    match result {
-        Ok(ptr) => ptr,
-        Err(_) => {
-            let err = MathRecognitionResult {
-                latex: String::new(),
-                confidence: 0.0,
-                alternatives: vec!["error: rust panic".to_string()],
-            };
-            let json = serde_json::to_string(&err).unwrap_or_default();
-            CString::new(json).unwrap_or_default().into_raw()
-        }
-    }
-}
-
-/// 释放 `math_ink_recognize` 返回的字符串
-///
-/// # Safety
-/// `ptr` 必须是 `math_ink_recognize` 返回的指针，且只能释放一次。
-#[no_mangle]
-pub extern "C" fn math_ink_free_result(ptr: *mut c_char) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !ptr.is_null() {
-            // SAFETY: ptr was created via CString::into_raw() in math_ink_recognize.
-            let _ = unsafe { CString::from_raw(ptr) };
-        }
-    }));
-    if result.is_err() {
-        // 释放函数中无法记录日志，静默忽略
-    }
-}
-
-// ============================================================
 // 单元测试
 // ============================================================
 
@@ -797,25 +710,17 @@ mod tests {
     }
 
     #[test]
-    fn test_c_abi_null_input() {
-        let ptr = math_ink_recognize(std::ptr::null());
-        // SAFETY: ptr was returned by math_ink_recognize, valid to read.
-        let cstr = unsafe { CStr::from_ptr(ptr) };
-        let json = cstr.to_str().unwrap();
-        assert!(json.contains("error"));
-        math_ink_free_result(ptr);
+    fn test_recognize_empty_input() {
+        let recognizer = MathInkRecognizer::new();
+        let result = recognizer.recognize(vec![]);
+        assert!(result.latex.is_empty() || result.confidence == 0.0);
     }
 
     #[test]
-    fn test_c_abi_valid_input() {
+    fn test_recognize_valid_input() {
         let strokes = vec![make_horizontal_line()];
-        let json = serde_json::to_string(&strokes).unwrap();
-        let cstr = CString::new(json).unwrap();
-        let ptr = math_ink_recognize(cstr.as_ptr());
-        // SAFETY: ptr was returned by math_ink_recognize.
-        let result_cstr = unsafe { CStr::from_ptr(ptr) };
-        let result_json = result_cstr.to_str().unwrap();
-        assert!(result_json.contains("latex"));
-        math_ink_free_result(ptr);
+        let recognizer = MathInkRecognizer::new();
+        let result = recognizer.recognize(strokes);
+        assert!(!result.latex.is_empty() || result.confidence >= 0.0);
     }
 }

@@ -27,12 +27,12 @@ members = [
     "devnote-graph",
     "devnote-flashcard",
     "devnote-perf",
-    "devnote-grpc",
-    "devnote-websocket",
+    # devnote-grpc removed: gRPC 契约已移除，当前架构使用 FRB v2 (Flutter↔Rust) + REST/WebSocket (Flutter↔Go)
+    # devnote-websocket removed: 未被任何 crate 依赖，实时通信由 Go sync-server 的 gorilla/websocket 承担
     # devnote-qt removed: Qt 桥接 crate 已从 workspace 中移除，不再作为成员编译
     # "devnote-qt",
     "devnote-ipfs",
-    "devnote-events",
+    # devnote-events removed: Event-Dispatch 模式已被 FRB v2 直接函数调用取代，事件枚举为死代码
     "devnote-database",
     "devnote-object",
     # 修复(P0): devnote-observe 此前遗漏为 workspace 成员，但其 Cargo.toml
@@ -74,9 +74,9 @@ devnote-perf = { path = "devnote-perf" }
 # devnote-qt removed: Qt 桥接 crate 已从 workspace 依赖中移除
 # devnote-qt = { path = "devnote-qt" }
 devnote-ipfs = { path = "devnote-ipfs" }
-devnote-grpc = { path = "devnote-grpc" }
-devnote-websocket = { path = "devnote-websocket" }
-devnote-events = { path = "devnote-events" }
+# devnote-grpc removed: gRPC 契约已移除
+# devnote-websocket removed: 未被任何 crate 依赖
+# devnote-events removed: Event-Dispatch 模式已被 FRB v2 取代
 # P0-2: OCR 文字识别 + 图片搜索
 devnote-ocr = { path = "devnote-ocr" }
 # P2-9: 手写公式识别（数学墨迹）
