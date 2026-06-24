@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/canvas/bloc/canvas_bloc.dart';
 import 'package:devnote/features/canvas/bloc/canvas_event.dart';
 import 'package:devnote/features/canvas/bloc/canvas_state.dart';
@@ -98,7 +99,7 @@ class _CanvasViewState extends State<_CanvasView> {
       }
     } catch (e) {
       // 创建画布失败，记录错误但不展示给用户（页面会显示 Bloc 错误状态）
-      debugPrint('Canvas initialization failed: $e');
+      AppLogger.e('Canvas', 'Canvas initialization failed', error: e);
     }
   }
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/workflow/git_service.dart';
 
 class CommitDialog extends StatefulWidget {
@@ -36,7 +37,7 @@ class _CommitDialogState extends State<CommitDialog> {
       }
     } catch (e) {
       // 加载 git status 失败，静默失败不阻塞 UI
-      debugPrint('Git status load failed: $e');
+      AppLogger.w('Git', 'Git status load failed', error: e);
     }
   }
 

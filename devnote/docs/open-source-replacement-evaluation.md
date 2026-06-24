@@ -1,7 +1,7 @@
 # DevNote 开源软件替代综合评估报告
 
 > 评估日期：2026-06-04
-> 评估范围：/workspace/devnote 全项目（Dart/Flutter 55个文件 + Rust 23个crate + Go 6个模块）
+> 评估范围：/workspace/devnote 全项目（Dart/Flutter 55个文件 + Rust 17个crate + Go 6个模块）
 > 目的：识别所有可替换为更优秀开源软件的功能模块，提升稳定性、性能、可扩展性和可维护性
 
 ---
@@ -548,7 +548,7 @@
 
 ## 八、总结
 
-**评估范围**：55个Dart模块 + 23个Rust crate + 6个Go模块
+**评估范围**：55个Dart模块 + 17个Rust crate + 6个Go模块
 
 **评估结论**：
 - **已在用行业标准库**：36个模块（无需替换）

@@ -22,6 +22,11 @@ final GetIt getIt = GetIt.instance;
 /// 注册 core 层依赖（bridges / dispatch / performance / database / config / logger）。
 /// features 层依赖由各自的 *_module.dart register 函数注册，由 main.dart 调用。
 Future<void> setupDependencies() async {
+  // P2-4: 统一配置管理 —— 最先注册并初始化，确保后续所有服务可读取已加载的配置
+  // 通过 getIt<AppConfig>() 获取单例，UI 可监听 ChangeNotifier 响应配置变化
+  getIt.registerSingleton<AppConfig>(AppConfig.instance);
+  await getIt<AppConfig>().init();
+
   // Core bridges (eager singletons)
   getIt.registerSingleton<FFIBridge>(FFIBridge());
 

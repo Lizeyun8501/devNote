@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/features/database/bloc/database_state.dart';
 
@@ -36,7 +36,7 @@ class DatabaseService {
         options = Map<String, dynamic>.from(jsonDecode(row['options'] as String));
       } catch (e) {
         // JSON 解析失败时使用空 options
-        debugPrint('Failed to decode field options: $e');
+        AppLogger.w('Database', 'Failed to decode field options', error: e);
       }
     }
     return DatabaseFieldModel(
@@ -62,7 +62,7 @@ class DatabaseService {
             .toList();
       } catch (e) {
         // JSON 解析失败时使用空 filters
-        debugPrint('Failed to decode view filters: $e');
+        AppLogger.w('Database', 'Failed to decode view filters', error: e);
       }
     }
     List<SortModel> sorts = [];
@@ -77,7 +77,7 @@ class DatabaseService {
             .toList();
       } catch (e) {
         // JSON 解析失败时使用空 sorts
-        debugPrint('Failed to decode view sorts: $e');
+        AppLogger.w('Database', 'Failed to decode view sorts', error: e);
       }
     }
     return DatabaseViewModel(
@@ -644,7 +644,7 @@ class DatabaseService {
               }
             } catch (e) {
               // JSON 解析失败时跳过该条目，不中断整个查找过程
-              debugPrint('Failed to parse row-block binding: $e');
+              AppLogger.w('Database', 'Failed to parse row-block binding', error: e);
             }
           }
         }
@@ -684,7 +684,7 @@ class DatabaseService {
       );
     } catch (e) {
       // 数据库查询失败，回退为 null
-      debugPrint('Failed to get row by block id: $e');
+      AppLogger.w('Database', 'Failed to get row by block id', error: e);
     }
 
     return null;

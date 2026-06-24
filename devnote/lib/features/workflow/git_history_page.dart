@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/workflow/git_service.dart';
 
 class GitHistoryPage extends StatefulWidget {
@@ -32,7 +33,7 @@ class _GitHistoryPageState extends State<GitHistoryPage> {
       setState(() {
         _loading = false;
       });
-      debugPrint('Git history load failed: $e');
+      AppLogger.w('Git', 'Git history load failed', error: e);
     }
   }
 
@@ -44,7 +45,7 @@ class _GitHistoryPageState extends State<GitHistoryPage> {
         _selectedCommit = commitHash;
       });
     } catch (e) {
-      debugPrint('Git diff load failed: $e');
+      AppLogger.w('Git', 'Git diff load failed', error: e);
     }
   }
 

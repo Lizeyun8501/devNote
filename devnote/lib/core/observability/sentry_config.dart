@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 
 /// Sentry 配置类 —— 集中管理 DSN、环境、采样率、用户同意状态等设置
 class SentryConfig {
@@ -92,7 +93,7 @@ Future<void> setupSentry({SentryConfig? config}) async {
   // 检查 SENTRY_DSN 环境变量 —— 未设置时不初始化 Sentry（优雅降级）
   final dsn = String.fromEnvironment('SENTRY_DSN');
   if (dsn.isEmpty) {
-    debugPrint('[Sentry] SENTRY_DSN not set — Sentry is disabled (graceful fallback)');
+    AppLogger.i('Sentry', 'SENTRY_DSN not set — Sentry is disabled (graceful fallback)');
     return;
   }
 
@@ -109,7 +110,7 @@ Future<void> setupSentry({SentryConfig? config}) async {
       if (!cfg._userConsent) {
         options.tracesSampleRate = 0.0;
         options.profilesSampleRate = 0.0;
-        debugPrint('[Sentry] User consent not granted — sampling rates set to 0');
+        AppLogger.i('Sentry', 'User consent not granted — sampling rates set to 0');
       }
 
       // 过滤 PII（个人身份信息）
@@ -137,7 +138,7 @@ Future<void> setupSentry({SentryConfig? config}) async {
         options.debug = true;
       }
 
-      debugPrint('[Sentry] Initialized — environment: ${cfg.environment}, dsn: $dsn, consent: ${cfg._userConsent}');
+      AppLogger.i('Sentry', 'Initialized — environment: ${cfg.environment}, dsn: $dsn, consent: ${cfg._userConsent}');
     },
     appRunner: () {
       // appRunner 由外部调用 runApp；此处为空操作

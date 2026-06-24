@@ -24,6 +24,7 @@ import 'package:devnote/core/router/app_router.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/router/route_registry.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/observability/sentry_config.dart';
 import 'package:devnote/core/performance/startup_manager.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
@@ -66,7 +67,7 @@ void main() {
   // 全局错误边界：捕获同步异常和 Flutter 框架异常
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    debugPrint('FlutterError: ${details.exception}');
+    AppLogger.e('FlutterError', 'Flutter framework error', error: details.exception, stackTrace: details.stack);
   };
 
   // runZonedGuarded 捕获所有未处理的异步异常
@@ -74,7 +75,7 @@ void main() {
     await _initializeApp();
     runApp(const DevNoteApp());
   }, (error, stack) {
-    debugPrint('Unhandled async error: $error\n$stack');
+    AppLogger.e('Zone', 'Unhandled async error', error: error, stackTrace: stack);
   });
 }
 
@@ -93,7 +94,7 @@ Future<void> _initializeApp() async {
       LocaleProvider.instance.setLocale(savedLocale);
     }
   } catch (e) {
-    debugPrint('Warning: Failed to load saved locale: $e');
+    AppLogger.w('Locale', 'Failed to load saved locale', error: e);
   }
 
   // 修复: Sentry 初始化提前到所有 feature 注册之前，确保注册过程中的异常能被捕获
@@ -109,7 +110,7 @@ Future<void> _initializeApp() async {
   try {
     await getIt<FFIBridge>().init();
   } catch (e) {
-    debugPrint('Warning: FFI bridge initialization failed: $e');
+    AppLogger.w('FFIBridge', 'FFI bridge initialization failed', error: e);
   }
 
   // features 层依赖由各自模块注册，消除 core → features 反向依赖
@@ -139,16 +140,16 @@ Future<void> _initializeApp() async {
   try {
     await getIt<NotificationService>().init();
   } catch (e) {
-    debugPrint('Warning: Notification service initialization failed: $e');
+    AppLogger.w('Notification', 'Notification service initialization failed', error: e);
   }
 
   // Initialize platform channel
   try {
     final platformChannel = DevNotePlatformChannel();
     final deviceInfo = await platformChannel.getDeviceInfo();
-    debugPrint('Platform channel initialized. Device info: $deviceInfo');
+    AppLogger.i('PlatformChannel', 'Platform channel initialized. Device info: $deviceInfo');
   } catch (e) {
-    debugPrint('Warning: Platform channel initialization failed: $e');
+    AppLogger.w('PlatformChannel', 'Platform channel initialization failed', error: e);
   }
 
   // Initialize performance systems

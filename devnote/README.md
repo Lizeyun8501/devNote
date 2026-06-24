@@ -40,14 +40,14 @@ DevNote 采用五层架构设计，自底向上依次为：
 | UI 框架 | Flutter 3.x + Dart 3.x | 跨平台 UI，支持 Android/iOS/macOS/Windows/Linux/Web |
 | 状态管理 | flutter_bloc + Provider | BLoC 模式响应式状态管理 |
 | 路由 | go_router | 声明式路由，支持深链接 |
-| 数据持久化 | sqflite + freezed | SQLite 本地存储 + 不可变数据模型 |
+| 数据持久化 | Rust rusqlite (权威源) + sqflite (兜底) | SQLite 本地存储 + 不可变数据模型 |
 | 核心引擎 | Rust (Edition 2021) | 高性能核心逻辑 |
 | 加密 | XChaCha20-Poly1305 + Argon2id | 端到端加密 |
 | 协同 | CRDT (RGA) | 无冲突复制数据类型，支持离线编辑 |
-| 搜索 | SQLite FTS5 | 全文搜索引擎 |
+| 搜索 | tantivy (主引擎) + SQLite FTS5 (兼容) | 全文搜索引擎 |
 | 同步服务 | Go + Gin | 云端同步服务器 |
 | 云存储 | S3 兼容 | 对象存储后端 |
-| FFI 桥接 | dart:ffi | Rust 与 Dart 的跨语言调用 |
+| FFI 桥接 | flutter_rust_bridge v2.12.0 | Rust 与 Dart 的跨语言调用 |
 
 ## 项目结构
 
@@ -100,16 +100,15 @@ devnote/
 │   ├── devnote-search/           # 全文搜索引擎
 │   ├── devnote-sync/             # 同步引擎
 │   ├── devnote-persistence/      # 持久化层
-│   ├── devnote-format/           # 格式转换
 │   ├── devnote-p2p/              # P2P 通信
 │   ├── devnote-plugin/           # 插件运行时
-│   ├── devnote-canvas/           # 画布引擎
-│   ├── devnote-workflow/         # 工作流引擎
 │   ├── devnote-graph/            # 图谱引擎
 │   ├── devnote-database/         # 数据库引擎
 │   ├── devnote-object/           # 对象系统
 │   ├── devnote-flashcard/        # 闪卡引擎
-│   └── devnote-perf/             # 性能优化
+│   ├── devnote-perf/             # 性能优化
+│   ├── devnote-observe/          # 可观测性
+│   └── devnote-extensions/       # 扩展功能 (OCR/ASR 等)
 ├── sync-server/                  # Go 同步服务器
 │   ├── cmd/server/               # 服务入口
 │   ├── internal/
@@ -242,7 +241,7 @@ flutter build web       # Web
 
 ### v0.1.0 - MVP (当前)
 - [x] 五层架构搭建
-- [x] Rust 核心引擎 (16 个 crate)
+- [x] Rust 核心引擎 (17 个 crate)
 - [x] Flutter 功能模块 (16 个 feature)
 - [x] Go 同步服务器
 - [x] FFI 桥接层

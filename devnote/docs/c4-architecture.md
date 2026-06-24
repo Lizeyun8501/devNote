@@ -56,7 +56,7 @@ graph TB
     end
 
     subgraph "Rust 核心引擎"
-        RustCore["🦀 Rust Core\n(19 个 Crate)\n核心业务逻辑 + CRDT + 加密 + 搜索 + 插件沙箱"]
+        RustCore["🦀 Rust Core\n(17 个 Crate)\n核心业务逻辑 + CRDT + 加密 + 搜索 + 插件沙箱"]
     end
 
     subgraph "存储层"
@@ -64,7 +64,7 @@ graph TB
     end
 
     subgraph "服务端"
-        SyncServer["🔄 Sync Server\nGo · 同步服务\n(gRPC + WebSocket + S3)"]
+        SyncServer["🔄 Sync Server\nGo · 同步服务\n(REST + WebSocket + S3)"]
         BizServer["🏢 Business Server\nGo · 业务服务\n(REST API · JWT 认证 · 知识图谱)"]
     end
 
@@ -73,7 +73,7 @@ graph TB
         P2P["🌐 P2P 网络\n(libp2p)"]
     end
 
-    FlutterApp -->|"Dart FFI\n(JSON 序列化)"| FFIBridge
+    FlutterApp -->|"Dart FFI\n(FRB v2 SSE 编解码)"| FFIBridge
     FFIBridge -->|"C ABI\n(extern \"C\")"| RustCore
     RustCore -->|"SQL\n(rusqlite)"| SQLite
     FlutterApp -->|"gRPC / WebSocket"| SyncServer
