@@ -13,6 +13,9 @@
 // 借鉴：1Password 的"本地密钥包"设计 —— 双层加密（平台硬件保护 + 应用层加密）
 // 来源: https://support.1password.com/secure-key/
 //
+
+import 'dart:math';
+import 'dart:typed_data';
 // 注意：本实现为抽象层 + 兜底实现。完整安全需在 Android MainActivity.kt
 // 和 iOS AppDelegate.swift 中实现对应的 MethodChannel handler，
 // 调用 AndroidKeyStore / iOS Keychain。未实现原生侧时自动降级到加密 SharedPreferences。
@@ -160,7 +163,7 @@ class EncryptedPrefsStorage implements SecureKeyStorage {
     final random = Random.secure();
     final nonce = Uint8List.fromList(List.generate(12, (_) => random.nextInt(256)));
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, null));
+      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
     final ciphertextWithTag = cipher.process(data);
     final result = BytesBuilder();
     result.add(nonce);
@@ -173,7 +176,7 @@ class EncryptedPrefsStorage implements SecureKeyStorage {
     final nonce = data.sublist(0, 12);
     final ciphertextWithTag = data.sublist(12);
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(false, AEADParameters(KeyParameter(key), 128, nonce, null));
+      ..init(false, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
     return cipher.process(ciphertextWithTag);
   }
 }

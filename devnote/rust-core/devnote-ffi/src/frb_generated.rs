@@ -620,7 +620,8 @@ return crate::frb_api::FolderData{id: var_id, name: var_name, parent_id: var_par
                     // Codec=Sse (Serialization based), see doc to use other codecs
                     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {let mut var_status = <String>::sse_decode(deserializer);
 let mut var_engines = <std::collections::HashMap<String, bool>>::sse_decode(deserializer);
-return crate::frb_api::HealthCheckResult{status: var_status, engines: var_engines};}
+let mut var_warnings = <Vec<String>>::sse_decode(deserializer);
+return crate::frb_api::HealthCheckResult{status: var_status, engines: var_engines, warnings: var_warnings};}
                 }
                 
                 impl SseDecode for i32 {
@@ -999,7 +1000,8 @@ impl flutter_rust_bridge::IntoIntoDart<crate::frb_api::FolderData> for crate::fr
                 fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
                     [
                     self.status.into_into_dart().into_dart(),
-self.engines.into_into_dart().into_dart()
+self.engines.into_into_dart().into_dart(),
+self.warnings.into_into_dart().into_dart()
                 ].into_dart()
                 }
             }
@@ -1244,7 +1246,8 @@ impl flutter_rust_bridge::IntoIntoDart<crate::frb_api::VersionInfo> for crate::f
                 impl SseEncode for crate::frb_api::HealthCheckResult {
                     // Codec=Sse (Serialization based), see doc to use other codecs
                     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {<String>::sse_encode(self.status, serializer);
-<std::collections::HashMap<String, bool>>::sse_encode(self.engines, serializer);}
+<std::collections::HashMap<String, bool>>::sse_encode(self.engines, serializer);
+<Vec<String>>::sse_encode(self.warnings, serializer);}
                 }
                 
                 impl SseEncode for i32 {

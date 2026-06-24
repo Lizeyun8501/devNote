@@ -6,6 +6,8 @@
 
 // P1 修复 (P1-3): 改为从 core 层导入 HighlightModel，打破 ai ↔ search 循环依赖
 import 'package:devnote/core/persistence/models/highlight_model.dart';
+// 导入 SearchResultModel 用于 toSearchResultModel 转换
+import 'package:devnote/features/search/search_service.dart' show SearchResultModel;
 
 /// 搜索结果来源
 ///

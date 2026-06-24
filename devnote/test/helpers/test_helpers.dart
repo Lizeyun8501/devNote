@@ -12,6 +12,7 @@ import 'package:devnote/core/persistence/models/tag_model.dart';
 import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/tag_repository.dart';
+import 'package:devnote/core/services/note_block_creation_port.dart';
 import 'package:devnote/features/editor/models/block_model.dart' as editor;
 import 'package:devnote/features/search/search_service.dart';
 
@@ -222,6 +223,23 @@ class MockNoteRepository implements NoteRepository {
         .take(limit)
         .toList();
   }
+
+  @override
+  Future<List<NoteModel>> searchNotes(String query) async {
+    if (_error != null) throw _error!;
+    final lowerQuery = query.toLowerCase();
+    return _notes
+        .where((n) =>
+            n.title.toLowerCase().contains(lowerQuery) ||
+            n.content.toLowerCase().contains(lowerQuery))
+        .toList();
+  }
+
+  @override
+  Future<List<String>> getNoteIdsByTag(String tagId) async {
+    if (_error != null) throw _error!;
+    return [];
+  }
 }
 
 /// Mock 文件夹仓库
@@ -262,6 +280,22 @@ class MockFolderRepository implements FolderRepository {
       _folders[index] = folder;
     }
     return folder;
+  }
+}
+
+/// Mock 笔记 block 创建端口
+///
+/// 实现 NoteBlockCreationPort 接口，createBlockFromString 为空操作，
+/// 用于 NotesBloc 测试，避免依赖 editor 模块的具体实现。
+class MockNoteBlockCreationPort implements NoteBlockCreationPort {
+  @override
+  Future<void> createBlockFromString({
+    required String noteId,
+    required String blockTypeName,
+    required String content,
+    required int position,
+  }) async {
+    // 测试桩：不做任何操作
   }
 }
 

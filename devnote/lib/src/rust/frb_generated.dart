@@ -2068,11 +2068,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   HealthCheckResult dco_decode_health_check_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return HealthCheckResult(
       status: dco_decode_String(arr[0]),
       engines: dco_decode_Map_String_bool_None(arr[1]),
+      warnings: dco_decode_list_String(arr[2]),
     );
   }
 
@@ -2475,7 +2476,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_status = sse_decode_String(deserializer);
     var var_engines = sse_decode_Map_String_bool_None(deserializer);
-    return HealthCheckResult(status: var_status, engines: var_engines);
+    var var_warnings = sse_decode_list_String(deserializer);
+    return HealthCheckResult(
+      status: var_status,
+      engines: var_engines,
+      warnings: var_warnings,
+    );
   }
 
   @protected
@@ -2958,6 +2964,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.status, serializer);
     sse_encode_Map_String_bool_None(self.engines, serializer);
+    sse_encode_list_String(self.warnings, serializer);
   }
 
   @protected

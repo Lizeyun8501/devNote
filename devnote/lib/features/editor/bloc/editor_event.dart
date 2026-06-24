@@ -82,9 +82,13 @@ class ToggleBlockType extends EditorEvent {
   List<Object?> get props => [blockId, newType];
 }
 
-class UndoEvent extends EditorEvent {}
+class UndoEvent extends EditorEvent {
+  const UndoEvent();
+}
 
-class RedoEvent extends EditorEvent {}
+class RedoEvent extends EditorEvent {
+  const RedoEvent();
+}
 
 class SelectBlock extends EditorEvent {
   final String blockId;

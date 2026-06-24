@@ -12,7 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:devnote/features/settings/import_export/export_service.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
 import 'package:devnote/features/editor/services/editor_service.dart';
-import '../../helpers/test_helpers.dart';
+import '../helpers/test_helpers.dart';
 
 // Mock EditorService —— 避免对 SQLite/FFI 的依赖
 class MockEditorService extends Mock implements EditorService {}

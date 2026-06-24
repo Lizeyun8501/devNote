@@ -12,16 +12,22 @@ import 'package:devnote/features/search/bloc/search_bloc.dart';
 import 'package:devnote/features/search/bloc/search_event.dart';
 import 'package:devnote/features/search/bloc/search_state.dart';
 import 'package:devnote/features/search/search_service.dart';
-import '../../helpers/test_helpers.dart';
+import 'package:devnote/features/ai/semantic_search_service.dart';
+import '../helpers/test_helpers.dart';
 
 // Mock SearchService —— 避免对 Dispatch/FFI 的依赖
 class MockSearchService extends Mock implements SearchService {}
 
+// Mock SemanticSearchService —— 避免对数据库/嵌入服务的依赖
+class MockSemanticSearchService extends Mock implements SemanticSearchService {}
+
 void main() {
   late MockSearchService mockSearchService;
+  late MockSemanticSearchService mockSemanticSearchService;
 
   setUp(() {
     mockSearchService = MockSearchService();
+    mockSemanticSearchService = MockSemanticSearchService();
     // 注册 fallback 值
     registerFallbackValue(<String>[]);
   });
@@ -33,7 +39,7 @@ void main() {
 
   group('SearchBloc', () {
     test('初始状态为 SearchInitial', () {
-      final bloc = SearchBloc(mockSearchService);
+      final bloc = SearchBloc(mockSearchService, mockSemanticSearchService);
       expect(bloc.state, isA<SearchInitial>());
       bloc.close();
     });
@@ -41,7 +47,7 @@ void main() {
     group('SearchQueryChanged', () {
       blocTest<SearchBloc, SearchState>(
         '查询为空时立即回到 SearchInitial',
-        build: () => SearchBloc(mockSearchService),
+        build: () => SearchBloc(mockSearchService, mockSemanticSearchService),
         act: (bloc) => bloc.add(const SearchQueryChanged('')),
         expect: () => [isA<SearchInitial>()],
       );
@@ -55,7 +61,7 @@ void main() {
               .thenAnswer((_) async => <String>[]);
           when(() => mockSearchService.addToSearchHistory(any()))
               .thenAnswer((_) async {});
-          return SearchBloc(mockSearchService);
+          return SearchBloc(mockSearchService, mockSemanticSearchService);
         },
         act: (bloc) => bloc.add(const SearchQueryChanged('Flutter')),
         wait: const Duration(milliseconds: 400),
@@ -76,7 +82,7 @@ void main() {
               .thenAnswer((_) async => ['Flutter']);
           when(() => mockSearchService.addToSearchHistory(any()))
               .thenAnswer((_) async {});
-          return SearchBloc(mockSearchService);
+          return SearchBloc(mockSearchService, mockSemanticSearchService);
         },
         act: (bloc) => bloc.add(const SearchSubmitted('Flutter')),
         wait: const Duration(milliseconds: 100),
@@ -91,7 +97,7 @@ void main() {
 
       blocTest<SearchBloc, SearchState>(
         '提交空查询时回到 SearchInitial',
-        build: () => SearchBloc(mockSearchService),
+        build: () => SearchBloc(mockSearchService, mockSemanticSearchService),
         act: (bloc) => bloc.add(const SearchSubmitted('')),
         expect: () => [isA<SearchInitial>()],
       );
@@ -105,7 +111,7 @@ void main() {
               .thenAnswer((_) async => <String>[]);
           when(() => mockSearchService.addToSearchHistory(any()))
               .thenAnswer((_) async {});
-          return SearchBloc(mockSearchService);
+          return SearchBloc(mockSearchService, mockSemanticSearchService);
         },
         act: (bloc) => bloc.add(const SearchSubmitted('Flutter')),
         wait: const Duration(milliseconds: 100),
@@ -129,7 +135,7 @@ void main() {
               )).thenAnswer((_) async => [mockResults[0]]);
           when(() => mockSearchService.getSearchHistory())
               .thenAnswer((_) async => <String>[]);
-          return SearchBloc(mockSearchService);
+          return SearchBloc(mockSearchService, mockSemanticSearchService);
         },
         seed: () => SearchResults(
           query: 'Flutter',
@@ -151,7 +157,7 @@ void main() {
 
       blocTest<SearchBloc, SearchState>(
         '无当前查询时不执行过滤搜索',
-        build: () => SearchBloc(mockSearchService),
+        build: () => SearchBloc(mockSearchService, mockSemanticSearchService),
         act: (bloc) => bloc.add(const SearchFilterChanged(folderId: 'folder-1')),
         wait: const Duration(milliseconds: 100),
         expect: () => [],
@@ -164,7 +170,7 @@ void main() {
         build: () {
           when(() => mockSearchService.getSearchHistory())
               .thenAnswer((_) async => ['Flutter', 'Dart']);
-          return SearchBloc(mockSearchService);
+          return SearchBloc(mockSearchService, mockSemanticSearchService);
         },
         seed: () => SearchResults(
           query: 'Flutter',
@@ -184,7 +190,7 @@ void main() {
         build: () {
           when(() => mockSearchService.getSearchHistory())
               .thenAnswer((_) async => ['Flutter']);
-          return SearchBloc(mockSearchService);
+          return SearchBloc(mockSearchService, mockSemanticSearchService);
         },
         act: (bloc) => bloc.add(const SearchHistoryRequested()),
         wait: const Duration(milliseconds: 100),

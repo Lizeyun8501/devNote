@@ -15,6 +15,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 ///
 /// P0 修复: 原实现使用 `in_memory()`，FFI 模式下数据重启全部丢失。
 /// 现改为文件持久化，数据库路径通过参数传入，与 Dart 端共享 `devnote.db`。
+///
+/// P0 修复: 原实现中 search/database/object/graph/flashcard 引擎初始化失败时
+/// 用 `if let Ok` 静默吞错，用户无法感知功能受限。现改为收集失败引擎名并记录
+/// 到 INIT_WARNINGS，通过 health_check() 暴露给 Dart 端，由 UI 提示用户
+/// "核心引擎未加载，功能受限"。
 Future<void> initEngines({required String dbPath}) =>
     RustLib.instance.api.crateFrbApiInitEngines(dbPath: dbPath);
 
@@ -23,6 +28,9 @@ Future<VersionInfo> getVersion() =>
     RustLib.instance.api.crateFrbApiGetVersion();
 
 /// 健康检查 —— 替代原 SystemEvent.HealthCheck
+///
+/// 返回各引擎状态及初始化警告。Dart 端应检查 warnings 非空时向用户提示
+/// "核心引擎未加载，功能受限"，并列出受影响的功能模块。
 Future<HealthCheckResult> healthCheck() =>
     RustLib.instance.api.crateFrbApiHealthCheck();
 
@@ -471,10 +479,17 @@ class HealthCheckResult {
   final String status;
   final Map<String, bool> engines;
 
-  const HealthCheckResult({required this.status, required this.engines});
+  /// 初始化失败的辅助引擎及错误信息，供 UI 提示"核心引擎未加载，功能受限"
+  final List<String> warnings;
+
+  const HealthCheckResult({
+    required this.status,
+    required this.engines,
+    required this.warnings,
+  });
 
   @override
-  int get hashCode => status.hashCode ^ engines.hashCode;
+  int get hashCode => status.hashCode ^ engines.hashCode ^ warnings.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -482,7 +497,8 @@ class HealthCheckResult {
       other is HealthCheckResult &&
           runtimeType == other.runtimeType &&
           status == other.status &&
-          engines == other.engines;
+          engines == other.engines &&
+          warnings == other.warnings;
 }
 
 /// 手写公式识别结果

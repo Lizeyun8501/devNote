@@ -434,7 +434,7 @@ class SyncService {
     // P1 修复 (INC-01): 原实现把所有笔记塞进单条 record（note_id='sync-batch'），
     // 服务端 Push handler 按 per-note 语义处理，无法正确建立 per-note 版本链。
     // 改为：解析 data 为 notes 列表，每条 note 生成独立 record。
-    final List<Map<String, dynamic>> records;
+    late List<Map<String, dynamic>> records;
     try {
       final decoded = jsonDecode(utf8.decode(data));
       if (decoded is List) {

@@ -133,7 +133,8 @@ class FFIBridge
   Future<void> init() async {
     try {
       // 初始化 FRB 运行时（加载 native 动态库 + SSE 编解码器）
-      await RustLib.instance.init();
+      // FRB v2 使用静态方法 RustLib.init() 初始化
+      await RustLib.init();
 
       // 初始化 Rust 核心引擎（持久化/搜索/同步等）
       // 使用应用文档目录下的 devnote.db，确保数据持久化
@@ -211,13 +212,13 @@ class FFIBridge
       content: content,
       folderId: folderId,
     );
-    return note.toJson();
+    return _noteToMap(note);
   }
 
   Future<Map<String, dynamic>?> getNote(String id) async {
     _checkAvailable();
     final note = await rust.getNote(id: id);
-    return note?.toJson();
+    return note != null ? _noteToMap(note) : null;
   }
 
   Future<Map<String, dynamic>> updateNote({
@@ -227,7 +228,7 @@ class FFIBridge
   }) async {
     _checkAvailable();
     final note = await rust.updateNote(id: id, title: title, content: content);
-    return note.toJson();
+    return _noteToMap(note);
   }
 
   Future<void> deleteNote(String id) async {
@@ -238,7 +239,7 @@ class FFIBridge
   Future<List<Map<String, dynamic>>> listNotes(String folderId) async {
     _checkAvailable();
     final notes = await rust.listNotes(folderId: folderId);
-    return notes.map((n) => n.toJson()).toList();
+    return notes.map(_noteToMap).toList();
   }
 
   // ============================================================
@@ -251,19 +252,19 @@ class FFIBridge
   }) async {
     _checkAvailable();
     final folder = await rust.createFolder(name: name, parentId: parentId);
-    return folder.toJson();
+    return _folderToMap(folder);
   }
 
   Future<List<Map<String, dynamic>>> listFolders({String? parentId}) async {
     _checkAvailable();
     final folders = await rust.listFolders(parentId: parentId);
-    return folders.map((f) => f.toJson()).toList();
+    return folders.map(_folderToMap).toList();
   }
 
   Future<Map<String, dynamic>?> getFolder(String id) async {
     _checkAvailable();
     final folder = await rust.getFolder(id: id);
-    return folder?.toJson();
+    return folder != null ? _folderToMap(folder) : null;
   }
 
   Future<void> deleteFolder(String id) async {
@@ -282,7 +283,7 @@ class FFIBridge
       name: name,
       parentId: parentId,
     );
-    return folder.toJson();
+    return _folderToMap(folder);
   }
 
   // ============================================================
@@ -292,13 +293,13 @@ class FFIBridge
   Future<Map<String, dynamic>> createTag(String name) async {
     _checkAvailable();
     final tag = await rust.createTag(name: name);
-    return tag.toJson();
+    return _tagToMap(tag);
   }
 
   Future<List<Map<String, dynamic>>> listTags() async {
     _checkAvailable();
     final tags = await rust.listTags();
-    return tags.map((t) => t.toJson()).toList();
+    return tags.map(_tagToMap).toList();
   }
 
   Future<void> deleteTag(String id) async {
@@ -317,13 +318,14 @@ class FFIBridge
     int? position,
   }) async {
     _checkAvailable();
+    // FRB 生成的 insertBlock 期望 BigInt? 类型，需将 int? 转换
     final block = await rust.insertBlock(
       noteId: noteId,
       blockType: blockType,
       content: content,
-      position: position,
+      position: position != null ? BigInt.from(position) : null,
     );
-    return block.toJson();
+    return _blockToMap(block);
   }
 
   Future<void> updateBlock({required String id, required String content}) async {
@@ -339,7 +341,7 @@ class FFIBridge
   Future<List<Map<String, dynamic>>> getBlocks(String noteId) async {
     _checkAvailable();
     final blocks = await rust.getBlocks(noteId: noteId);
-    return blocks.map((b) => b.toJson()).toList();
+    return blocks.map(_blockToMap).toList();
   }
 
   // ============================================================
@@ -352,12 +354,13 @@ class FFIBridge
     int? offset,
   }) async {
     _checkAvailable();
+    // FRB 生成的 searchNotes 期望 BigInt? 类型，需将 int? 转换
     final results = await rust.searchNotes(
       query: query,
-      limit: limit,
-      offset: offset,
+      limit: limit != null ? BigInt.from(limit) : null,
+      offset: offset != null ? BigInt.from(offset) : null,
     );
-    return results.map((r) => r.toJson()).toList();
+    return results.map(_searchResultToMap).toList();
   }
 
   // ============================================================
@@ -405,7 +408,7 @@ class FFIBridge
   Future<Map<String, dynamic>> getSyncStatus() async {
     _checkAvailable();
     final status = await rust.getSyncStatus();
-    return status.toJson();
+    return _syncStatusToMap(status);
   }
 
   // ============================================================
@@ -446,7 +449,7 @@ class FFIBridge
       deviceId: deviceId,
       remoteOpsJson: remoteOpsJson,
     );
-    return result.toJson();
+    return _mergeResultToMap(result);
   }
 
   // ============================================================
@@ -519,6 +522,64 @@ class FFIBridge
   // ============================================================
   // 工具方法
   // ============================================================
+
+  // FRB 生成的类型不包含 toJson() 方法，以下辅助方法将其转换为 Map，
+  // 保持与原 toJson() 调用方兼容的向后兼容性。
+  // TODO: FRB v2 迁移后可考虑让调用方直接使用 FRB 类型
+
+  static Map<String, dynamic> _noteToMap(rust.NoteData note) => {
+        'id': note.id,
+        'title': note.title,
+        'content': note.content,
+        'folder_id': note.folderId,
+        'is_pinned': note.isPinned,
+        'is_encrypted': note.isEncrypted,
+        'created_at': note.createdAt,
+        'updated_at': note.updatedAt,
+      };
+
+  static Map<String, dynamic> _folderToMap(rust.FolderData folder) => {
+        'id': folder.id,
+        'name': folder.name,
+        'parent_id': folder.parentId,
+        'sort_order': folder.sortOrder,
+        'created_at': folder.createdAt,
+        'updated_at': folder.updatedAt,
+      };
+
+  static Map<String, dynamic> _tagToMap(rust.TagData tag) => {
+        'id': tag.id,
+        'name': tag.name,
+        'created_at': tag.createdAt,
+      };
+
+  static Map<String, dynamic> _blockToMap(rust.BlockData block) => {
+        'id': block.id,
+        'note_id': block.noteId,
+        'block_type': block.blockType,
+        'content': block.content,
+        'position': block.position,
+        'created_at': block.createdAt,
+        'updated_at': block.updatedAt,
+      };
+
+  static Map<String, dynamic> _searchResultToMap(rust.SearchResult r) => {
+        'note_id': r.noteId,
+        'title': r.title,
+        'snippet': r.snippet,
+        'score': r.score,
+      };
+
+  static Map<String, dynamic> _syncStatusToMap(rust.SyncStatusData status) => {
+        'status': status.status,
+        'last_synced': status.lastSynced,
+        'pending_changes': status.pendingChanges,
+      };
+
+  static Map<String, dynamic> _mergeResultToMap(rust.MergeResult result) => {
+        'applied_count': result.appliedCount,
+        'conflicts': result.conflicts,
+      };
 
   void dispose() {
     _isAvailable = false;

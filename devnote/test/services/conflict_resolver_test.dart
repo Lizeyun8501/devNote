@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
-import '../../helpers/test_helpers.dart';
+import '../helpers/test_helpers.dart';
 
 void main() {
   late ConflictResolver resolver;
