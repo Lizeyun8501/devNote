@@ -11,6 +11,12 @@ devnote-crypto = { workspace = true }
 devnote-observe = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
+# refinery 版本化 Schema 迁移框架（Phase 3-B Part 2）
+# 借鉴 Alembic (Python) / Flyway (Java) 的版本化迁移机制，
+# 通过 refinery_schema_history 表跟踪已应用的迁移，确保 Schema 变更可追溯、可回滚。
+# refinery 0.8 支持 rusqlite >=0.23, <=0.33，与本项目 rusqlite 0.32 兼容。
+# 来源: https://crates.io/crates/refinery
+refinery = { version = "0.8", features = ["rusqlite"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

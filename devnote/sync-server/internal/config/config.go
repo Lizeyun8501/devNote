@@ -31,6 +31,9 @@ type Config struct {
 	LogFormat          string
 	EmailWebhookSecret string // 邮件 Webhook 验证密钥
 	EmailDomain        string // 邮件域名，如 mail.devnote.app
+	// P0 修复（单实例状态）: Redis 共享状态配置
+	// 为空时使用内存状态（单实例部署），非空时使用 Redis（多实例部署）
+	RedisURL string
 }
 
 // Load 通过 Viper 加载配置，优先级：环境变量 > 配置文件 > 默认值。
@@ -63,6 +66,9 @@ func Load() *Config {
 	v.SetDefault("log_format", "json")
 	v.SetDefault("email_webhook_secret", "")
 	v.SetDefault("email_domain", "mail.devnote.app")
+	// P0 修复（单实例状态）: Redis 共享状态配置
+	// 默认为空（使用内存状态），配置 REDIS_URL 后启用多实例部署
+	v.SetDefault("redis_url", "")
 
 	// 配置文件搜索路径
 	v.SetConfigName("config")
@@ -99,6 +105,8 @@ func Load() *Config {
 	v.BindEnv("email_webhook_secret", "EMAIL_WEBHOOK_SECRET")
 	v.BindEnv("email_domain", "EMAIL_DOMAIN")
 	v.BindEnv("go_env", "GO_ENV")
+	// P0 修复（单实例状态）: Redis 共享状态配置
+	v.BindEnv("redis_url", "REDIS_URL")
 
 	// JWT 密钥处理
 	jwtSecret := v.GetString("jwt_secret")
@@ -141,6 +149,8 @@ func Load() *Config {
 		LogFormat:          v.GetString("log_format"),
 		EmailWebhookSecret: v.GetString("email_webhook_secret"),
 		EmailDomain:        v.GetString("email_domain"),
+		// P0 修复（单实例状态）: Redis 共享状态配置
+		RedisURL: v.GetString("redis_url"),
 	}
 }
 

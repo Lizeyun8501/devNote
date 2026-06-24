@@ -11,6 +11,7 @@ import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/sync/conflict/conflict_resolver.dart';
 import 'package:devnote/features/sync/incremental_sync_service.dart';
+import 'package:devnote/features/sync/storage/storage_adapter.dart';
 import 'crypto/e2e_crypto_service.dart';
 
 enum SyncServiceStatus {
@@ -55,7 +56,7 @@ class SyncServiceState {
 }
 
 class SyncService {
-  SyncService();
+  SyncService({this.storageAdapter});
 
   // SharedPreferences 中存储服务器地址和认证令牌的键名
   static const String _keyAuthToken = syncAuthTokenKey;
@@ -71,6 +72,14 @@ class SyncService {
   final IncrementalSyncService _incrementalSync = getIt<IncrementalSyncService>();
   // P1-1: 注入统一 API 客户端，替代手写 HTTP 调用
   final DevNoteApiClient _apiClient = getIt<DevNoteApiClient>();
+
+  // P1 修复 (2-F): 可选的 S3/对象存储适配器，用于大文件 offload
+  // 配置后，超过阈值的 payload 会先上传到 S3，同步请求中只传 S3 路径引用
+  StorageAdapter? storageAdapter;
+
+  /// 大文件 offload 阈值（字节），超过此大小走 S3 存储
+  /// 借鉴 AWS S3 Multipart Upload 的阈值设计（默认 5MB）
+  static const int _s3OffloadThreshold = 5 * 1024 * 1024;
 
   SyncServiceState _state = const SyncServiceState(
     status: SyncServiceStatus.idle,
@@ -547,6 +556,50 @@ class SyncService {
   void _notifyListeners() {
     _stateController.add(_state);
   }
+
+  // ── P1 修复 (2-F): S3 对象存储集成 ──────────────────────────
+
+  /// S3 存储是否可用（适配器已配置且连接正常）
+  bool get isStorageAvailable => storageAdapter?.isConfigured ?? false;
+
+  /// 上传大文件到 S3 对象存储
+  ///
+  /// 当同步数据超过 [_s3OffloadThreshold] 时，将数据 offload 到 S3，
+  /// 同步请求中只传 S3 路径引用，减少 HTTP 请求体积。
+  ///
+  /// 返回 S3 路径（用于同步请求中的引用），若 S3 未配置则返回 null。
+  Future<String?> uploadBlob(String path, Uint8List data) async {
+    if (!isStorageAvailable) return null;
+    try {
+      final success = await storageAdapter!.upload(path, data);
+      if (success) {
+        AppLogger.d('SyncService', 'Blob uploaded to S3: $path (${data.length} bytes)');
+        return path;
+      }
+      AppLogger.w('SyncService', 'S3 upload returned false for path: $path');
+      return null;
+    } catch (e) {
+      AppLogger.w('SyncService', 'S3 upload failed, falling back to inline payload', error: e);
+      return null;
+    }
+  }
+
+  /// 从 S3 对象存储下载大文件
+  ///
+  /// 返回下载的数据，若 S3 未配置或下载失败则返回 null。
+  Future<Uint8List?> downloadBlob(String path) async {
+    if (!isStorageAvailable) return null;
+    try {
+      return await storageAdapter!.download(path);
+    } catch (e) {
+      AppLogger.w('SyncService', 'S3 download failed for path: $path', error: e);
+      return null;
+    }
+  }
+
+  /// 判断给定数据大小是否应 offload 到 S3
+  bool shouldOffloadToS3(int dataLength) =>
+      isStorageAvailable && dataLength > _s3OffloadThreshold;
 
   /// 释放资源：关闭状态流控制器
   void dispose() {

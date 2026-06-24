@@ -74,7 +74,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"username":      user.Username,
 		"token":         token,
 		"refresh_token": refreshToken,
-		"expires_in":    3600,
+		"expires_in":    1800, // 30 分钟，与 auth_service.go 的 accessTokenTTL 一致
 	})
 }
 
@@ -94,7 +94,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  accessToken,
 		"refresh_token": newRefreshToken,
-		"expires_in":    3600,
+		"expires_in":    1800, // 30 分钟，与 auth_service.go 的 accessTokenTTL 一致
 	})
 }
 

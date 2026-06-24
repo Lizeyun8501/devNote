@@ -13,6 +13,7 @@ import (
 	"github.com/devnote/sync-server/internal/config"
 	"github.com/devnote/sync-server/internal/middleware"
 	"github.com/devnote/sync-server/internal/service"
+	"github.com/devnote/shared/pkg/state"
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
@@ -59,7 +60,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, *service.AuthService) {
 		RateLimit:      1000,
 	}
 
-	authService := service.NewAuthService(db, cfg)
+	authService := service.NewAuthService(db, cfg, state.NewMemoryStore())
 	authHandler := NewAuthHandler(authService, zap.NewNop())
 
 	r := gin.New()
@@ -201,7 +202,8 @@ func TestLoginSuccess(t *testing.T) {
 	assert.Equal(t, "loginuser", resp["username"])
 	assert.NotEmpty(t, resp["token"])
 	assert.NotEmpty(t, resp["refresh_token"])
-	assert.Equal(t, float64(3600), resp["expires_in"])
+	// P0 修复: expires_in 与 auth_service.go 的 accessTokenTTL(30min) 一致
+	assert.Equal(t, float64(1800), resp["expires_in"])
 }
 
 func TestLoginInvalidCredentials(t *testing.T) {

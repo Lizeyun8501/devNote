@@ -287,3 +287,6 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// 编译期断言: 确保 MetadataService 实现 MetadataServiceInterface
+var _ MetadataServiceInterface = (*MetadataService)(nil)

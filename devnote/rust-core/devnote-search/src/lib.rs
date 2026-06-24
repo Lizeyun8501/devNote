@@ -48,6 +48,17 @@ pub struct SearchFilter {
 
 pub trait SearchEngine: Send + Sync {
     fn index_note(&mut self, note_id: &Uuid, title: &str, content: &str) -> anyhow::Result<()>;
+    /// 索引笔记（含元数据）—— 带 folder_id/tags/updated_at 的完整索引方法
+    /// 与 index_note 相比，本方法将笔记的元数据一并写入索引，支持按文件夹/标签/日期过滤
+    fn index_note_with_meta(
+        &mut self,
+        note_id: &Uuid,
+        title: &str,
+        content: &str,
+        folder_id: &Uuid,
+        tags: &[String],
+        updated_at: &DateTime<Utc>,
+    ) -> anyhow::Result<()>;
     fn remove_note(&mut self, note_id: &Uuid) -> anyhow::Result<()>;
     fn search(&self, query: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>>;
     fn search_with_filter(&self, query: &str, filter: &SearchFilter, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>>;
@@ -168,6 +179,16 @@ impl SqliteSearchEngine {
         Ok(engine)
     }
 
+    /// 基于已有 SQLite 连接构造搜索引擎 —— 用于共享连接池场景
+    /// 调用方负责确保传入的连接已设置合适的 PRAGMA（如 WAL、foreign_keys）
+    pub fn new(conn: rusqlite::Connection) -> anyhow::Result<Self> {
+        let engine = Self {
+            conn: Mutex::new(conn),
+        };
+        engine.init_schema()?;
+        Ok(engine)
+    }
+
     pub fn in_memory() -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open_in_memory()?;
         let engine = Self {
@@ -180,36 +201,6 @@ impl SqliteSearchEngine {
     fn init_schema(&self) -> anyhow::Result<()> {
         let conn = self.conn.lock().expect("sqlite connection mutex poisoned");
         conn.execute_batch(FTS_SCHEMA)?;
-        Ok(())
-    }
-
-    pub fn index_note_with_meta(
-        &self,
-        note_id: &Uuid,
-        title: &str,
-        content: &str,
-        folder_id: &Uuid,
-        tags: &[String],
-        updated_at: &DateTime<Utc>,
-    ) -> anyhow::Result<()> {
-        let mut conn = self.conn.lock().expect("sqlite connection mutex poisoned");
-        let note_id_str = note_id.to_string();
-        let folder_id_str = folder_id.to_string();
-        let tags_str = tags.join(",");
-        let updated_at_str = updated_at.to_rfc3339();
-
-        // P1 修复 (P1-7): DELETE + INSERT 包裹在事务中
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM notes_search_content WHERE note_id = ?1",
-            params![note_id_str],
-        )?;
-        tx.execute(
-            "INSERT INTO notes_search_content (note_id, title, content, folder_id, tags, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![note_id_str, title, content, folder_id_str, tags_str, updated_at_str],
-        )?;
-        tx.commit()?;
-
         Ok(())
     }
 
@@ -280,6 +271,36 @@ impl SearchEngine for SqliteSearchEngine {
         tx.execute(
             "INSERT INTO notes_search_content (note_id, title, content, folder_id, tags, updated_at) VALUES (?1, ?2, ?3, '', '', '')",
             params![note_id_str, title, content],
+        )?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    fn index_note_with_meta(
+        &mut self,
+        note_id: &Uuid,
+        title: &str,
+        content: &str,
+        folder_id: &Uuid,
+        tags: &[String],
+        updated_at: &DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let mut conn = self.conn.lock().expect("sqlite connection mutex poisoned");
+        let note_id_str = note_id.to_string();
+        let folder_id_str = folder_id.to_string();
+        let tags_str = tags.join(",");
+        let updated_at_str = updated_at.to_rfc3339();
+
+        // P1 修复 (P1-7): DELETE + INSERT 包裹在事务中
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM notes_search_content WHERE note_id = ?1",
+            params![note_id_str],
+        )?;
+        tx.execute(
+            "INSERT INTO notes_search_content (note_id, title, content, folder_id, tags, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![note_id_str, title, content, folder_id_str, tags_str, updated_at_str],
         )?;
         tx.commit()?;
 
@@ -525,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_index_note_with_meta() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let note_id = Uuid::new_v4();
         let folder_id = Uuid::new_v4();
         let tags = vec!["rust".to_string(), "programming".to_string()];
@@ -672,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_search_with_folder_filter() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -699,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_search_with_folder_filter_no_match() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let other_folder = Uuid::new_v4();
         let note_id = Uuid::new_v4();
@@ -727,7 +748,7 @@ mod tests {
 
     #[test]
     fn test_search_with_tag_filter() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -753,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_search_with_tag_filter_no_match() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -780,7 +801,7 @@ mod tests {
 
     #[test]
     fn test_search_with_date_range_filter() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -810,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_search_with_date_range_no_match() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -842,7 +863,7 @@ mod tests {
 
     #[test]
     fn test_search_parsed_with_tag() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -864,7 +885,7 @@ mod tests {
 
     #[test]
     fn test_search_parsed_text_only() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();
@@ -885,7 +906,7 @@ mod tests {
 
     #[test]
     fn test_search_parsed_with_folder() {
-        let engine = SqliteSearchEngine::in_memory().unwrap();
+        let mut engine = SqliteSearchEngine::in_memory().unwrap();
         let folder_id = Uuid::new_v4();
         let note_id = Uuid::new_v4();
         let updated_at = Utc::now();

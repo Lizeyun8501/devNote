@@ -16,6 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::path::Path;
 use anyhow::{Context, Result};
 
+// 引入统一 SearchEngine trait 及其关联类型，使 TantivySearchEngine 实现统一接口
+use crate::{SearchEngine, SearchResult, SearchFilter};
+
 use tantivy::schema::{
     IndexRecordOption, FAST, STORED, STRING, TEXT, Value, Schema, INDEXED,
 };
@@ -440,5 +443,81 @@ impl TantivySearchEngine {
             .try_into()?;
         let searcher = reader.searcher();
         Ok(searcher.num_docs())
+    }
+
+    /// 将 TantivySearchResult 转换为统一的 SearchResult 类型
+    /// Tantivy 不提供高亮信息，highlights 字段留空
+    fn convert_result(r: TantivySearchResult) -> SearchResult {
+        // 解析 note_id 字符串为 Uuid，解析失败时使用 nil UUID 兜底
+        let note_id = Uuid::parse_str(&r.note_id).unwrap_or_else(|_| Uuid::nil());
+        SearchResult {
+            note_id,
+            title: r.title,
+            snippet: r.content_snippet,
+            highlights: Vec::new(),
+            score: r.score as f64,
+        }
+    }
+}
+
+// ── SearchEngine trait 实现 ──────────────────────────────────────────
+// 将 TantivySearchEngine 的固有方法适配到统一的 SearchEngine trait 接口。
+// TantivySearchEngine 的固有方法签名与 trait 不完全一致（如 search 缺少 offset
+// 参数、返回 TantivySearchResult 而非 SearchResult），此处通过适配层桥接。
+// 注意: 在 trait impl 内部调用同名固有方法时，必须使用全限定语法
+// TantivySearchEngine::method_name(self, ...) 避免递归调用 trait 方法自身。
+impl SearchEngine for TantivySearchEngine {
+    fn index_note(&mut self, note_id: &Uuid, title: &str, content: &str) -> anyhow::Result<()> {
+        // 委托给 index_note_simple（不带元数据的简单索引版本）
+        TantivySearchEngine::index_note_simple(self, note_id, title, content)
+    }
+
+    fn index_note_with_meta(
+        &mut self,
+        note_id: &Uuid,
+        title: &str,
+        content: &str,
+        folder_id: &Uuid,
+        tags: &[String],
+        updated_at: &DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        // 委托给 TantivySearchEngine 的固有 index_note 方法（含完整元数据）
+        TantivySearchEngine::index_note(self, note_id, title, content, folder_id, tags, updated_at)
+    }
+
+    fn remove_note(&mut self, note_id: &Uuid) -> anyhow::Result<()> {
+        TantivySearchEngine::remove_note(self, note_id)
+    }
+
+    fn search(&self, query: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<SearchResult>> {
+        // 注意: Tantivy 当前固有实现不支持 offset 参数，此处暂忽略
+        // 未来可通过 TopDocs::with_limit(limit).and_offset(offset) 支持
+        let _ = offset;
+        let tantivy_results = TantivySearchEngine::search(self, query, limit)?;
+        Ok(tantivy_results.into_iter().map(Self::convert_result).collect())
+    }
+
+    fn search_with_filter(
+        &self,
+        query: &str,
+        filter: &SearchFilter,
+        limit: usize,
+        offset: usize,
+    ) -> anyhow::Result<Vec<SearchResult>> {
+        // 注意: Tantivy 当前固有实现不支持 offset 与 date_range 过滤，此处暂忽略
+        let _ = offset;
+        // 将统一 SearchFilter 转换为 TantivySearchEngine::search_with_filter 的参数
+        let tantivy_results = TantivySearchEngine::search_with_filter(
+            self,
+            query,
+            filter.folder_id.as_ref(),
+            &filter.tags,
+            limit,
+        )?;
+        Ok(tantivy_results.into_iter().map(Self::convert_result).collect())
+    }
+
+    fn rebuild_index(&mut self) -> anyhow::Result<()> {
+        TantivySearchEngine::rebuild_index(self)
     }
 }

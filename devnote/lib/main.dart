@@ -22,6 +22,7 @@ import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/theme/app_theme.dart';
 import 'package:devnote/core/router/app_router.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/router/route_registry.dart';
 import 'package:devnote/core/observability/app_logger.dart';
@@ -259,24 +260,34 @@ class _DevNoteAppState extends State<DevNoteApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // P1 修复 (2-F): AppConfig.darkMode 驱动 MaterialApp.themeMode
+    // ListenableBuilder 监听 AppConfig 变更，darkMode 切换时自动重建 MaterialApp
     return ValueListenableBuilder<Locale>(
       valueListenable: LocaleProvider.instance,
       builder: (context, locale, child) {
-        return MaterialApp.router(
-          title: 'DevNote',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.lightTheme,
-          darkTheme: AppTheme.darkTheme,
-          themeMode: ThemeMode.system,
-          routerConfig: _appRouter,
-          locale: locale,
-          supportedLocales: LocaleProvider.supportedLocales,
-          localizationsDelegates: const [
-            AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
+        return ListenableBuilder(
+          listenable: AppConfig.instance,
+          builder: (context, _) {
+            return MaterialApp.router(
+              title: 'DevNote',
+              debugShowCheckedModeBanner: false,
+              theme: AppTheme.lightTheme,
+              darkTheme: AppTheme.darkTheme,
+              // P1 修复 (2-F): 由 AppConfig.darkMode 决定主题模式
+              themeMode: AppConfig.instance.darkMode
+                  ? ThemeMode.dark
+                  : ThemeMode.light,
+              routerConfig: _appRouter,
+              locale: locale,
+              supportedLocales: LocaleProvider.supportedLocales,
+              localizationsDelegates: const [
+                AppLocalizations.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+            );
+          },
         );
       },
     );

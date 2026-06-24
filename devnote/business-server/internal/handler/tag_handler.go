@@ -12,12 +12,12 @@ import (
 
 // TagHandler handles HTTP requests for tag management.
 type TagHandler struct {
-	svc    *service.TagService
+	svc    service.TagServiceInterface
 	logger *zap.Logger
 }
 
 // NewTagHandler creates a new TagHandler.
-func NewTagHandler(svc *service.TagService, logger *zap.Logger) *TagHandler {
+func NewTagHandler(svc service.TagServiceInterface, logger *zap.Logger) *TagHandler {
 	return &TagHandler{svc: svc, logger: logger}
 }
 

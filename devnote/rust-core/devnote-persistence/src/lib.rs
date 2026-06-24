@@ -26,6 +26,13 @@ use std::path::PathBuf;
 use std::fs;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
+// refinery 版本化迁移模块（Phase 3-B Part 2）
+// embed_migrations! 宏在编译时嵌入 migrations/ 目录下的 SQL 迁移文件，
+// 生成 migrations 子模块，通过 migrations::runner() 获取 Runner 执行迁移。
+mod refinery_migrations {
+    refinery::embed_migrations!("migrations");
+}
+
 #[derive(Debug, Error)]
 pub enum PersistenceError {
     #[error("database error: {0}")]
@@ -219,29 +226,44 @@ impl std::fmt::Debug for SqliteNoteRepository {
 
 impl SqliteNoteRepository {
     pub fn init(db_path: &str) -> Result<Self> {
-        let conn = rusqlite::Connection::open(db_path)?;
+        let mut conn = rusqlite::Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        // 运行 refinery 版本化迁移（Phase 3-B Part 2）
+        // refinery 通过 refinery_schema_history 表跟踪已应用的迁移，
+        // 仅执行尚未应用的迁移，已应用的迁移不会重复执行
+        crate::refinery_migrations::migrations::runner().run(&mut conn)
+            .map_err(|e| PersistenceError::DatabaseError(format!("refinery migration failed: {}", e)))?;
         let repo = Self {
             conn: Mutex::new(conn),
         };
+        // 保留原有手动迁移作为 fallback，确保向后兼容
         repo.run_migrations()?;
         Ok(repo)
     }
 
-    pub fn new(conn: rusqlite::Connection) -> Result<Self> {
+    pub fn new(mut conn: rusqlite::Connection) -> Result<Self> {
+        // 运行 refinery 版本化迁移（Phase 3-B Part 2）
+        // 注意: new() 接收外部传入的连接，调用方负责设置 PRAGMA
+        crate::refinery_migrations::migrations::runner().run(&mut conn)
+            .map_err(|e| PersistenceError::DatabaseError(format!("refinery migration failed: {}", e)))?;
         let repo = Self {
             conn: Mutex::new(conn),
         };
+        // 保留原有手动迁移作为 fallback，确保向后兼容
         repo.run_migrations()?;
         Ok(repo)
     }
 
     pub fn in_memory() -> Result<Self> {
-        let conn = rusqlite::Connection::open_in_memory()?;
+        let mut conn = rusqlite::Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        // 运行 refinery 版本化迁移（Phase 3-B Part 2）
+        crate::refinery_migrations::migrations::runner().run(&mut conn)
+            .map_err(|e| PersistenceError::DatabaseError(format!("refinery migration failed: {}", e)))?;
         let repo = Self {
             conn: Mutex::new(conn),
         };
+        // 保留原有手动迁移作为 fallback，确保向后兼容
         repo.run_migrations()?;
         Ok(repo)
     }
@@ -260,6 +282,7 @@ impl SqliteNoteRepository {
         // 若 execute_batch 成功但版本记录失败（或反之），事务回滚避免数据库处于
         // 部分迁移的不一致状态。特别是 V5 的 ALTER TABLE ADD COLUMN 非幂等，
         // 重复执行会报 "duplicate column name"，事务保护可避免此问题。
+        // Phase 3-B Part 2: V5 进一步通过 pragma_table_info 检查列是否存在，实现幂等。
         let migrations: [(i32, &str); 5] = [
             (1, SCHEMA_V1),
             (2, SCHEMA_V2),
@@ -271,7 +294,22 @@ impl SqliteNoteRepository {
         for (version, schema_sql) in &migrations {
             if current_version < *version {
                 let tx = conn.transaction()?;
-                tx.execute_batch(schema_sql)?;
+                // V5 的 ALTER TABLE ADD COLUMN 非幂等，需检查列是否已存在。
+                // 若 refinery 或前次迁移已添加列，直接执行 ALTER TABLE 会报
+                // "duplicate column name" 错误，因此先通过 pragma_table_info 检查。
+                if *version == 5 {
+                    // 检查 notes 表是否已有 is_pinned 列（作为 V5 是否已应用的标志）
+                    let has_is_pinned: bool = tx.query_row(
+                        "SELECT COUNT(*) > 0 FROM pragma_table_info('notes') WHERE name='is_pinned'",
+                        [],
+                        |row| row.get(0),
+                    ).unwrap_or(false);
+                    if !has_is_pinned {
+                        tx.execute_batch(schema_sql)?;
+                    }
+                } else {
+                    tx.execute_batch(schema_sql)?;
+                }
                 tx.execute(
                     "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
                     params![*version],

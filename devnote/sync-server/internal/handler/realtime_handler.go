@@ -18,12 +18,16 @@
 package handler
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/devnote/sync-server/internal/service"
+	"github.com/devnote/shared/pkg/state"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -97,9 +101,54 @@ type RealtimeHandler struct {
 }
 
 // CollaborationHub 管理所有活跃的协作连接（按 noteID 分房间）
+//
+// 阶段1-D: 支持跨实例广播。当 stateStore 非 nil 时（Redis 多实例部署），
+// 广播消息除本地分发外还通过 Pub/Sub 发布到 ws:room:{noteID} 频道，
+// 其他实例订阅后本地广播，实现 WebSocket 集群支持。
 type CollaborationHub struct {
 	mu    sync.RWMutex
 	rooms map[string]*CollaborationRoom // noteID -> room
+	// stateStore 分布式状态存储，nil 时仅本地广播（单实例部署）
+	stateStore state.StateStore
+	logger     *zap.Logger
+	// instanceID 实例唯一标识，用于避免接收自己发布的消息导致重复广播
+	instanceID string
+}
+
+// clusterMessage 跨实例广播的消息封装
+// 将原始 WebSocket 消息包装后通过 stateStore Pub/Sub 传输
+type clusterMessage struct {
+	Room    string `json:"room"`             // 目标 room（noteID）
+	Message string `json:"message"`          // 原始 WebSocket 消息（JSON 字符串）
+	Origin  string `json:"origin,omitempty"` // 发布者实例 ID，用于避免接收自己发布的消息
+}
+
+// NewCollaborationHub 构造 CollaborationHub
+// stateStore 为 nil 时退化为纯本地广播（单实例部署，行为与原来一致）
+func NewCollaborationHub(stateStore state.StateStore, logger *zap.Logger) *CollaborationHub {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &CollaborationHub{
+		rooms:      make(map[string]*CollaborationRoom),
+		stateStore: stateStore,
+		logger:     logger,
+		instanceID: generateInstanceID(),
+	}
+}
+
+// generateInstanceID 生成实例唯一标识
+// 用于在跨实例广播时标识消息来源，避免接收自己发布的消息导致重复广播
+func generateInstanceID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// 极少失败；回退到时间戳保证基本唯一性
+		now := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			b[i] = byte(now >> (i * 8))
+		}
+	}
+	return hex.EncodeToString(b)
 }
 
 // CollaborationRoom 一个笔记的协作房间
@@ -108,6 +157,10 @@ type CollaborationRoom struct {
 	noteID    string
 	clients   map[*websocket.Conn]*Client
 	opHistory [][]byte // 最近操作的原始 JSON（用于 sync_request 响应）
+	// hub 反向引用所属 CollaborationHub，用于跨实例发布到 stateStore
+	hub *CollaborationHub
+	// cancelSub 取消 stateStore 订阅（room 销毁时调用，避免 goroutine 泄漏）
+	cancelSub func()
 }
 
 // Client 一个 WebSocket 客户端
@@ -152,16 +205,15 @@ type WSMessage struct {
 
 // NewRealtimeHandler 构造 RealtimeHandler
 // P2 修复 (P2-9): 接收 zap.Logger 注入，替代包级 log.Printf
-func NewRealtimeHandler(authService *service.AuthService, logger *zap.Logger) *RealtimeHandler {
+// 阶段1-D: 接收 stateStore 用于 WebSocket 跨实例广播，nil 时仅本地广播
+func NewRealtimeHandler(authService *service.AuthService, stateStore state.StateStore, logger *zap.Logger) *RealtimeHandler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &RealtimeHandler{
 		authService: authService,
-		hub: &CollaborationHub{
-			rooms: make(map[string]*CollaborationRoom),
-		},
-		logger: logger,
+		hub:         NewCollaborationHub(stateStore, logger),
+		logger:      logger,
 	}
 }
 
@@ -464,6 +516,8 @@ func (r *CollaborationRoom) removeClient(c *Client) {
 //
 // 先在锁内拷贝客户端列表，释放锁后再发送，避免持锁发送导致死锁。
 // 发送缓冲已满的客户端视为慢消费者，关闭其连接。
+// 阶段1-D: 当 stateStore 非 nil 时，除本地广播外还发布到 ws:room:{noteID} 频道，
+// 由其他实例订阅后本地广播，实现跨实例协作。
 func (r *CollaborationRoom) broadcast(message []byte, sender *Client) {
 	r.mu.RLock()
 	clients := make([]*Client, 0, len(r.clients))
@@ -484,6 +538,80 @@ func (r *CollaborationRoom) broadcast(message []byte, sender *Client) {
 			go c.conn.Close()
 		}
 	}
+
+	// 跨实例广播：发布到 stateStore，由其他实例订阅后本地广播
+	if r.hub != nil && r.hub.stateStore != nil {
+		payload, err := json.Marshal(clusterMessage{
+			Room:    r.noteID,
+			Message: string(message),
+			Origin:  r.hub.instanceID,
+		})
+		if err != nil {
+			r.hub.logger.Warn("marshal cluster message failed", zap.Error(err))
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := r.hub.stateStore.Publish(ctx, "ws:room:"+r.noteID, string(payload)); err != nil {
+			r.hub.logger.Warn("publish to stateStore failed", zap.Error(err))
+		}
+	}
+}
+
+// localBroadcast 本地广播消息给 room 内所有客户端（不发布到 stateStore，避免循环）
+// 用于接收其他实例发布的消息后，在本地实例内分发。
+func (r *CollaborationRoom) localBroadcast(message []byte) {
+	r.mu.RLock()
+	clients := make([]*Client, 0, len(r.clients))
+	for _, c := range r.clients {
+		clients = append(clients, c)
+	}
+	r.mu.RUnlock()
+
+	for _, c := range clients {
+		select {
+		case c.send <- message:
+		default:
+			// 发送缓冲已满，关闭慢消费者
+			c.logger.Warn("send buffer full, closing client", zap.String("device", c.deviceID))
+			go c.conn.Close()
+		}
+	}
+}
+
+// startSubscription 订阅该 room 的跨实例广播频道
+// 收到其他实例发布的消息后，本地广播给本实例的客户端。
+// 跳过自己发布的消息（通过 instanceID 匹配），避免重复广播。
+func (r *CollaborationRoom) startSubscription() {
+	channel := "ws:room:" + r.noteID
+	ctx, cancel := context.WithCancel(context.Background())
+	msgCh, subCancel, err := r.hub.stateStore.Subscribe(ctx, channel)
+	if err != nil {
+		r.hub.logger.Warn("subscribe room channel failed",
+			zap.String("channel", channel),
+			zap.Error(err))
+		cancel()
+		return
+	}
+	r.cancelSub = func() {
+		subCancel()
+		cancel()
+	}
+
+	go func() {
+		for msg := range msgCh {
+			var cm clusterMessage
+			if err := json.Unmarshal([]byte(msg.Payload), &cm); err != nil {
+				r.hub.logger.Warn("unmarshal cluster message failed", zap.Error(err))
+				continue
+			}
+			// 跳过自己发布的消息，避免重复广播
+			if cm.Origin == r.hub.instanceID {
+				continue
+			}
+			r.localBroadcast([]byte(cm.Message))
+		}
+	}()
 }
 
 // broadcastPresence 广播 presence 更新（加入/离开）
@@ -587,8 +715,13 @@ func (h *CollaborationHub) getOrCreateRoom(noteID string) *CollaborationRoom {
 		room = &CollaborationRoom{
 			noteID:  noteID,
 			clients: make(map[*websocket.Conn]*Client),
+			hub:     h,
 		}
 		h.rooms[noteID] = room
+		// 有 stateStore 时订阅该 room 的跨实例广播频道
+		if h.stateStore != nil {
+			room.startSubscription()
+		}
 	}
 	return room
 }
@@ -602,6 +735,10 @@ func (h *CollaborationHub) removeClientIfEmpty(noteID string) {
 		empty := len(room.clients) == 0
 		room.mu.RUnlock()
 		if empty {
+			// 取消 stateStore 订阅，避免 goroutine 泄漏
+			if room.cancelSub != nil {
+				room.cancelSub()
+			}
 			delete(h.rooms, noteID)
 		}
 	}

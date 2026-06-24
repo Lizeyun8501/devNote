@@ -462,3 +462,6 @@ func (s *FolderService) getAllDescendantIDs(tx *sql.Tx, userID, folderID string)
 	}
 	return ids, nil
 }
+
+// 编译期断言: 确保 FolderService 实现 FolderServiceInterface
+var _ FolderServiceInterface = (*FolderService)(nil)

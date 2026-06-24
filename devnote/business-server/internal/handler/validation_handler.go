@@ -11,12 +11,12 @@ import (
 
 // ValidationHandler handles HTTP requests for rule validation.
 type ValidationHandler struct {
-	svc    *service.ValidationService
+	svc    service.ValidationServiceInterface
 	logger *zap.Logger
 }
 
 // NewValidationHandler creates a new ValidationHandler.
-func NewValidationHandler(svc *service.ValidationService, logger *zap.Logger) *ValidationHandler {
+func NewValidationHandler(svc service.ValidationServiceInterface, logger *zap.Logger) *ValidationHandler {
 	return &ValidationHandler{svc: svc, logger: logger}
 }
 

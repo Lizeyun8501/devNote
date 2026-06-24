@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	sharedmw "github.com/devnote/shared/pkg/middleware"
+	"github.com/devnote/shared/pkg/state"
 	"github.com/devnote/sync-server/internal/cert"
 	"github.com/devnote/sync-server/internal/config"
 	"github.com/devnote/sync-server/internal/handler"
@@ -37,7 +39,7 @@ func main() {
 	// 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
 	// 来源: https://github.com/AppFlowy-IO/AppFlowy
 	// 检查 SENTRY_DSN 环境变量 —— 未设置时优雅降级
-	middleware.InitSentry()
+	sharedmw.InitSentry()
 
 	// Initialize structured logger
 	logger, err := observability.NewLogger(cfg.LogLevel, cfg.LogFormat)
@@ -52,6 +54,17 @@ func main() {
 		zap.Bool("http2_enabled", cfg.HTTP2Enabled),
 		zap.Bool("auto_cert", cfg.AutoCert),
 	)
+
+	// P0 修复（单实例状态）: 创建分布式状态存储
+	// RedisURL 为空时使用 MemoryStore（单实例部署），非空时使用 RedisStore（多实例部署）
+	stateStore, err := state.NewStore(cfg.RedisURL)
+	if err != nil {
+		logger.Fatal("failed to create state store", zap.Error(err))
+	}
+	defer stateStore.Close()
+	if cfg.RedisURL != "" {
+		logger.Info("distributed state store enabled (Redis)", zap.String("redis_url", cfg.RedisURL))
+	}
 
 	// Initialize metrics
 	metrics := observability.NewMetrics()
@@ -69,7 +82,7 @@ func main() {
 	}
 
 	// Initialize services
-	authService := service.NewAuthService(sqliteStore.DB, cfg)
+	authService := service.NewAuthService(sqliteStore.DB, cfg, stateStore)
 	syncService := service.NewSyncService(sqliteStore.DB, s3Store)
 	shareService := service.NewShareService(sqliteStore.DB)
 	// P3 修复 (P3-13): NewEmailService 现在返回 error，迁移失败时 fatal 退出
@@ -83,7 +96,7 @@ func main() {
 	srpAuthHandler := handler.NewSRPAuthHandler(authService, logger)
 	syncHandler := handler.NewSyncHandler(syncService, logger)
 	healthHandler := handler.NewHealthHandler()
-	realtimeHandler := handler.NewRealtimeHandler(authService, logger)
+	realtimeHandler := handler.NewRealtimeHandler(authService, stateStore, logger)
 	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader
 	handler.SetupCheckOrigin(cfg.AllowedOrigins)
 	clipperHandler := handler.NewClipperHandler(syncService, logger)
@@ -95,20 +108,20 @@ func main() {
 	r := gin.New()
 
 	// Global middleware
-	r.Use(middleware.SentryGin())
+	r.Use(sharedmw.SentryGin())
 	r.Use(middleware.Observability(middleware.ObservabilityConfig{
 		Logger:  logger,
 		Metrics: metrics,
 	}))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
 	// P1 安全修复: 添加安全响应头中间件（原完全缺失）
-	r.Use(middleware.SecurityHeaders())
+	r.Use(sharedmw.SecurityHeaders())
 	// 修复(P0): 注册 API 版本控制中间件（原已实现但未挂载，为死代码）
-	r.Use(middleware.APIVersionMiddleware(middleware.APIVersionConfig{
+	r.Use(sharedmw.APIVersionMiddleware(sharedmw.APIVersionConfig{
 		Required:      false,
-		LatestVersion: middleware.CurrentAPIVersion,
+		LatestVersion: sharedmw.CurrentAPIVersion,
 	}))
-	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
+	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit, stateStore)
 	r.Use(rateLimitHandler)
 	defer rateLimitStop()
 
@@ -150,7 +163,7 @@ func main() {
 		// P1 架构修复: 挂载 Idempotency 中间件，防止客户端重试导致重复 Push
 		// 创建多条 SyncRecord 和 NoteSnapshot（原已实现但未挂载，为死代码）
 		sync.Use(middleware.IdempotencyMiddleware(middleware.IdempotencyConfig{
-			Cache:      middleware.NewIdempotencyCache(24*time.Hour, 10000),
+			Store:      stateStore,
 			HeaderName: "Idempotency-Key",
 		}))
 		{

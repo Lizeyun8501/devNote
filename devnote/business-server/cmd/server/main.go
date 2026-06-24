@@ -13,12 +13,15 @@ import (
 	"fmt"
 	"log"
 
+	sharedmw "github.com/devnote/shared/pkg/middleware"
+	"github.com/devnote/shared/pkg/state"
 	"github.com/devnote/business-server/internal/config"
 	"github.com/devnote/business-server/internal/handler"
 	"github.com/devnote/business-server/internal/middleware"
 	"github.com/devnote/business-server/internal/service"
 	"github.com/devnote/business-server/internal/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -29,7 +32,7 @@ func main() {
 	// 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
 	// 来源: https://github.com/AppFlowy-IO/AppFlowy
 	// 检查 SENTRY_DSN 环境变量 —— 未设置时优雅降级
-	middleware.InitSentry()
+	sharedmw.InitSentry()
 
 	logger := newLogger(cfg.LogLevel)
 	defer logger.Sync()
@@ -38,6 +41,14 @@ func main() {
 		zap.String("port", cfg.Port),
 		zap.String("db_path", cfg.DBPath),
 	)
+
+	// P0 修复（单实例状态）: 创建分布式状态存储
+	// RedisURL 为空时使用 MemoryStore（单实例部署），非空时使用 RedisStore（多实例部署）
+	stateStore, err := state.NewStore("")
+	if err != nil {
+		log.Fatalf("failed to create state store: %v", err)
+	}
+	defer stateStore.Close()
 
 	// Init SQLite store (sqlx + golang-migrate)
 	store, err := storage.NewSQLiteStore(cfg.DBPath, cfg.MigrationsPath)
@@ -76,18 +87,25 @@ func main() {
 	r := gin.New()
 
 	// Middleware
-	r.Use(middleware.SentryGin())
+	r.Use(sharedmw.SentryGin())
 	r.Use(middleware.Recovery(logger))
 	r.Use(middleware.LoggerMiddleware(logger))
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	// Phase 3-C: Prometheus 指标中间件，置于 CORS 之后、API 版本路由之前
+	r.Use(middleware.MetricsMiddleware())
+	// P1 安全修复: 添加安全响应头中间件（原完全缺失）
+	r.Use(sharedmw.SecurityHeaders())
 	// 修复(P0): 注册 API 版本控制中间件（原完全缺失）
-	r.Use(middleware.APIVersionMiddleware(middleware.APIVersionConfig{
+	r.Use(sharedmw.APIVersionMiddleware(sharedmw.APIVersionConfig{
 		Required:      false,
-		LatestVersion: middleware.CurrentAPIVersion,
+		LatestVersion: sharedmw.CurrentAPIVersion,
 	}))
-	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit)
+	rateLimitHandler, rateLimitStop := middleware.RateLimitMiddleware(cfg.RateLimit, stateStore)
 	r.Use(rateLimitHandler)
 	defer rateLimitStop()
+
+	// Phase 3-C: Prometheus 指标暴露端点，供 Prometheus 抓取
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Health check
 	r.GET("/api/v1/health", healthHandler.Check)

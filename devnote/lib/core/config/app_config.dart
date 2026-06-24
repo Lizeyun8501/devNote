@@ -43,6 +43,13 @@ const String autoSaveKey = 'settings.auto_save';
 /// 与 sentry_config.dart 中的 _consentPrefKey 保持一致以实现向后兼容
 const String sentryUserConsentKey = 'sentry.user_consent';
 
+/// P1 修复 (2-F): S3 兼容存储配置键名
+const String s3EndpointKey = 's3_endpoint';
+const String s3BucketKey = 's3_bucket';
+const String s3AccessKeyKey = 's3_access_key';
+const String s3SecretKeyKey = 's3_secret_key';
+const String s3UseSSLKey = 's3_use_ssl';
+
 /// 默认字体大小（px）
 const double defaultFontSize = 14.0;
 
@@ -97,6 +104,12 @@ class AppConfig extends ChangeNotifier {
   bool _autoSave = true;
   bool _sentryUserConsent = false;
   String? _syncAuthToken;
+  // P1 修复 (2-F): S3 兼容存储配置
+  String _s3Endpoint = '';
+  String _s3Bucket = '';
+  String _s3AccessKey = '';
+  String _s3SecretKey = '';
+  bool _s3UseSSL = true;
 
   /// 是否已初始化（[init] 是否已成功执行）
   bool get isInitialized => _prefs != null;
@@ -116,6 +129,12 @@ class AppConfig extends ChangeNotifier {
     _autoSave = _prefs!.getBool(autoSaveKey) ?? true;
     _sentryUserConsent = _prefs!.getBool(sentryUserConsentKey) ?? false;
     _syncAuthToken = _prefs!.getString(syncAuthTokenKey);
+    // P1 修复 (2-F): 加载 S3 存储配置
+    _s3Endpoint = _prefs!.getString(s3EndpointKey) ?? '';
+    _s3Bucket = _prefs!.getString(s3BucketKey) ?? '';
+    _s3AccessKey = _prefs!.getString(s3AccessKeyKey) ?? '';
+    _s3SecretKey = _prefs!.getString(s3SecretKeyKey) ?? '';
+    _s3UseSSL = _prefs!.getBool(s3UseSSLKey) ?? true;
   }
 
   /// 同步服务器地址（默认 [defaultSyncServerUrl]）
@@ -194,6 +213,55 @@ class AppConfig extends ChangeNotifier {
     } else {
       _prefs?.setString(syncAuthTokenKey, value);
     }
+    notifyListeners();
+  }
+
+  // ── P1 修复 (2-F): S3 兼容存储配置 ──────────────────────────
+
+  /// S3 是否已配置（endpoint + bucket + accessKey + secretKey 均非空）
+  bool get isS3Configured =>
+      _s3Endpoint.isNotEmpty &&
+      _s3Bucket.isNotEmpty &&
+      _s3AccessKey.isNotEmpty &&
+      _s3SecretKey.isNotEmpty;
+
+  String get s3Endpoint => _s3Endpoint;
+  set s3Endpoint(String value) {
+    if (_s3Endpoint == value) return;
+    _s3Endpoint = value;
+    _prefs?.setString(s3EndpointKey, value);
+    notifyListeners();
+  }
+
+  String get s3Bucket => _s3Bucket;
+  set s3Bucket(String value) {
+    if (_s3Bucket == value) return;
+    _s3Bucket = value;
+    _prefs?.setString(s3BucketKey, value);
+    notifyListeners();
+  }
+
+  String get s3AccessKey => _s3AccessKey;
+  set s3AccessKey(String value) {
+    if (_s3AccessKey == value) return;
+    _s3AccessKey = value;
+    _prefs?.setString(s3AccessKeyKey, value);
+    notifyListeners();
+  }
+
+  String get s3SecretKey => _s3SecretKey;
+  set s3SecretKey(String value) {
+    if (_s3SecretKey == value) return;
+    _s3SecretKey = value;
+    _prefs?.setString(s3SecretKeyKey, value);
+    notifyListeners();
+  }
+
+  bool get s3UseSSL => _s3UseSSL;
+  set s3UseSSL(bool value) {
+    if (_s3UseSSL == value) return;
+    _s3UseSSL = value;
+    _prefs?.setBool(s3UseSSLKey, value);
     notifyListeners();
   }
 }

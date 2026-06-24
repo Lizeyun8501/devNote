@@ -549,3 +549,6 @@ func (s *ValidationService) DeleteBusinessRule(userID, id string) error {
 	}
 	return nil
 }
+
+// 编译期断言: 确保 ValidationService 实现 ValidationServiceInterface
+var _ ValidationServiceInterface = (*ValidationService)(nil)
