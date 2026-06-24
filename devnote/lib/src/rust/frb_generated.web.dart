@@ -7,5 +7,7 @@ import 'frb_generated.dart';
 
 /// Web 平台初始化实现（当前禁用）
 Future<void> initImpl(RustLib rustLib) async {
-  throw UnsupportedError('Web platform is not enabled. Set web: true in flutter_rust_bridge.yaml');
+  throw UnsupportedError(
+    'Web platform is not enabled. Set web: true in flutter_rust_bridge.yaml',
+  );
 }

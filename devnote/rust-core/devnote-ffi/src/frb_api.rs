@@ -635,12 +635,16 @@ pub fn create_database(name: String) -> Result<String, String> {
 }
 
 /// 评估公式 —— 替代原 DatabaseEvent.EvaluateFormula
-pub fn evaluate_formula(formula: String, row_values: String, all_rows: String) -> Result<serde_json::Value, String> {
+///
+/// 返回 JSON 序列化的结果字符串，避免 FRB 对 serde_json::Value 的 opaque 类型处理。
+/// 调用方可用 dart:convert jsonDecode 解析。
+pub fn evaluate_formula(formula: String, row_values: String, all_rows: String) -> Result<String, String> {
     let rv: HashMap<String, serde_json::Value> = serde_json::from_str(&row_values)
         .map_err(|e| e.to_string())?;
     let ar: Vec<HashMap<String, serde_json::Value>> = serde_json::from_str(&all_rows)
         .map_err(|e| e.to_string())?;
-    eval_formula(&formula, &rv, &ar).map_err(|e| e)
+    let result = eval_formula(&formula, &rv, &ar).map_err(|e| e)?;
+    serde_json::to_string(&result).map_err(|e| e.to_string())
 }
 
 /// 添加数据库视图 —— 替代原 DatabaseEvent.AddView

@@ -1,12 +1,16 @@
 # ============================================================
-# flutter_rust_bridge v2 codegen 配置
+# flutter_rust_bridge v2 codegen 配置（v2.12 新语法）
 # ------------------------------------------------------------
 # 运行 `flutter_rust_bridge_codegen generate` 生成 Dart 绑定
 # 文档: https://cjycode.com/flutter_rust_bridge/
 # ============================================================
 
+# Rust crate 根目录
+rust_root: rust-core/devnote-ffi/
+
 # Rust 端 API 入口 —— frb_api.rs 中所有 pub fn 会被扫描并生成对应 Dart 函数
-rust_input: rust-core/devnote-ffi/src/frb_api.rs
+# v2.12 新语法：使用 crate:: 模块路径替代文件 glob
+rust_input: crate::frb_api
 
 # Dart 端生成目录 —— 生成的绑定文件输出到 lib/src/rust/
 dart_output: lib/src/rust
@@ -17,11 +21,11 @@ c_output: rust-core/devnote-ffi/src/frb_generated.h
 # Rust 端生成文件路径（FRB codegen 自动写入）
 rust_output: rust-core/devnote-ffi/src/frb_generated.rs
 
-# 类型映射模式 —— 使用 FRB v2 默认的 SSE 编解码器
-# 比手写 JSON 序列化快数倍，且类型安全
-mode: auto
-
-# 代码生成选项
-generate_class_names: true
 # 启用 web 支持（dart:js_interop）
 web: false
+
+# 启用 Dart 3 特性（records、patterns）
+dart3: true
+
+# 默认使用 async 调用模式
+default_dart_async: true
