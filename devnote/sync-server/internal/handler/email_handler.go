@@ -92,6 +92,10 @@ func (h *EmailHandler) IncomingEmailWebhook(c *gin.Context) {
 // GetUserAlias 获取用户的邮件别名
 func (h *EmailHandler) GetUserAlias(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
 
 	alias, err := h.emailService.GetAliasByUserID(userID)
 	if err != nil {
@@ -119,11 +123,19 @@ func (h *EmailHandler) GetUserAlias(c *gin.Context) {
 // RegenerateAlias 重新生成邮件别名
 func (h *EmailHandler) RegenerateAlias(c *gin.Context) {
 	userID := c.GetString("user_id")
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user_id not found in context"})
+		return
+	}
 
 	// 停用旧别名
 	oldAlias, err := h.emailService.GetAliasByUserID(userID)
 	if err == nil {
-		h.emailService.DeactivateAlias(oldAlias.ID)
+		if err := h.emailService.DeactivateAlias(oldAlias.ID); err != nil {
+			// P1-4a 修复: 停用旧别名失败不应阻止生成新别名，但需记录日志
+			h.logger.Warn("failed to deactivate old alias",
+				zap.String("alias_id", oldAlias.ID), zap.Error(err))
+		}
 	}
 
 	// 生成新别名

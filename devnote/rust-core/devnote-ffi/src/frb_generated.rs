@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
                     default_rust_auto_opaque = RustAutoOpaqueMoi,
                 );
                 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-                pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 538988057;
+                pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -117999445;
             
 
 // Section: executor
@@ -326,6 +326,15 @@ let api_limit = <Option<usize>>::sse_decode(&mut deserializer);deserializer.end(
             let api_id = <String>::sse_decode(&mut deserializer);deserializer.end(); move |context|  {
                     transform_result_sse::<_, String>((move ||  {
                          let output_ok = crate::frb_api::get_note(api_id)?;   Ok(output_ok)
+                    })())
+                } })
+            }fn wire__crate__frb_api__get_note_ids_by_tag_impl(port_: flutter_rust_bridge::for_generated::MessagePort,ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,rust_vec_len_: i32,data_len_: i32)  {
+                FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec,_,_>(flutter_rust_bridge::for_generated::TaskInfo{ debug_name: "get_note_ids_by_tag", port: Some(port_), mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal }, move || { 
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_tag_id = <String>::sse_decode(&mut deserializer);deserializer.end(); move |context|  {
+                    transform_result_sse::<_, String>((move ||  {
+                         let output_ok = crate::frb_api::get_note_ids_by_tag(api_tag_id)?;   Ok(output_ok)
                     })())
                 } })
             }fn wire__crate__frb_api__get_sync_status_impl(port_: flutter_rust_bridge::for_generated::MessagePort,ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,rust_vec_len_: i32,data_len_: i32)  {
@@ -912,30 +921,31 @@ return crate::frb_api::VersionInfo{api_version: var_apiVersion, rust_version: va
 27 => wire__crate__frb_api__get_due_cards_impl(port, ptr, rust_vec_len, data_len),
 28 => wire__crate__frb_api__get_folder_impl(port, ptr, rust_vec_len, data_len),
 29 => wire__crate__frb_api__get_note_impl(port, ptr, rust_vec_len, data_len),
-30 => wire__crate__frb_api__get_sync_status_impl(port, ptr, rust_vec_len, data_len),
-31 => wire__crate__frb_api__get_version_impl(port, ptr, rust_vec_len, data_len),
-32 => wire__crate__frb_api__health_check_impl(port, ptr, rust_vec_len, data_len),
-33 => wire__crate__frb_api__import_markdown_impl(port, ptr, rust_vec_len, data_len),
-34 => wire__crate__frb_api__index_ocr_text_impl(port, ptr, rust_vec_len, data_len),
-35 => wire__crate__frb_api__init_engines_impl(port, ptr, rust_vec_len, data_len),
-36 => wire__crate__frb_api__insert_block_impl(port, ptr, rust_vec_len, data_len),
-37 => wire__crate__frb_api__list_folders_impl(port, ptr, rust_vec_len, data_len),
-38 => wire__crate__frb_api__list_notes_impl(port, ptr, rust_vec_len, data_len),
-39 => wire__crate__frb_api__list_tags_impl(port, ptr, rust_vec_len, data_len),
-40 => wire__crate__frb_api__math_ink_recognize_impl(port, ptr, rust_vec_len, data_len),
-41 => wire__crate__frb_api__ocr_recognize_image_impl(port, ptr, rust_vec_len, data_len),
-42 => wire__crate__frb_api__ocr_recognize_image_detailed_impl(port, ptr, rust_vec_len, data_len),
-43 => wire__crate__frb_api__pull_changes_impl(port, ptr, rust_vec_len, data_len),
-44 => wire__crate__frb_api__push_changes_impl(port, ptr, rust_vec_len, data_len),
-45 => wire__crate__frb_api__review_flashcard_impl(port, ptr, rust_vec_len, data_len),
-46 => wire__crate__frb_api__search_notes_impl(port, ptr, rust_vec_len, data_len),
-47 => wire__crate__frb_api__transcribe_audio_impl(port, ptr, rust_vec_len, data_len),
-48 => wire__crate__frb_api__update_block_impl(port, ptr, rust_vec_len, data_len),
-49 => wire__crate__frb_api__update_folder_impl(port, ptr, rust_vec_len, data_len),
-50 => wire__crate__frb_api__update_note_impl(port, ptr, rust_vec_len, data_len),
-51 => wire__crate__frb_api__vault_decrypt_impl(port, ptr, rust_vec_len, data_len),
-52 => wire__crate__frb_api__vault_encrypt_impl(port, ptr, rust_vec_len, data_len),
-53 => wire__crate__frb_api__vault_verify_password_impl(port, ptr, rust_vec_len, data_len),
+30 => wire__crate__frb_api__get_note_ids_by_tag_impl(port, ptr, rust_vec_len, data_len),
+31 => wire__crate__frb_api__get_sync_status_impl(port, ptr, rust_vec_len, data_len),
+32 => wire__crate__frb_api__get_version_impl(port, ptr, rust_vec_len, data_len),
+33 => wire__crate__frb_api__health_check_impl(port, ptr, rust_vec_len, data_len),
+34 => wire__crate__frb_api__import_markdown_impl(port, ptr, rust_vec_len, data_len),
+35 => wire__crate__frb_api__index_ocr_text_impl(port, ptr, rust_vec_len, data_len),
+36 => wire__crate__frb_api__init_engines_impl(port, ptr, rust_vec_len, data_len),
+37 => wire__crate__frb_api__insert_block_impl(port, ptr, rust_vec_len, data_len),
+38 => wire__crate__frb_api__list_folders_impl(port, ptr, rust_vec_len, data_len),
+39 => wire__crate__frb_api__list_notes_impl(port, ptr, rust_vec_len, data_len),
+40 => wire__crate__frb_api__list_tags_impl(port, ptr, rust_vec_len, data_len),
+41 => wire__crate__frb_api__math_ink_recognize_impl(port, ptr, rust_vec_len, data_len),
+42 => wire__crate__frb_api__ocr_recognize_image_impl(port, ptr, rust_vec_len, data_len),
+43 => wire__crate__frb_api__ocr_recognize_image_detailed_impl(port, ptr, rust_vec_len, data_len),
+44 => wire__crate__frb_api__pull_changes_impl(port, ptr, rust_vec_len, data_len),
+45 => wire__crate__frb_api__push_changes_impl(port, ptr, rust_vec_len, data_len),
+46 => wire__crate__frb_api__review_flashcard_impl(port, ptr, rust_vec_len, data_len),
+47 => wire__crate__frb_api__search_notes_impl(port, ptr, rust_vec_len, data_len),
+48 => wire__crate__frb_api__transcribe_audio_impl(port, ptr, rust_vec_len, data_len),
+49 => wire__crate__frb_api__update_block_impl(port, ptr, rust_vec_len, data_len),
+50 => wire__crate__frb_api__update_folder_impl(port, ptr, rust_vec_len, data_len),
+51 => wire__crate__frb_api__update_note_impl(port, ptr, rust_vec_len, data_len),
+52 => wire__crate__frb_api__vault_decrypt_impl(port, ptr, rust_vec_len, data_len),
+53 => wire__crate__frb_api__vault_encrypt_impl(port, ptr, rust_vec_len, data_len),
+54 => wire__crate__frb_api__vault_verify_password_impl(port, ptr, rust_vec_len, data_len),
                         _ => unreachable!(),
                     }
                 }

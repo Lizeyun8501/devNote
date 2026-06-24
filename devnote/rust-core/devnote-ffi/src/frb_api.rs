@@ -485,6 +485,17 @@ pub fn delete_tag(id: String) -> Result<(), String> {
     NoteRepository::delete_tag(repo, &uid).map_err(|e| e.to_string())
 }
 
+/// 按标签查询笔记 ID —— P1-2 修复: 消除双重持久化
+///
+/// 原实现: Flutter 端直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
+/// 现改为: 通过 FFI 调用 Rust 持久化层，确保数据源唯一。
+pub fn get_note_ids_by_tag(tag_id: String) -> Result<Vec<String>, String> {
+    let tid = Uuid::parse_str(&tag_id).map_err(|e| e.to_string())?;
+    let guard = NOTE_REPO.lock();
+    let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
+    repo.get_note_ids_by_tag(&tid).map_err(|e| e.to_string())
+}
+
 // ── 编辑器 API ────────────────────────────────────────────────────────
 
 /// 插入块 —— 替代原 EditorEvent.InsertBlock

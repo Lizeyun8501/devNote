@@ -29,6 +29,9 @@
 /// 2. 类型安全的请求/响应模型自动从 OpenAPI 规范生成
 /// 3. JWT 认证自动注入，无需手动添加 Authorization header
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:devnote_sync_api/api.dart';
 import 'package:devnote_business_api/api.dart' as devnote_business_api;
 
@@ -99,6 +102,22 @@ class DevNoteApiClient {
     _businessHealth = null;
   }
 
+  /// 轻量级设置认证令牌（不重建 ApiClient，仅更新默认请求头）
+  ///
+  /// P1-1: 在每次同步 API 调用前调用，确保 token 最新。
+  /// 与 [updateAuthToken] 不同，此方法不重建 ApiClient 实例，
+  /// 仅更新默认请求头中的 Authorization 字段，性能更优。
+  void setAuthToken(String? token) {
+    _authToken = token;
+    if (token != null && token.isNotEmpty) {
+      _syncApiClient.addDefaultHeader('Authorization', 'Bearer $token');
+      _businessApiClient.addDefaultHeader('Authorization', 'Bearer $token');
+    } else {
+      _syncApiClient.defaultHeaderMap.remove('Authorization');
+      _businessApiClient.defaultHeaderMap.remove('Authorization');
+    }
+  }
+
   // ── Sync Server API ──────────────────────────────────────────
 
   /// 同步操作 API（push/pull/status/conflict）
@@ -138,4 +157,166 @@ class DevNoteApiClient {
   /// Business Server 健康检查
   devnote_business_api.HealthApi get businessHealth =>
       _businessHealth ??= devnote_business_api.HealthApi(_businessApiClient);
+
+  // ============================================================
+  // P1-1: Sync 包装方法
+  // ------------------------------------------------------------
+  // 适配现有手写 HTTP 调用与生成 API 之间的差异，
+  // 提供 Service 层可直接使用的简化接口。
+  // ============================================================
+
+  /// 推送同步变更到服务端
+  ///
+  /// 包装生成的 [SyncApi.pushChanges]，构造类型安全的 [PushRequest]。
+  /// 成功时返回 [PushResponse]，失败时抛出 [ApiException]。
+  Future<PushResponse?> pushSync({
+    required String deviceId,
+    required List<SyncRecordInput> records,
+  }) async {
+    final request = PushRequest(deviceId: deviceId, records: records);
+    return sync.pushChanges(request);
+  }
+
+  /// 拉取同步变更
+  ///
+  /// 包装生成的 [SyncApi.pullChanges]，构造类型安全的 [PullRequest]。
+  /// 成功时返回 [PullResponse]，失败时抛出 [ApiException]。
+  /// 无新数据时返回 null（服务端返回 204）。
+  Future<PullResponse?> pullSync({
+    required String deviceId,
+    int? sinceVersion,
+    int? limit,
+  }) async {
+    final request = PullRequest(
+      deviceId: deviceId,
+      sinceVersion: sinceVersion,
+    );
+    return sync.pullChanges(request, limit: limit);
+  }
+
+  /// 上报冲突解决结果（best-effort）
+  ///
+  /// P1-1: 该端点 `/api/v1/sync/conflicts/resolve` 未在 OpenAPI 规范中定义，
+  /// 故直接使用底层 http Client 调用，而非生成的 [SyncApi.resolveConflict]
+  /// （后者对应 `/api/v1/sync/resolve-conflict`，语义不同）。
+  /// 失败时抛出异常，由调用方捕获并记录日志。
+  Future<void> reportConflictResolution({
+    required String conflictId,
+    required String resolution,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    final uri = Uri.parse('$_syncServerUrl/api/v1/sync/conflicts/resolve');
+    final headers = _buildRawHeaders(jsonBody: true);
+    final body = jsonEncode({
+      'conflict_id': conflictId,
+      'resolution': resolution,
+    });
+    await _syncApiClient.client
+        .post(uri, headers: headers, body: body)
+        .timeout(timeout);
+  }
+
+  // ============================================================
+  // P1-1: 增量同步端点（未在 OpenAPI 规范中生成）
+  // ------------------------------------------------------------
+  // 以下端点用于增量同步（rsync 算法 + 断点续传），
+  // 服务端尚未实现，但客户端保留调用接口。
+  // 直接使用底层 http Client，因为生成的 SyncApi 不包含这些端点。
+  // ============================================================
+
+  /// 获取远端数据签名（用于增量计算基准）
+  ///
+  /// 返回签名字节数据；远端无数据（204/404）或非 2xx 时返回 null。
+  Future<Uint8List?> fetchRemoteSignatures() async {
+    final uri = Uri.parse('$_syncServerUrl/api/v1/sync/signatures');
+    final headers = _buildRawHeaders();
+    final response = await _syncApiClient.client.get(uri, headers: headers);
+    if (response.statusCode == 204 || response.statusCode == 404) {
+      return null;
+    }
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return response.bodyBytes;
+    }
+    return null;
+  }
+
+  /// 上传远端签名（供下次增量计算使用）
+  Future<void> updateRemoteSignatures(Uint8List body) async {
+    final uri = Uri.parse('$_syncServerUrl/api/v1/sync/signatures');
+    final headers = _buildRawHeaders(octetStream: true);
+    await _syncApiClient.client.put(uri, headers: headers, body: body);
+  }
+
+  /// 请求远端计算并返回 delta
+  ///
+  /// 返回 delta 字节数据；远端无新数据（204）或非 2xx 时返回 null。
+  Future<Uint8List?> fetchRemoteDelta(Uint8List localSignatures) async {
+    final uri = Uri.parse('$_syncServerUrl/api/v1/sync/delta');
+    final headers = _buildRawHeaders(octetStream: true);
+    final response = await _syncApiClient.client
+        .post(uri, headers: headers, body: localSignatures);
+    if (response.statusCode == 204) return null;
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return response.bodyBytes;
+    }
+    return null;
+  }
+
+  /// 上传单个分块
+  ///
+  /// 借鉴 tus.io 协议的 Upload-Offset / Upload-Length 头部。
+  /// 返回是否上传成功（2xx 状态码）。
+  Future<bool> uploadChunk({
+    required String sessionId,
+    required int chunkIndex,
+    required int totalChunks,
+    required Uint8List data,
+  }) async {
+    final uri = Uri.parse('$_syncServerUrl/api/v1/sync/chunk');
+    final headers = _buildRawHeaders(octetStream: true);
+    headers['X-Session-Id'] = sessionId;
+    headers['X-Chunk-Index'] = chunkIndex.toString();
+    headers['X-Total-Chunks'] = totalChunks.toString();
+    final response =
+        await _syncApiClient.client.post(uri, headers: headers, body: data);
+    return response.statusCode >= 200 && response.statusCode < 300;
+  }
+
+  /// 通知服务端合并所有分块并完成同步
+  ///
+  /// 返回是否合并成功（2xx 状态码）。
+  Future<bool> commitSession(String sessionId) async {
+    final uri =
+        Uri.parse('$_syncServerUrl/api/v1/sync/commit?session=$sessionId');
+    final headers = _buildRawHeaders();
+    final response = await _syncApiClient.client.post(uri, headers: headers);
+    return response.statusCode >= 200 && response.statusCode < 300;
+  }
+
+  /// 通知服务端放弃会话
+  Future<void> abortRemoteSession(String sessionId) async {
+    final uri =
+        Uri.parse('$_syncServerUrl/api/v1/sync/abort?session=$sessionId');
+    final headers = _buildRawHeaders();
+    await _syncApiClient.client.delete(uri, headers: headers);
+  }
+
+  /// 构建原始 HTTP 请求头（含认证）
+  ///
+  /// 用于未在 OpenAPI 规范中生成的端点，手动构建请求头。
+  Map<String, String> _buildRawHeaders({
+    bool octetStream = false,
+    bool jsonBody = false,
+  }) {
+    final headers = <String, String>{};
+    if (octetStream) {
+      headers['Content-Type'] = 'application/octet-stream';
+    } else if (jsonBody) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (_authToken != null && _authToken!.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $_authToken';
+    }
+    return headers;
+  }
 }

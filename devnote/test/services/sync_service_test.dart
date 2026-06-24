@@ -15,6 +15,7 @@ import 'package:get_it/get_it.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/api/devnote_api_client.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
 import 'package:devnote/features/sync/incremental_sync_service.dart';
@@ -61,6 +62,16 @@ void main() {
     // SyncService 的字段初始化器会调用 getIt<E2ECryptoService>()
     getIt.registerSingleton<E2ECryptoService>(mockCryptoService);
     getIt.registerSingleton<IncrementalSyncService>(mockIncrementalSync);
+
+    // P1-1: 注册 DevNoteApiClient —— SyncService 字段初始化器会调用 getIt<DevNoteApiClient>()
+    // 本测试不发起真实 HTTP 调用（仅测试加密失败分支与状态转换），
+    // 故使用占位 URL 注册真实实例即可。
+    getIt.registerLazySingleton<DevNoteApiClient>(
+      () => DevNoteApiClient(
+        syncServerUrl: 'http://localhost:0',
+        businessServerUrl: 'http://localhost:0',
+      ),
+    );
 
     // 构造 SyncService（构造时从 getIt 取依赖）
     syncService = SyncService();

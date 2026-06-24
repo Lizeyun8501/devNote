@@ -3,7 +3,6 @@
 // 来源: https://github.com/AppFlowy-IO/AppFlowy
 // 借鉴内容: Repository 模式通过 FFI 桥接调 Rust 持久化层
 
-import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/persistence_dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
@@ -38,36 +37,16 @@ class SqliteNoteRepository implements NoteRepository {
 
   bool get _useFFI => _bridge.isAvailable;
 
-  /// P0 修复 (双持久层数据分裂): FFI 模式下同步 note 元数据到 Dart sqflite。
-  ///
-  /// 问题：FFI 模式下 note 写入 Rust DB，但 EditorService 编辑 block 时
-  /// 写入 Dart DB，搜索也走 Dart FTS，导致数据分裂。
-  ///
-  /// 过渡方案：FFI 模式下双写 —— Rust DB 为权威源，Dart sqflite 作为
-  /// 搜索索引和 block 编辑的同步镜像。长期应统一到 Rust 端实现 block CRUD
-  /// 和 FTS 搜索，消除双写。
-  Future<void> _syncToDartSqflite(NoteModel note) async {
-    try {
-      final db = await _dbHelper.database;
-      // P1 修复 (P1-7): 使用 INSERT OR REPLACE 单语句完成 upsert，
-      // 消除原 query + insert/update 的 TOCTOU 竞态（查询与写入之间笔记可能被删除）
-      final sqfliteJson = note.toSqfliteJson();
-      await db.insert('notes', sqfliteJson,
-          conflictAlgorithm: ConflictAlgorithm.replace);
-    } catch (e) {
-      // 同步失败不影响主流程（Rust DB 已是权威源）
-      AppLogger.w('NoteRepository', 'Failed to sync note to Dart sqflite', error: e);
-    }
-  }
+  // P1-2 修复: 移除 _syncToDartSqflite() 双写逻辑
+  // 原实现: FFI 写入 Rust DB 后同步双写到 Dart sqflite，作为搜索索引和 block 编辑的镜像。
+  // 现已将 searchNotes 和 getNoteIdsByTag 迁移到 FFI，不再依赖 Dart sqflite 作为搜索索引。
+  // block 编辑仍暂时使用 Dart sqflite（见 EditorService），后续应迁移到 Rust persistence。
 
   @override
   Future<NoteModel> createNote(NoteModel note) async {
     if (_useFFI) {
       final result = await _dispatch.create(entity: 'note', data: note.toJson());
-      final saved = NoteModel.fromJson(result);
-      // P0 修复: 同步到 Dart sqflite，确保搜索和 block 编辑数据一致
-      await _syncToDartSqflite(saved);
-      return saved;
+      return NoteModel.fromJson(result);
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for createNote');
     final db = await _dbHelper.database;
@@ -84,10 +63,7 @@ class SqliteNoteRepository implements NoteRepository {
       // 返回的是错误的笔记。改用 _dispatch.get() 直接调用 Dispatch.getNote(id)。
       final result = await _dispatch.get(entity: 'note', id: id);
       if (result == null) return null;
-      final note = NoteModel.fromJson(result);
-      // P0 修复: 同步到 Dart sqflite，确保后续 block 编辑基于最新数据
-      await _syncToDartSqflite(note);
-      return note;
+      return NoteModel.fromJson(result);
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for getNote');
     final db = await _dbHelper.database;
@@ -104,10 +80,7 @@ class SqliteNoteRepository implements NoteRepository {
   Future<NoteModel> updateNote(NoteModel note) async {
     if (_useFFI) {
       final result = await _dispatch.update(entity: 'note', id: note.id, data: note.toJson());
-      final saved = NoteModel.fromJson(result);
-      // P0 修复: 同步到 Dart sqflite，确保搜索索引和 block 编辑数据一致
-      await _syncToDartSqflite(saved);
-      return saved;
+      return NoteModel.fromJson(result);
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for updateNote');
     final db = await _dbHelper.database;
@@ -130,14 +103,7 @@ class SqliteNoteRepository implements NoteRepository {
   Future<void> deleteNote(String id) async {
     if (_useFFI) {
       await _dispatch.delete(entity: 'note', id: id);
-      // P1 修复 (P1-7): 同步删除 Dart sqflite 镜像，避免孤儿数据
-      // 依赖 ON DELETE CASCADE 清理 note_tags/blocks/attachments
-      try {
-        final db = await _dbHelper.database;
-        await db.delete('notes', where: 'id = ?', whereArgs: [id]);
-      } catch (e) {
-        AppLogger.w('NoteRepository', 'Failed to sync note deletion to Dart sqflite', error: e);
-      }
+      // P1-2 修复: 不再同步删除 Dart sqflite 镜像（双写已移除）
       return;
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for deleteNote');
@@ -187,38 +153,61 @@ class SqliteNoteRepository implements NoteRepository {
     return results.map((json) => NoteModel.fromJson(json)).toList();
   }
 
-  /// P1 架构修复: FTS5 全文搜索，封装到 Repository 避免跨层访问
-  /// FTS5 不可用时回退到内存过滤
+  /// P1-2 修复: FTS5 全文搜索通过 FFI 调用 Rust 搜索引擎
+  ///
+  /// 原实现: 直接查询 Dart sqflite 的 FTS5 索引，绕过 Rust FFI，
+  /// 导致数据分裂（需双写维护两套数据库）。
+  /// 现改为: 通过 FFI 调用 Rust 端的 search_notes，使用 Rust 端的 FTS5 索引，
+  /// 消除 Dart sqflite 作为搜索索引的依赖。
+  /// FFI 不可用时回退到内存过滤（不再依赖 Dart sqflite）。
   @override
   Future<List<NoteModel>> searchNotes(String query) async {
-    final db = await _dbHelper.database;
-    try {
-      final ftsResults = await _dbHelper.searchNotesFTS(query);
-      return ftsResults.map((json) => NoteModel.fromJson(json)).toList();
-    } catch (e) {
-      AppLogger.w('NoteRepository', 'FTS5 search failed, falling back to in-memory filter', error: e);
-      // 回退：全量加载后内存过滤
-      final all = await db.query('notes', orderBy: 'updated_at DESC');
-      final lowerQuery = query.toLowerCase();
-      return all
-          .where((json) =>
-              (json['title'] as String?)?.toLowerCase().contains(lowerQuery) == true ||
-              (json['content'] as String?)?.toLowerCase().contains(lowerQuery) == true)
-          .map((json) => NoteModel.fromJson(json))
-          .toList();
+    if (_useFFI) {
+      try {
+        final results = await _bridge.searchNotes(query: query);
+        // SearchResult 包含 note_id/title/snippet/score，
+        // 转换为 NoteModel（snippet 作为 content 的近似）
+        return results
+            .map((r) => NoteModel(
+                  id: r['note_id'] as String,
+                  title: r['title'] as String,
+                  content: r['snippet'] as String? ?? '',
+                  folderId: '', // 搜索结果不包含 folder_id
+                  createdAt: DateTime.now(),
+                  updatedAt: DateTime.now(),
+                ))
+            .toList();
+      } catch (e) {
+        AppLogger.w('NoteRepository', 'FFI search failed, falling back to in-memory filter', error: e);
+      }
     }
+    // 回退: 从 FFI 加载全部笔记后内存过滤（不再依赖 Dart sqflite）
+    AppLogger.d('NoteRepository', 'FFI not available or search failed, using in-memory filter');
+    final all = await listNotes('');
+    final lowerQuery = query.toLowerCase();
+    return all
+        .where((n) =>
+            n.title.toLowerCase().contains(lowerQuery) ||
+            n.content.toLowerCase().contains(lowerQuery))
+        .toList();
   }
 
-  /// P1 架构修复: 按标签查询笔记 ID，封装到 Repository 避免跨层访问
+  /// P1-2 修复: 按标签查询笔记 ID 通过 FFI 调用 Rust 持久化层
+  ///
+  /// 原实现: 直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
+  /// 现改为: 通过 FFI 调用 Rust 端的 get_note_ids_by_tag，
+  /// 消除 Dart sqflite 作为标签查询的依赖。
   @override
   Future<List<String>> getNoteIdsByTag(String tagId) async {
-    final db = await _dbHelper.database;
-    final rows = await db.query(
-      'note_tags',
-      columns: ['note_id'],
-      where: 'tag_id = ?',
-      whereArgs: [tagId],
-    );
-    return rows.map((r) => r['note_id'] as String).toList();
+    if (_useFFI) {
+      try {
+        return await _bridge.getNoteIdsByTag(tagId);
+      } catch (e) {
+        AppLogger.w('NoteRepository', 'FFI getNoteIdsByTag failed', error: e);
+        return [];
+      }
+    }
+    AppLogger.d('NoteRepository', 'FFI not available, getNoteIdsByTag returns empty');
+    return [];
   }
 }

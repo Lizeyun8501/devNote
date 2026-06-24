@@ -1,7 +1,9 @@
 import 'package:get_it/get_it.dart';
 
+import 'package:devnote/api/devnote_api_client.dart';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
+import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
 import 'package:devnote/core/performance/memory_manager.dart';
@@ -39,6 +41,15 @@ Future<void> setupDependencies() async {
 
   // P2-7: 多语言扩展 —— 语言设置服务（持久化用户语言偏好）
   getIt.registerLazySingleton<LocaleService>(() => LocaleService());
+
+  // P1-1: 统一 API 客户端 —— 封装生成的 OpenAPI 客户端
+  // authToken 初始为 null，由 SyncService 在每次调用前通过 setAuthToken 更新
+  getIt.registerLazySingleton<DevNoteApiClient>(
+    () => DevNoteApiClient(
+      syncServerUrl: defaultSyncServerUrl,
+      businessServerUrl: defaultBusinessServerUrl,
+    ),
+  );
 }
 
 /// 释放 core 层已注册单例的资源。

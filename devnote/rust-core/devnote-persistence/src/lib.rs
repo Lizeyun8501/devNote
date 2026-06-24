@@ -1337,6 +1337,20 @@ fn str_to_permission(s: &str) -> Permission {
 impl SqliteNoteRepository {
     // ---- ResourceACL CRUD ----
 
+    /// 按标签查询笔记 ID —— P1-2 修复: 消除双重持久化
+    ///
+    /// 原 Flutter 端直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
+    /// 现通过 Rust 持久化层查询，确保数据源唯一。
+    pub fn get_note_ids_by_tag(&self, tag_id: &Uuid) -> Result<Vec<String>> {
+        let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
+        let mut stmt = conn.prepare("SELECT note_id FROM note_tags WHERE tag_id = ?1")?;
+        let tag_id_str = tag_id.to_string();
+        let ids: Result<Vec<String>, rusqlite::Error> = stmt
+            .query_map(params![tag_id_str], |row| row.get(0))?
+            .collect();
+        Ok(ids?)
+    }
+
     pub fn create_resource_acl(&self, acl: ResourceACL) -> Result<ResourceACL> {
         let conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let permission_str = permission_to_str(&acl.permission);

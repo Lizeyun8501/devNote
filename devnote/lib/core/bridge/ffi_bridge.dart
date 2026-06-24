@@ -307,6 +307,12 @@ class FFIBridge
     await rust.deleteTag(id: id);
   }
 
+  /// P1-2 修复: 按标签查询笔记 ID —— 通过 FFI 调用 Rust 持久化层
+  Future<List<String>> getNoteIdsByTag(String tagId) async {
+    _checkAvailable();
+    return await rust.getNoteIdsByTag(tagId: tagId);
+  }
+
   // ============================================================
   // 编辑器 API
   // ============================================================

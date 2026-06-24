@@ -111,6 +111,13 @@ Future<List<TagData>> listTags() => RustLib.instance.api.crateFrbApiListTags();
 Future<void> deleteTag({required String id}) =>
     RustLib.instance.api.crateFrbApiDeleteTag(id: id);
 
+/// 按标签查询笔记 ID —— P1-2 修复: 消除双重持久化
+///
+/// 原实现: Flutter 端直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
+/// 现改为: 通过 FFI 调用 Rust 持久化层，确保数据源唯一。
+Future<List<String>> getNoteIdsByTag({required String tagId}) =>
+    RustLib.instance.api.crateFrbApiGetNoteIdsByTag(tagId: tagId);
+
 /// 插入块 —— 替代原 EditorEvent.InsertBlock
 Future<BlockData> insertBlock({
   required String noteId,
