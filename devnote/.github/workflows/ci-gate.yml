@@ -1,0 +1,68 @@
+# CI 门禁聚合 —— PR 质量总览
+#
+# P0-3 修复: 统一 CI 门禁，确保 PR 合并前所有质量检查通过
+#
+# 此工作流是 PR 的最终门禁，依赖以下子工作流全部通过:
+#   - rust.yml     (Rust: test + clippy + audit)
+#   - go.yml       (Go: test + vet + govulncheck)
+#   - flutter.yml  (Flutter: test + analyze)
+#   - openapi.yml  (OpenAPI: 契约一致性)
+#
+# 使用 workflow_run 触发，在子工作流完成后自动检查结果。
+# 若任一子工作流失败，此门禁失败，阻止 PR 合并。
+name: CI Gate
+
+on:
+  workflow_run:
+    workflows: ["Rust CI", "Go CI", "Flutter CI", "OpenAPI Contract Check"]
+    types:
+      - completed
+    branches: [main, develop]
+
+jobs:
+  gate:
+    name: 质量门禁检查
+    runs-on: ubuntu-latest
+    # 仅在子工作流全部完成时运行
+    if: ${{ github.event.workflow_run.conclusion != 'skipped' }}
+
+    steps:
+      - name: 检查子工作流结果
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event: 'pull_request',
+              status: 'completed',
+              per_page: 20,
+            });
+
+            const requiredWorkflows = [
+              'Rust CI',
+              'Go CI',
+              'Flutter CI',
+              'OpenAPI Contract Check',
+            ];
+
+            const headSha = context.payload.pull_request?.head?.sha || context.sha;
+            const recentRuns = runs.data.workflow_runs.filter(
+              r => r.head_sha === headSha
+            );
+
+            const failures = [];
+            for (const name of requiredWorkflows) {
+              const run = recentRuns.find(r => r.name === name);
+              if (!run) {
+                failures.push(`${name}: 未运行`);
+              } else if (run.conclusion !== 'success') {
+                failures.push(`${name}: ${run.conclusion}`);
+              }
+            }
+
+            if (failures.length > 0) {
+              core.setFailed(`质量门禁失败:\n${failures.join('\n')}`);
+            } else {
+              core.info('✓ 所有 CI 检查通过');
+            }

@@ -1,0 +1,69 @@
+# Flutter CI —— flutter test + dart analyze
+#
+# P0-3 修复: 建立自动化 Flutter 质量保障流水线
+# - flutter pub get: 依赖解析
+# - dart run build_runner build: 代码生成（freezed/json_serializable）
+# - dart analyze: 静态分析
+# - flutter test: 单元测试与 Widget 测试
+#
+# 触发条件: lib/、test/、pubspec.yaml 或本工作流文件变更时
+name: Flutter CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
+      - '.github/workflows/flutter.yml'
+  pull_request:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
+      - '.github/workflows/flutter.yml'
+
+env:
+  FLUTTER_CHANNEL: stable
+
+jobs:
+  analyze-and-test:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: 显示版本信息
+        run: flutter --version
+
+      - name: 依赖解析 (flutter pub get)
+        run: flutter pub get
+
+      - name: 代码生成 (build_runner)
+        # 重新生成 freezed/json_serializable 代码，确保与源码同步
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: 静态分析 (dart analyze)
+        run: dart analyze --fatal-infos
+
+      - name: 单元测试与 Widget 测试
+        run: flutter test --coverage --reporter expanded
+
+      - name: 上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-coverage
+          path: coverage/lcov.info

@@ -1,0 +1,119 @@
+# OpenAPI 契约一致性检查
+#
+# P0-3 修复: 确保 OpenAPI 规范文件与生成的 Dart 客户端代码保持一致
+#
+# 检查内容:
+#   1. 规范文件语法验证（swagger-cli validate）
+#   2. 生成的客户端代码与规范文件一致性（重新生成并比对 diff）
+#
+# 触发条件: docs/api/、lib/api/generated/、openapi-generator-config.yaml
+#           或本工作流文件变更时
+name: OpenAPI Contract Check
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'docs/api/**'
+      - 'lib/api/generated/**'
+      - 'openapi-generator-config.yaml'
+      - 'scripts/generate_api_client.sh'
+      - '.github/workflows/openapi.yml'
+  pull_request:
+    paths:
+      - 'docs/api/**'
+      - 'lib/api/generated/**'
+      - 'openapi-generator-config.yaml'
+      - 'scripts/generate_api_client.sh'
+      - '.github/workflows/openapi.yml'
+
+jobs:
+  validate-and-check:
+    name: Validate Spec & Check Drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 @redocly/cli（OpenAPI 规范验证工具）
+        run: npm install -g @redocly/cli@latest
+
+      - name: 验证 sync-server OpenAPI 规范
+        run: redocly lint docs/api/sync-server-openapi.yaml
+
+      - name: 验证 business-server OpenAPI 规范
+        run: redocly lint docs/api/business-server-openapi.yaml
+
+      - name: 检查生成的客户端代码是否与规范一致
+        # 重新生成客户端代码，与仓库中已提交的代码比对 diff
+        # 若有差异，说明开发者修改了规范但未重新生成客户端（契约漂移）
+        run: |
+          echo "检查 OpenAPI 客户端代码是否与规范文件同步..."
+          # 安装 openapi-generator-cli
+          npm install -g @openapitools/openapi-generator-cli
+
+          # 生成到临时目录，避免污染工作区
+          mkdir -p /tmp/openapi-check
+
+          # 生成 sync_server 客户端
+          openapi-generator-cli generate \
+            -i docs/api/sync-server-openapi.yaml \
+            -g dart \
+            -o /tmp/openapi-check/sync_server \
+            -c openapi-generator-config.yaml \
+            -p "pubName=devnote_sync_api" \
+            -p "pubLibrary=devnote_sync_api" \
+            --skip-validate-spec
+
+          # 生成 business_server 客户端
+          openapi-generator-cli generate \
+            -i docs/api/business-server-openapi.yaml \
+            -g dart \
+            -o /tmp/openapi-check/business_server \
+            -c openapi-generator-config.yaml \
+            -p "pubName=devnote_business_api" \
+            -p "pubLibrary=devnote_business_api" \
+            --skip-validate-spec
+
+          # 修正 library 名称（与 scripts/generate_api_client.sh 一致）
+          find /tmp/openapi-check -name "*.dart" -exec sed -i \
+            -e "s/library devnote_api;/library devnote_sync_api;/g" \
+            -e "s/part of devnote_api;/part of devnote_sync_api;/g" \
+            {} + || true
+
+          # 比对生成的代码与仓库中已提交的代码
+          # 忽略 .openapi-generator-ignore、README 等非核心文件
+          if diff -rq \
+            --exclude=".openapi-generator-ignore" \
+            --exclude=".travis.yml" \
+            --exclude="git_push.sh" \
+            --exclude="README.md" \
+            --exclude="analysis_options.yaml" \
+            --exclude=".gitignore" \
+            --exclude="pubspec.yaml" \
+            lib/api/generated/sync_server /tmp/openapi-check/sync_server; then
+            echo "✓ sync_server 客户端代码与规范一致"
+          else
+            echo "✗ sync_server 客户端代码与规范不一致，请运行 ./scripts/generate_api_client.sh 重新生成"
+            exit 1
+          fi
+
+          if diff -rq \
+            --exclude=".openapi-generator-ignore" \
+            --exclude=".travis.yml" \
+            --exclude="git_push.sh" \
+            --exclude="README.md" \
+            --exclude="analysis_options.yaml" \
+            --exclude=".gitignore" \
+            --exclude="pubspec.yaml" \
+            lib/api/generated/business_server /tmp/openapi-check/business_server; then
+            echo "✓ business_server 客户端代码与规范一致"
+          else
+            echo "✗ business_server 客户端代码与规范不一致，请运行 ./scripts/generate_api_client.sh 重新生成"
+            exit 1
+          fi
