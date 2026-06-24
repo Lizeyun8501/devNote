@@ -30,7 +30,7 @@ version: 1.0.0+1
 # ============================================================
 
 environment:
-  sdk: ^3.6.0
+  sdk: ^3.12.0
 
 dependencies:
   flutter:
@@ -43,13 +43,13 @@ dependencies:
   flutter_bloc: ^9.1.0
   equatable: ^2.0.7
   provider: ^6.1.4
-  freezed_annotation: ^2.4.4
+  freezed_annotation: ^3.0.0
   json_annotation: ^4.9.0
   uuid: ^4.5.1
   path_provider: ^2.1.5
   path: ^1.9.0
   sqflite: ^2.4.1
-  intl: ^0.19.0
+  intl: ^0.20.2
   ffi: ^2.1.4
   web_socket_channel: ^3.0.1
   flutter_math_fork: ^0.7.2
@@ -145,13 +145,22 @@ dependencies:
   # ============================================================
   flutter_local_notifications: ^17.2.2
   timezone: ^0.9.4
+  # ============================================================
+  # P2-9: OpenAPI 契约驱动 Dart 客户端
+  # 由 openapi-generator 从 docs/api/*.yaml 自动生成
+  # 运行 ./scripts/generate_api_client.sh 重新生成
+  # ============================================================
+  devnote_sync_api:
+    path: lib/api/generated/sync_server
+  devnote_business_api:
+    path: lib/api/generated/business_server
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
   build_runner: ^2.4.14
-  freezed: ^2.5.7
+  freezed: ^3.0.0
   json_serializable: ^6.9.4
   # 测试依赖 —— BLoC 测试、Mock 框架、集成测试
   bloc_test: ^10.0.0

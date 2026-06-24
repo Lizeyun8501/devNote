@@ -1,0 +1,78 @@
+# Rust CI —— cargo test + clippy + audit
+#
+# P0-3 修复: 建立自动化 Rust 质量保障流水线
+# - cargo test --workspace: 全工作区测试（17 个 crate）
+# - cargo clippy: 静态分析，拒绝 warning
+# - cargo audit: 已知漏洞扫描（RustSec Advisory Database）
+# - cargo fmt --check: 格式检查
+#
+# 触发条件: rust-core/ 或 .github/workflows/rust.yml 变更时
+name: Rust CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'rust-core/**'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    paths:
+      - 'rust-core/**'
+      - '.github/workflows/rust.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+
+      - name: 格式检查 (cargo fmt --check)
+        run: cargo fmt --all -- --check
+
+      - name: Clippy 静态分析 (拒绝 warning)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 单元测试与集成测试
+        run: cargo test --workspace --verbose
+
+  audit:
+    name: 安全漏洞扫描
+    runs-on: ubuntu-latest
+    # audit 独立运行，不阻塞测试（漏洞可能需要时间修复）
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+
+      - name: 已知漏洞扫描 (cargo audit)
+        working-directory: rust-core
+        run: cargo audit

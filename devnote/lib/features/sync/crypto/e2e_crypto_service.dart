@@ -417,7 +417,7 @@ class E2ECryptoService {
   Uint8List _encryptWithKey(Uint8List data, Uint8List key) {
     final nonce = _generateRandomBytes(12);
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, null));
+      ..init(true, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
     final ciphertextWithTag = cipher.process(data);
 
     final result = BytesBuilder();
@@ -438,7 +438,7 @@ class E2ECryptoService {
       final nonce = encryptedData.sublist(0, 12);
       final ciphertextWithTag = encryptedData.sublist(12);
       final cipher = GCMBlockCipher(AESEngine())
-        ..init(false, AEADParameters(KeyParameter(key), 128, nonce, null));
+        ..init(false, AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0)));
       return cipher.process(ciphertextWithTag);
     } catch (e) {
       AppLogger.w('E2ECryptoService', 'Failed to decrypt data with key', error: e);

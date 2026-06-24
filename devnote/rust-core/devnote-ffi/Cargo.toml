@@ -42,4 +42,4 @@ sentry-anyhow = "0.34"
 # 支持 async/await、Stream、SSE 编解码器
 # 来源: https://crates.io/crates/flutter_rust_bridge
 # ============================================================
-flutter_rust_bridge = "2.12"
+flutter_rust_bridge = "=2.12.0"

@@ -1,6 +1,21 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// Claims 是 JWT 的 claim 结构，与 sync-server 的 model.Claims 对齐。
+//
+// P1-3 修复: 原实现使用 jwt.MapClaims 动态读取字段，不校验 iss/aud，
+// 且签名算法接受任何 HMAC 变体。现改为类型化 Claims 并在 middleware 中
+// 校验 iss/aud，统一签名算法为 HS256，确保跨服务 token 验证一致性。
+type Claims struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	jwt.RegisteredClaims
+}
 
 // NoteMeta represents metadata for a single note.
 type NoteMeta struct {

@@ -11,7 +11,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:devnote/features/editor/bloc/editor_bloc.dart';
 import 'package:devnote/features/editor/bloc/editor_state.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
-import '../../helpers/test_helpers.dart';
+import '../helpers/test_helpers.dart';
 
 // Mock EditorBloc
 class MockEditorBloc extends Mock implements EditorBloc {}

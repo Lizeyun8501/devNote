@@ -19,9 +19,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:devnote/api/devnote_api_client.dart';
 import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/di/injection.dart';
@@ -144,6 +144,8 @@ class IncrementalSyncService {
 
   final RdiffService _rdiff = RdiffService();
   final E2ECryptoService _cryptoService = getIt<E2ECryptoService>();
+  // P1-1: 注入统一 API 客户端，替代手写 HTTP 调用
+  final DevNoteApiClient _apiClient = getIt<DevNoteApiClient>();
 
   /// 分块大小（64KB）—— 借鉴 tus.io 协议的默认分块大小
   /// 选择 64KB 的原因：
@@ -153,7 +155,6 @@ class IncrementalSyncService {
 
   /// SharedPreferences 键名前缀
   static const String _keySession = 'incremental_sync_session';
-  static const String _keyServerUrl = syncServerUrlKey;
   static const String _keyAuthToken = syncAuthTokenKey;
 
   /// 当前活跃的同步会话（从持久化存储恢复）
@@ -458,50 +459,31 @@ class IncrementalSyncService {
 
   // ============================================================
   // 内部方法 —— 网络通信
+  // ------------------------------------------------------------  // P1-1: 替换手写 http 调用为 DevNoteApiClient 包装方法
   // ============================================================
-
-  Future<String> _getServerUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyServerUrl) ?? defaultSyncServerUrl;
-  }
 
   Future<String?> _getAuthToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_keyAuthToken);
   }
 
-  Map<String, String> _buildHeaders({bool octetStream = false}) {
-    final headers = <String, String>{};
-    if (octetStream) {
-      headers['Content-Type'] = 'application/octet-stream';
-    }
-    return headers;
-  }
-
-  Future<void> _addAuthHeader(Map<String, String> headers) async {
+  /// P1-1: 从 SharedPreferences 读取最新 token 并更新到 DevNoteApiClient
+  ///
+  /// 在每次 API 调用前调用，确保使用最新的认证令牌。
+  Future<void> _updateApiClientAuth() async {
     final token = await _getAuthToken();
-    if (token != null && token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
+    _apiClient.setAuthToken(token);
   }
 
   /// 从远端获取数据签名（用于增量计算基准）
   Future<List<RdiffBlockSignature>?> _fetchRemoteSignatures() async {
     try {
-      final serverUrl = await _getServerUrl();
-      final headers = _buildHeaders();
-      await _addAuthHeader(headers);
-
-      final uri = Uri.parse('$serverUrl/api/v1/sync/signatures');
-      final response = await http.get(uri, headers: headers);
-
-      if (response.statusCode == 204 || response.statusCode == 404) {
+      await _updateApiClientAuth();
+      final bodyBytes = await _apiClient.fetchRemoteSignatures();
+      if (bodyBytes == null) {
         return null; // 远端无数据（首次同步）
       }
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return _rdiff.decodeSignatures(response.bodyBytes);
-      }
-      return null;
+      return _rdiff.decodeSignatures(bodyBytes);
     } catch (e) {
       AppLogger.w('IncrementalSyncService', 'Failed to fetch remote signatures', error: e);
       return null;
@@ -513,13 +495,9 @@ class IncrementalSyncService {
     List<RdiffBlockSignature> signatures,
   ) async {
     try {
-      final serverUrl = await _getServerUrl();
-      final headers = _buildHeaders(octetStream: true);
-      await _addAuthHeader(headers);
-
-      final uri = Uri.parse('$serverUrl/api/v1/sync/signatures');
+      await _updateApiClientAuth();
       final body = _rdiff.encodeSignatures(signatures);
-      await http.put(uri, headers: headers, body: body);
+      await _apiClient.updateRemoteSignatures(body);
     } catch (e) {
       // 签名更新失败不影响同步正确性（下次降级为全量）
       AppLogger.w('IncrementalSyncService', 'Failed to update remote signatures', error: e);
@@ -529,18 +507,8 @@ class IncrementalSyncService {
   /// 请求远端计算并返回 delta
   Future<Uint8List?> _fetchRemoteDelta(Uint8List localSignatures) async {
     try {
-      final serverUrl = await _getServerUrl();
-      final headers = _buildHeaders(octetStream: true);
-      await _addAuthHeader(headers);
-
-      final uri = Uri.parse('$serverUrl/api/v1/sync/delta');
-      final response = await http.post(uri, headers: headers, body: localSignatures);
-
-      if (response.statusCode == 204) return null;
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return response.bodyBytes;
-      }
-      return null;
+      await _updateApiClientAuth();
+      return _apiClient.fetchRemoteDelta(localSignatures);
     } catch (e) {
       AppLogger.w('IncrementalSyncService', 'Failed to upload delta', error: e);
       return null;
@@ -555,19 +523,13 @@ class IncrementalSyncService {
     required Uint8List data,
   }) async {
     try {
-      final serverUrl = await _getServerUrl();
-      final headers = _buildHeaders(octetStream: true);
-      await _addAuthHeader(headers);
-
-      // 借鉴 tus.io 协议的 Upload-Offset / Upload-Length 头部
-      headers['X-Session-Id'] = sessionId;
-      headers['X-Chunk-Index'] = chunkIndex.toString();
-      headers['X-Total-Chunks'] = totalChunks.toString();
-
-      final uri = Uri.parse('$serverUrl/api/v1/sync/chunk');
-      final response = await http.post(uri, headers: headers, body: data);
-
-      return response.statusCode >= 200 && response.statusCode < 300;
+      await _updateApiClientAuth();
+      return _apiClient.uploadChunk(
+        sessionId: sessionId,
+        chunkIndex: chunkIndex,
+        totalChunks: totalChunks,
+        data: data,
+      );
     } catch (e) {
       AppLogger.w('IncrementalSyncService', 'Failed to upload chunk (session=$sessionId, index=$chunkIndex)', error: e);
       return false;
@@ -577,14 +539,8 @@ class IncrementalSyncService {
   /// 通知服务端合并所有分块并完成同步
   Future<bool> _commitSession(String sessionId) async {
     try {
-      final serverUrl = await _getServerUrl();
-      final headers = _buildHeaders();
-      await _addAuthHeader(headers);
-
-      final uri = Uri.parse('$serverUrl/api/v1/sync/commit?session=$sessionId');
-      final response = await http.post(uri, headers: headers);
-
-      return response.statusCode >= 200 && response.statusCode < 300;
+      await _updateApiClientAuth();
+      return _apiClient.commitSession(sessionId);
     } catch (e) {
       AppLogger.w('IncrementalSyncService', 'Failed to commit sync session (session=$sessionId)', error: e);
       return false;
@@ -594,12 +550,8 @@ class IncrementalSyncService {
   /// 通知服务端放弃会话
   Future<void> _abortRemoteSession(String sessionId) async {
     try {
-      final serverUrl = await _getServerUrl();
-      final headers = _buildHeaders();
-      await _addAuthHeader(headers);
-
-      final uri = Uri.parse('$serverUrl/api/v1/sync/abort?session=$sessionId');
-      await http.delete(uri, headers: headers);
+      await _updateApiClientAuth();
+      await _apiClient.abortRemoteSession(sessionId);
     } catch (_) {
       // 忽略放弃失败
     }

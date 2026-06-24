@@ -2,8 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:devnote/api/devnote_api_client.dart';
 import 'package:devnote/core/config/app_config.dart';
-import 'package:http/http.dart' as http;
+import 'package:devnote_sync_api/api.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:devnote/core/di/injection.dart';
@@ -57,7 +58,6 @@ class SyncService {
   SyncService();
 
   // SharedPreferences 中存储服务器地址和认证令牌的键名
-  static const String _keyServerUrl = syncServerUrlKey;
   static const String _keyAuthToken = syncAuthTokenKey;
 
   static const String _keyLastSyncTime = 'sync_last_sync_time';
@@ -69,6 +69,8 @@ class SyncService {
 
   final E2ECryptoService _cryptoService = getIt<E2ECryptoService>();
   final IncrementalSyncService _incrementalSync = getIt<IncrementalSyncService>();
+  // P1-1: 注入统一 API 客户端，替代手写 HTTP 调用
+  final DevNoteApiClient _apiClient = getIt<DevNoteApiClient>();
 
   SyncServiceState _state = const SyncServiceState(
     status: SyncServiceStatus.idle,
@@ -229,21 +231,11 @@ class SyncService {
     // P1 修复 (INC-07): 上报冲突解决结果到服务端
     if (conflictId != null) {
       try {
-        final serverUrl = await _getServerUrl();
-        final token = await _getAuthToken();
-        final uri = Uri.parse('$serverUrl/api/v1/sync/conflicts/resolve');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-        };
-        if (token != null && token.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $token';
-        }
-        final body = jsonEncode({
-          'conflict_id': conflictId,
-          'resolution': useRemote ? 'remote' : 'local',
-        });
-        await http.post(uri, headers: headers, body: body).timeout(
-          const Duration(seconds: 15),
+        // P1-1: 使用 DevNoteApiClient 替代手写 http.post
+        await _updateApiClientAuth();
+        await _apiClient.reportConflictResolution(
+          conflictId: conflictId,
+          resolution: useRemote ? 'remote' : 'local',
         );
       } catch (e, stack) {
         // P2 修复 (P2-12): 记录上报失败日志，原 catch(_) 静默吞异常导致故障不可见
@@ -364,16 +356,19 @@ class SyncService {
   /// 是否有可恢复的增量同步会话
   bool get hasResumableSession => _incrementalSync.hasResumableSession;
 
-  /// 获取配置的服务器地址，优先从 SharedPreferences 读取，否则使用默认值
-  Future<String> _getServerUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyServerUrl) ?? defaultSyncServerUrl;
-  }
-
   /// 获取 JWT 认证令牌
   Future<String?> _getAuthToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_keyAuthToken);
+  }
+
+  /// P1-1: 从 SharedPreferences 读取最新 token 并更新到 DevNoteApiClient
+  ///
+  /// 在每次 API 调用前调用，确保生成的 SyncApi 使用最新的认证令牌。
+  /// 使用轻量级 setAuthToken（仅更新默认请求头，不重建 ApiClient）。
+  Future<void> _updateApiClientAuth() async {
+    final token = await _getAuthToken();
+    _apiClient.setAuthToken(token);
   }
 
   /// 获取设备 ID，首次调用时生成并持久化
@@ -408,91 +403,83 @@ class SyncService {
     return '${timestamp.toRadixString(16)}-${random.toRadixString(16)}-${(random ^ timestamp).toRadixString(16)}';
   }
 
-  /// 执行推送：将加密后的数据通过 POST 请求发送到同步服务器
+  /// 执行推送：将加密后的数据通过生成的 SyncApi 推送到同步服务器
   ///
   /// P0 修复: 原实现发送 `application/octet-stream` 原始字节，但服务端
   /// `SyncHandler.Push` 期望 JSON 结构 `{device_id, records: [{note_id, action, version, payload}]}`。
   /// 两端协议完全不匹配，任何 Push 都会 400 失败。
   /// 现改为发送 JSON 结构化请求，加密后的数据作为 records[].payload 字段。
   ///
+  /// P1-1: 替换手写 http.post 为 DevNoteApiClient.pushSync（生成的 SyncApi.pushChanges）
+  ///
   /// 请求地址: POST /api/v1/sync/push
   /// 请求头: Content-Type: application/json, Authorization: Bearer {token}
   /// 请求体: PushRequest JSON（加密 payload 作为 base64 字符串）
   Future<void> _performPush(Uint8List data) async {
-    final serverUrl = await _getServerUrl();
-    final token = await _getAuthToken();
     final deviceId = await _getDeviceId();
-
-    final uri = Uri.parse('$serverUrl/api/v1/sync/push');
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-    };
-    if (token != null && token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
+    await _updateApiClientAuth();
 
     // P1 修复 (INC-01): 原实现把所有笔记塞进单条 record（note_id='sync-batch'），
     // 服务端 Push handler 按 per-note 语义处理，无法正确建立 per-note 版本链。
     // 改为：解析 data 为 notes 列表，每条 note 生成独立 record。
-    final List<Map<String, dynamic>> records;
+    late List<SyncRecordInput> records;
     try {
       final decoded = jsonDecode(utf8.decode(data));
       if (decoded is List) {
-        records = decoded.map((note) => {
-          'note_id': note['id'] ?? 'unknown',
-          'action': 'update',
-          'version': note['version'] ?? 0,
-          'payload': base64Encode(utf8.encode(jsonEncode(note))),
+        records = decoded.map((note) {
+          final noteMap = note as Map;
+          return SyncRecordInput(
+            noteId: noteMap['id']?.toString() ?? 'unknown',
+            action: SyncRecordInputActionEnum.update,
+            version: noteMap['version'] != null
+                ? (noteMap['version'] as num).toInt()
+                : null,
+            payload: base64Encode(utf8.encode(jsonEncode(note))),
+          );
         }).toList();
       } else if (decoded is Map) {
         // 单条 note 包装为列表
         records = [
-          {
-            'note_id': decoded['id'] ?? 'single',
-            'action': 'update',
-            'version': decoded['version'] ?? 0,
-            'payload': base64Encode(data),
-          }
+          SyncRecordInput(
+            noteId: decoded['id']?.toString() ?? 'single',
+            action: SyncRecordInputActionEnum.update,
+            version: decoded['version'] != null
+                ? (decoded['version'] as num).toInt()
+                : null,
+            payload: base64Encode(data),
+          )
         ];
       } else {
         // 无法解析，回退到批量模式
         records = [
-          {
-            'note_id': 'sync-batch',
-            'action': 'update',
-            'version': 0,
-            'payload': base64Encode(data),
-          }
+          SyncRecordInput(
+            noteId: 'sync-batch',
+            action: SyncRecordInputActionEnum.update,
+            payload: base64Encode(data),
+          )
         ];
       }
     } catch (_) {
       // 非 JSON 数据（如加密二进制），使用批量模式
       records = [
-        {
-          'note_id': 'sync-batch',
-          'action': 'update',
-          'version': 0,
-          'payload': base64Encode(data),
-        }
+        SyncRecordInput(
+          noteId: 'sync-batch',
+          action: SyncRecordInputActionEnum.update,
+          payload: base64Encode(data),
+        )
       ];
     }
 
-    final body = jsonEncode({
-      'device_id': deviceId,
-      'records': records,
-    });
-
-    final response = await http
-        .post(uri, headers: headers, body: body)
-        .timeout(const Duration(seconds: 30));
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      // 推送成功
-      return;
+    try {
+      await _apiClient
+          .pushSync(deviceId: deviceId, records: records)
+          .timeout(const Duration(seconds: 30));
+    } on ApiException catch (e) {
+      // 生成的 API 在 HTTP >= 400 时抛出 ApiException
+      throw Exception('推送失败: HTTP ${e.code} - ${e.message}');
+    } catch (e) {
+      throw Exception('推送失败: $e');
     }
-
-    // 服务端返回错误，抛出异常
-    throw Exception('推送失败: HTTP ${response.statusCode} - ${response.body}');
   }
 
   /// 执行拉取：从同步服务器获取数据
@@ -502,65 +489,58 @@ class SyncService {
   /// 返回 PullResponse JSON `{records, latest_version, has_more, limit}`。
   /// 现改为 POST JSON 请求，从 records 中提取 payload 解密。
   ///
+  /// P1-1: 替换手写 http.post 为 DevNoteApiClient.pullSync（生成的 SyncApi.pullChanges）
+  ///
   /// 请求地址: POST /api/v1/sync/pull
   /// 请求头: Content-Type: application/json, Authorization: Bearer {token}
   /// 返回: 服务端响应中聚合后的原始字节数据（Uint8List），无新数据时返回 null
   Future<Uint8List?> _performPull() async {
-    final serverUrl = await _getServerUrl();
-    final token = await _getAuthToken();
     final deviceId = await _getDeviceId();
-
-    final uri = Uri.parse('$serverUrl/api/v1/sync/pull');
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-    };
-    if (token != null && token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
+    await _updateApiClientAuth();
 
     final sinceVersion = await _getLastSyncVersion();
-    final body = jsonEncode({
-      'device_id': deviceId,
-      'since_version': sinceVersion,
-    });
 
-    final response = await http
-        .post(uri, headers: headers, body: body)
-        .timeout(const Duration(seconds: 30));
+    final PullResponse? resp;
+    try {
+      resp = await _apiClient
+          .pullSync(deviceId: deviceId, sinceVersion: sinceVersion)
+          .timeout(const Duration(seconds: 30));
+    } on ApiException catch (e) {
+      // 生成的 API 在 HTTP >= 400 时抛出 ApiException
+      throw Exception('拉取失败: HTTP ${e.code} - ${e.message}');
+    } catch (e) {
+      throw Exception('拉取失败: $e');
+    }
 
-    if (response.statusCode == 204) {
-      // 无新数据
+    // 无新数据（服务端返回 204 或 null 响应体）
+    if (resp == null) {
       return null;
     }
 
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      // 拉取成功，解析 PullResponse JSON
-      final resp = jsonDecode(response.body) as Map<String, dynamic>;
-      final records = (resp['records'] as List?) ?? [];
-      if (records.isEmpty) {
-        return null;
-      }
-      // 聚合所有 record 的 payload（base64 编码的加密数据）
-      final payloadBytes = <int>[];
-      for (final record in records) {
-        final payload = record['payload'] as String?;
-        if (payload != null && payload.isNotEmpty) {
-          payloadBytes.addAll(base64Decode(payload));
-        }
-      }
-      // 更新本地最新版本号
-      final latestVersion = resp['latest_version'];
-      if (latestVersion != null) {
-        await _setLastSyncVersion((latestVersion as num).toInt());
-      }
-      if (payloadBytes.isEmpty) {
-        return null;
-      }
-      return Uint8List.fromList(payloadBytes);
+    final records = resp.records;
+    if (records.isEmpty) {
+      return null;
     }
 
-    // 服务端返回错误，抛出异常
-    throw Exception('拉取失败: HTTP ${response.statusCode} - ${response.body}');
+    // 聚合所有 record 的 payload（base64 编码的加密数据）
+    final payloadBytes = <int>[];
+    for (final record in records) {
+      final payload = record.payload;
+      if (payload != null && payload.isNotEmpty) {
+        payloadBytes.addAll(base64Decode(payload));
+      }
+    }
+
+    // 更新本地最新版本号
+    final latestVersion = resp.latestVersion;
+    if (latestVersion != null) {
+      await _setLastSyncVersion(latestVersion);
+    }
+
+    if (payloadBytes.isEmpty) {
+      return null;
+    }
+    return Uint8List.fromList(payloadBytes);
   }
 
   /// 通知所有状态流监听器当前服务状态已变更

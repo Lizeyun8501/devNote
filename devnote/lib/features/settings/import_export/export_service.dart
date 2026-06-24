@@ -518,6 +518,9 @@ class ExportService {
       case BlockType.whiteboard:
         // 白板内容为元素 JSON，导出为占位符（无法用 Markdown 表示）
         return '[Whiteboard]';
+      case BlockType.audio:
+        // 音频块内容为文件路径，导出为占位链接
+        return '[Audio](${block.content})';
     }
   }
 

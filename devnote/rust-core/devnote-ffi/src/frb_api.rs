@@ -23,6 +23,7 @@ use devnote_flashcard::FlashcardEngine;
 use devnote_extensions::format::{ExportFormat, FormatExporter, FormatImporter, HtmlExporter, ImportFormat, MarkdownExporter, MarkdownImporter, ObsidianImporter};
 use devnote_graph::GraphEngine;
 use devnote_object::ObjectEngine;
+use devnote_observe::warn;
 use devnote_persistence::SqliteNoteRepository;
 use devnote_search::SearchEngine;
 use devnote_sync::{ClientSyncEngine, SyncEngine};
@@ -64,6 +65,10 @@ pub(crate) static FLASHCARD_ENGINE: LazyLock<Mutex<Option<devnote_flashcard::Sql
 pub(crate) static CRDT_DOCS: LazyLock<Mutex<HashMap<String, CRDTDocument>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 初始化警告 —— 记录初始化失败的辅助引擎，供 UI 提示"功能受限"
+pub(crate) static INIT_WARNINGS: LazyLock<Mutex<Vec<String>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
 // ── FRB 数据类型 ──────────────────────────────────────────────────────
 // FRB 自动将这些 Rust 结构体映射为 Dart 类，无需手写序列化代码
 
@@ -81,6 +86,8 @@ pub struct VersionInfo {
 pub struct HealthCheckResult {
     pub status: String,
     pub engines: HashMap<String, bool>,
+    /// 初始化失败的辅助引擎及错误信息，供 UI 提示"核心引擎未加载，功能受限"
+    pub warnings: Vec<String>,
 }
 
 /// 笔记数据
@@ -168,31 +175,68 @@ pub struct DatabaseViewData {
 ///
 /// P0 修复: 原实现使用 `in_memory()`，FFI 模式下数据重启全部丢失。
 /// 现改为文件持久化，数据库路径通过参数传入，与 Dart 端共享 `devnote.db`。
+///
+/// P0 修复: 原实现中 search/database/object/graph/flashcard 引擎初始化失败时
+/// 用 `if let Ok` 静默吞错，用户无法感知功能受限。现改为收集失败引擎名并记录
+/// 到 INIT_WARNINGS，通过 health_check() 暴露给 Dart 端，由 UI 提示用户
+/// "核心引擎未加载，功能受限"。
 pub fn init_engines(db_path: String) -> Result<(), String> {
+    let mut warnings: Vec<String> = Vec::new();
+
+    // 核心引擎：持久化层失败是致命错误，直接返回 Err
     let repo = SqliteNoteRepository::init(&db_path)
         .map_err(|e| format!("Failed to init persistence: {}", e))?;
     *NOTE_REPO.lock() = Some(repo);
     *BLOCK_EDITOR.lock() = Some(DefaultBlockEditor::new());
-    if let Ok(engine) = devnote_search::SqliteSearchEngine::in_memory() {
-        *SEARCH_ENGINE.lock() = Some(engine);
+
+    // 辅助引擎：失败不致命，但需记录警告供 UI 提示"功能受限"
+    match devnote_search::SqliteSearchEngine::in_memory() {
+        Ok(engine) => *SEARCH_ENGINE.lock() = Some(engine),
+        Err(e) => {
+            let msg = format!("search: {}", e);
+            warn!("引擎初始化失败，搜索功能将不可用: {}", msg);
+            warnings.push(msg);
+        }
     }
     *SYNC_ENGINE.lock() = Some(ClientSyncEngine::new(
         "default-doc".to_string(),
         "default-device".to_string(),
     ));
     *CANVAS_ENGINE.lock() = Some(CanvasEngine::new());
-    if let Ok(engine) = devnote_database::SqliteDatabaseEngine::in_memory() {
-        *DATABASE_ENGINE.lock() = Some(engine);
+    match devnote_database::SqliteDatabaseEngine::in_memory() {
+        Ok(engine) => *DATABASE_ENGINE.lock() = Some(engine),
+        Err(e) => {
+            let msg = format!("database: {}", e);
+            warn!("引擎初始化失败，数据库视图功能将不可用: {}", msg);
+            warnings.push(msg);
+        }
     }
-    if let Ok(engine) = devnote_object::SqliteObjectEngine::in_memory() {
-        *OBJECT_ENGINE.lock() = Some(engine);
+    match devnote_object::SqliteObjectEngine::in_memory() {
+        Ok(engine) => *OBJECT_ENGINE.lock() = Some(engine),
+        Err(e) => {
+            let msg = format!("object: {}", e);
+            warn!("引擎初始化失败，对象管理功能将不可用: {}", msg);
+            warnings.push(msg);
+        }
     }
-    if let Ok(engine) = devnote_graph::SqliteGraphEngine::in_memory() {
-        *GRAPH_ENGINE.lock() = Some(engine);
+    match devnote_graph::SqliteGraphEngine::in_memory() {
+        Ok(engine) => *GRAPH_ENGINE.lock() = Some(engine),
+        Err(e) => {
+            let msg = format!("graph: {}", e);
+            warn!("引擎初始化失败，知识图谱功能将不可用: {}", msg);
+            warnings.push(msg);
+        }
     }
-    if let Ok(engine) = devnote_flashcard::SqliteFlashcardEngine::in_memory() {
-        *FLASHCARD_ENGINE.lock() = Some(engine);
+    match devnote_flashcard::SqliteFlashcardEngine::in_memory() {
+        Ok(engine) => *FLASHCARD_ENGINE.lock() = Some(engine),
+        Err(e) => {
+            let msg = format!("flashcard: {}", e);
+            warn!("引擎初始化失败，闪卡复习功能将不可用: {}", msg);
+            warnings.push(msg);
+        }
     }
+
+    *INIT_WARNINGS.lock() = warnings;
     Ok(())
 }
 
@@ -216,6 +260,9 @@ pub fn get_version() -> VersionInfo {
 }
 
 /// 健康检查 —— 替代原 SystemEvent.HealthCheck
+///
+/// 返回各引擎状态及初始化警告。Dart 端应检查 warnings 非空时向用户提示
+/// "核心引擎未加载，功能受限"，并列出受影响的功能模块。
 pub fn health_check() -> HealthCheckResult {
     let mut engines = HashMap::new();
     engines.insert("persistence".to_string(), NOTE_REPO.lock().is_some());
@@ -230,7 +277,14 @@ pub fn health_check() -> HealthCheckResult {
     engines.insert("format".to_string(), true);
     engines.insert("crdt".to_string(), true);
     engines.insert("flashcard".to_string(), FLASHCARD_ENGINE.lock().is_some());
-    HealthCheckResult { status: "ok".to_string(), engines }
+    let warnings = INIT_WARNINGS.lock().clone();
+    // 若有辅助引擎未加载，状态标记为 "degraded"（降级运行）
+    let status = if warnings.is_empty() { "ok" } else { "degraded" };
+    HealthCheckResult {
+        status: status.to_string(),
+        engines,
+        warnings,
+    }
 }
 
 // ── 笔记 API ──────────────────────────────────────────────────────────
@@ -429,6 +483,17 @@ pub fn delete_tag(id: String) -> Result<(), String> {
     let mut guard = NOTE_REPO.lock();
     let repo = guard.as_mut().ok_or("Persistence engine not initialized")?;
     NoteRepository::delete_tag(repo, &uid).map_err(|e| e.to_string())
+}
+
+/// 按标签查询笔记 ID —— P1-2 修复: 消除双重持久化
+///
+/// 原实现: Flutter 端直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
+/// 现改为: 通过 FFI 调用 Rust 持久化层，确保数据源唯一。
+pub fn get_note_ids_by_tag(tag_id: String) -> Result<Vec<String>, String> {
+    let tid = Uuid::parse_str(&tag_id).map_err(|e| e.to_string())?;
+    let guard = NOTE_REPO.lock();
+    let repo = guard.as_ref().ok_or("Persistence engine not initialized")?;
+    repo.get_note_ids_by_tag(&tid).map_err(|e| e.to_string())
 }
 
 // ── 编辑器 API ────────────────────────────────────────────────────────
@@ -635,12 +700,16 @@ pub fn create_database(name: String) -> Result<String, String> {
 }
 
 /// 评估公式 —— 替代原 DatabaseEvent.EvaluateFormula
-pub fn evaluate_formula(formula: String, row_values: String, all_rows: String) -> Result<serde_json::Value, String> {
+///
+/// 返回 JSON 序列化的结果字符串，避免 FRB 对 serde_json::Value 的 opaque 类型处理。
+/// 调用方可用 dart:convert jsonDecode 解析。
+pub fn evaluate_formula(formula: String, row_values: String, all_rows: String) -> Result<String, String> {
     let rv: HashMap<String, serde_json::Value> = serde_json::from_str(&row_values)
         .map_err(|e| e.to_string())?;
     let ar: Vec<HashMap<String, serde_json::Value>> = serde_json::from_str(&all_rows)
         .map_err(|e| e.to_string())?;
-    eval_formula(&formula, &rv, &ar).map_err(|e| e)
+    let result = eval_formula(&formula, &rv, &ar).map_err(|e| e)?;
+    serde_json::to_string(&result).map_err(|e| e.to_string())
 }
 
 /// 添加数据库视图 —— 替代原 DatabaseEvent.AddView

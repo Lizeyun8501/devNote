@@ -4,7 +4,9 @@ part 'block_model.freezed.dart';
 part 'block_model.g.dart';
 
 @Freezed()
-class BlockModel with _$BlockModel {
+abstract class BlockModel with _$BlockModel {
+  const BlockModel._();
+
   const factory BlockModel({
     required String id,
     @JsonKey(name: 'note_id') required String noteId,

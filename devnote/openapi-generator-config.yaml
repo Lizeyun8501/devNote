@@ -1,0 +1,32 @@
+# OpenAPI Generator 配置 — DevNote Dart 客户端
+# P2-9: OpenAPI 契约驱动客户端生成
+#
+# 生成命令: ./scripts/generate_api_client.sh
+# 生成位置: lib/api/generated/
+#
+# 生成后通过 lib/api/devnote_api_client.dart 统一封装使用，
+# 消除手写 HTTP 调用的契约漂移风险。
+
+# 生成器配置在 scripts/generate_api_client.sh 中按服务分别指定
+# 此文件为公共配置
+
+additionalProperties:
+  pubName: devnote_api
+  pubLibrary: devnote_api
+  # 使用 package:http（与现有 Flutter 依赖一致，不引入 Dio）
+  legacyDiscriminatorBehavior: false
+  # 生成 nullable 字段（Dart null safety）
+  nullableFields: true
+  # 生成 toString 方法
+  generateToString: true
+  # 排序 schema 属性
+  sortPropsById: true
+
+# 类型映射（确保与 Flutter 项目现有类型兼容）
+typeMappings:
+  # DateTime 使用内置类型（openapi-generator dart 默认已支持）
+  date: DateTime
+  DateTime: DateTime
+
+# 不生成的 schema（由 Flutter 项目自行管理）
+ignoreFileOverride: .openapi-generator-ignore

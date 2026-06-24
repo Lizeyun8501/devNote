@@ -81,7 +81,31 @@ Install the **OpenAPI (Swagger) Editor** extension by 42Crunch in VS Code. Open 
 
 ## How to Generate Client Code
 
-### Using OpenAPI Generator
+### Using OpenAPI Generator (已配置)
+
+项目已集成 openapi-generator，配置文件位于 `openapi-generator-config.yaml`，
+生成脚本位于 `scripts/generate_api_client.sh`。
+
+```bash
+# 生成所有客户端（sync + business）
+./scripts/generate_api_client.sh all
+
+# 仅生成 sync-server 客户端
+./scripts/generate_api_client.sh sync
+
+# 仅生成 business-server 客户端
+./scripts/generate_api_client.sh business
+```
+
+生成的 Dart 客户端位于 `lib/api/generated/`：
+- `sync_server/` — 包名 `devnote_sync_api`，包含 SyncApi、AuthApi、SrpAuthApi
+- `business_server/` — 包名 `devnote_business_api`，包含 MetadataApi、TagsApi、FoldersApi、KnowledgeApi、ValidationApi
+
+通过 `lib/api/devnote_api_client.dart` 统一封装使用，自动注入 JWT 认证。
+
+依赖：Java 17+（openapi-generator-cli 需要 JVM），通过 `npx @openapitools/openapi-generator-cli` 自动下载。
+
+### Manual Generation (alternative)
 
 Install [openapi-generator](https://openapi-generator.tech/) (requires Java):
 

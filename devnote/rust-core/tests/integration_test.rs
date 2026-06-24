@@ -8,21 +8,38 @@
 // 测试约定：测试中使用 `.unwrap()` 是 Rust 惯用写法，由 `#[cfg(test)]` 门控，
 // 不会编译进生产二进制。生产代码使用 `?` 运算符传播错误。
 mod integration_tests {
+    use std::sync::{Mutex, MutexGuard};
+    use std::sync::LazyLock;
+
     // ── FRB API 生命周期测试 ──────────────────────────────────────────────
     // 直接调用 frb_api.rs 中的 pub fn，替代原 C ABI dispatch 测试
 
-    /// 初始化引擎 —— 使用临时文件数据库，测试结束后自动清理
-    fn init_test_engines() -> tempfile::TempPath {
+    /// 全局测试互斥锁 —— 串行化所有涉及全局引擎状态的测试
+    ///
+    /// frb_api.rs 中的 11 个全局引擎（NOTE_REPO、BLOCK_EDITOR 等）是 FRB 架构必需的
+    /// 全局单例，Dart 端通过这些单例访问 Rust 功能。测试中每个 init_test_engines()
+    /// 调用会覆盖全局状态，若测试并行执行会导致竞态条件（如 test_folder_crud 的
+    /// "Folder not found" 失败：一个测试的 init_engines() 在另一个测试的
+    /// get_folder/update_folder 之间替换了 NOTE_REPO）。此互斥锁确保涉及全局
+    /// 状态的测试串行执行，而 CRDT/持久化测试（使用本地 repo 实例）仍可并行。
+    static GLOBAL_TEST_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    /// 初始化引擎并获取全局测试锁 —— 使用临时文件数据库，测试结束后自动清理
+    ///
+    /// 返回 (TempPath, MutexGuard)，调用者需保留两者直到测试结束：
+    /// - TempPath 保证临时数据库文件在测试结束后删除
+    /// - MutexGuard 保证全局引擎状态在测试期间不被其他测试覆盖
+    fn init_test_engines() -> (tempfile::TempPath, MutexGuard<'static, ()>) {
+        let guard = GLOBAL_TEST_GUARD.lock().expect("test guard poisoned");
         let tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
         let path = tmp.path().to_str().unwrap().to_string();
         devnote_ffi::frb_api::init_engines(path).expect("init_engines failed");
-        // 返回临时文件句柄，测试结束后自动删除
-        tmp.into_temp_path()
+        (tmp.into_temp_path(), guard)
     }
 
     #[test]
     fn test_init_engines_success() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
         // init_engines 成功后，各引擎应已初始化
         let health = devnote_ffi::frb_api::health_check();
         assert_eq!(health.status, "ok");
@@ -42,7 +59,7 @@ mod integration_tests {
 
     #[test]
     fn test_create_note() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // 创建文件夹
         let folder = devnote_ffi::frb_api::create_folder("TestFolder".to_string(), None)
@@ -62,7 +79,7 @@ mod integration_tests {
 
     #[test]
     fn test_list_notes() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // 创建文件夹
         let folder = devnote_ffi::frb_api::create_folder("ListTestFolder".to_string(), None)
@@ -85,7 +102,7 @@ mod integration_tests {
 
     #[test]
     fn test_update_note() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // 创建文件夹
         let folder = devnote_ffi::frb_api::create_folder("UpdateTestFolder".to_string(), None)
@@ -109,7 +126,7 @@ mod integration_tests {
 
     #[test]
     fn test_delete_note() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // 创建文件夹
         let folder = devnote_ffi::frb_api::create_folder("DeleteTestFolder".to_string(), None)
@@ -134,7 +151,7 @@ mod integration_tests {
 
     #[test]
     fn test_full_lifecycle() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // 1. Create folder
         let folder = devnote_ffi::frb_api::create_folder("FullLifecycle".to_string(), None)
@@ -162,7 +179,7 @@ mod integration_tests {
         assert_eq!(updated.title, "Updated");
 
         // 5. List notes
-        let notes = devnote_ffi::frb_api::list_notes(folder.id)
+        let notes = devnote_ffi::frb_api::list_notes(folder.id.clone())
             .expect("list notes failed");
         assert_eq!(notes.len(), 1);
 
@@ -176,7 +193,7 @@ mod integration_tests {
 
     #[test]
     fn test_folder_crud() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // Create
         let folder = devnote_ffi::frb_api::create_folder("FolderCRUD".to_string(), None)
@@ -204,7 +221,7 @@ mod integration_tests {
 
     #[test]
     fn test_tag_crud() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
 
         // Create
         let tag = devnote_ffi::frb_api::create_tag("rust".to_string())
@@ -226,7 +243,7 @@ mod integration_tests {
 
     #[test]
     fn test_health_check() {
-        let _tmp = init_test_engines();
+        let (_tmp, _guard) = init_test_engines();
         let result = devnote_ffi::frb_api::health_check();
         assert_eq!(result.status, "ok");
         // persistence 引擎应已初始化

@@ -31,7 +31,11 @@ mixin FlashcardMixin {
 
   Future<String> getDueCards({required String deckId, int? limit}) async {
     ffiCheckAvailable();
-    return rust.getDueCards(deckId: deckId, limit: limit);
+    // FRB 生成的 getDueCards 期望 BigInt? 类型，需将 int? 转换
+    return rust.getDueCards(
+      deckId: deckId,
+      limit: limit != null ? BigInt.from(limit) : null,
+    );
   }
 
   // ── 无 FRB 绑定的 stub 方法（返回空结果）──────────

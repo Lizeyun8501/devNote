@@ -9,7 +9,7 @@ import 'package:devnote/features/notes/bloc/notes_bloc.dart';
 import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/notes_state.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
-import '../../helpers/test_helpers.dart';
+import '../helpers/test_helpers.dart';
 
 void main() {
   // 预置测试数据
@@ -36,7 +36,7 @@ void main() {
 
   group('NotesBloc', () {
     test('初始状态为 NotesInitial', () {
-      final bloc = NotesBloc(MockNoteRepository([]));
+      final bloc = NotesBloc(MockNoteRepository([]), MockFolderRepository([]), MockNoteBlockCreationPort());
       expect(bloc.state, isA<NotesInitial>());
       bloc.close();
     });
@@ -44,7 +44,7 @@ void main() {
     group('LoadNotes', () {
       blocTest<NotesBloc, NotesState>(
         '加载笔记列表成功时发射 NotesLoaded，按 updatedAt 降序排序',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         act: (bloc) => bloc.add(const LoadNotes('folder-1')),
         wait: const Duration(milliseconds: 100),
         expect: () => [
@@ -59,7 +59,7 @@ void main() {
       blocTest<NotesBloc, NotesState>(
         '加载笔记列表失败时发射 NotesError',
         build: () =>
-            NotesBloc(MockNoteRepository.withError(Exception('数据库错误'))),
+            NotesBloc(MockNoteRepository.withError(Exception('数据库错误')), MockFolderRepository([]), MockNoteBlockCreationPort()),
         act: (bloc) => bloc.add(const LoadNotes('folder-1')),
         wait: const Duration(milliseconds: 100),
         expect: () => [isA<NotesError>()],
@@ -69,7 +69,7 @@ void main() {
     group('CreateNote', () {
       blocTest<NotesBloc, NotesState>(
         '在 NotesLoaded 状态下创建笔记，新笔记插入列表头部并选中',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes, filterFolderId: 'folder-1'),
         act: (bloc) =>
             bloc.add(const CreateNote(title: '新笔记', folderId: 'folder-1')),
@@ -87,7 +87,7 @@ void main() {
 
       blocTest<NotesBloc, NotesState>(
         '在 NotesInitial 状态下创建笔记，切换到 NotesLoaded',
-        build: () => NotesBloc(MockNoteRepository([])),
+        build: () => NotesBloc(MockNoteRepository([]), MockFolderRepository([]), MockNoteBlockCreationPort()),
         act: (bloc) =>
             bloc.add(const CreateNote(title: '新笔记', folderId: 'folder-1')),
         wait: const Duration(milliseconds: 100),
@@ -97,7 +97,7 @@ void main() {
       blocTest<NotesBloc, NotesState>(
         '创建笔记失败时发射 NotesError',
         build: () =>
-            NotesBloc(MockNoteRepository.withError(Exception('创建失败'))),
+            NotesBloc(MockNoteRepository.withError(Exception('创建失败')), MockFolderRepository([]), MockNoteBlockCreationPort()),
         act: (bloc) =>
             bloc.add(const CreateNote(title: '新笔记', folderId: 'folder-1')),
         wait: const Duration(milliseconds: 100),
@@ -108,7 +108,7 @@ void main() {
     group('DeleteNote', () {
       blocTest<NotesBloc, NotesState>(
         '删除笔记后从列表移除',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes, selectedNoteId: 'note-1'),
         act: (bloc) => bloc.add(const DeleteNote('note-1')),
         wait: const Duration(milliseconds: 100),
@@ -123,7 +123,7 @@ void main() {
       blocTest<NotesBloc, NotesState>(
         '删除笔记失败时发射 NotesError',
         build: () =>
-            NotesBloc(MockNoteRepository.withError(Exception('删除失败'))),
+            NotesBloc(MockNoteRepository.withError(Exception('删除失败')), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes),
         act: (bloc) => bloc.add(const DeleteNote('note-1')),
         wait: const Duration(milliseconds: 100),
@@ -134,7 +134,7 @@ void main() {
     group('SelectNote', () {
       blocTest<NotesBloc, NotesState>(
         '选中笔记时更新 selectedNoteId',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes),
         act: (bloc) => bloc.add(const SelectNote('note-2')),
         expect: () => [
@@ -146,7 +146,7 @@ void main() {
     group('SearchNotes', () {
       blocTest<NotesBloc, NotesState>(
         '搜索时根据标题和内容过滤笔记',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes, filterFolderId: 'folder-1'),
         act: (bloc) => bloc.add(const SearchNotes('Flutter')),
         wait: const Duration(milliseconds: 100),
@@ -161,7 +161,7 @@ void main() {
 
       blocTest<NotesBloc, NotesState>(
         '搜索关键词为空时恢复完整列表',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(
           notes: [testNotes[2]],
           searchQuery: 'Flutter',
@@ -180,7 +180,7 @@ void main() {
     group('FilterByTag', () {
       blocTest<NotesBloc, NotesState>(
         '按标签过滤时更新 filterTagId',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes),
         act: (bloc) => bloc.add(const FilterByTag('tag-1')),
         expect: () => [
@@ -192,7 +192,7 @@ void main() {
     group('FilterByFolder', () {
       blocTest<NotesBloc, NotesState>(
         '按文件夹过滤时重新加载该文件夹的笔记',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: []),
         act: (bloc) => bloc.add(const FilterByFolder('folder-1')),
         wait: const Duration(milliseconds: 100),
@@ -207,7 +207,7 @@ void main() {
     group('ChangeViewMode', () {
       blocTest<NotesBloc, NotesState>(
         '切换视图模式为网格',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes),
         act: (bloc) => bloc.add(const ChangeViewMode(NoteViewMode.grid)),
         expect: () => [
@@ -219,7 +219,7 @@ void main() {
     group('ChangeSortBy', () {
       blocTest<NotesBloc, NotesState>(
         '按标题排序时列表按字母顺序排列',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes),
         act: (bloc) => bloc.add(const ChangeSortBy(NoteSortBy.title)),
         expect: () => [
@@ -233,7 +233,7 @@ void main() {
 
       blocTest<NotesBloc, NotesState>(
         '按创建时间排序时列表按 createdAt 降序排列',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes),
         act: (bloc) => bloc.add(const ChangeSortBy(NoteSortBy.createdAt)),
         expect: () => [
@@ -248,7 +248,7 @@ void main() {
         build: () {
           // 准备 25 条笔记，分页大小 20
           final manyNotes = createMockNotes(25);
-          return NotesBloc(MockNoteRepository(manyNotes));
+          return NotesBloc(MockNoteRepository(manyNotes), MockFolderRepository([]), MockNoteBlockCreationPort());
         },
         seed: () {
           final firstPage = createMockNotes(20);
@@ -269,7 +269,7 @@ void main() {
 
       blocTest<NotesBloc, NotesState>(
         'hasMore 为 false 时不加载更多',
-        build: () => NotesBloc(MockNoteRepository(testNotes)),
+        build: () => NotesBloc(MockNoteRepository(testNotes), MockFolderRepository([]), MockNoteBlockCreationPort()),
         seed: () => NotesLoaded(notes: testNotes, hasMore: false),
         act: (bloc) => bloc.add(const LoadMoreNotes('folder-1')),
         wait: const Duration(milliseconds: 100),

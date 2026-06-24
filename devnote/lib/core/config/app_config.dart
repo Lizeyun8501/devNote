@@ -7,6 +7,10 @@ library;
 /// 默认同步服务器地址
 const String defaultSyncServerUrl = 'https://sync.devnote.app';
 
+/// 默认业务服务器地址
+/// P1-1: DevNoteApiClient 注册时需要 businessServerUrl
+const String defaultBusinessServerUrl = 'https://business.devnote.app';
+
 /// 默认实时协作 WebSocket 地址
 const String defaultRealtimeServerUrl = 'wss://sync.devnote.app/realtime';
 
