@@ -173,6 +173,47 @@ func (s *SRPServer) GetSessionKey() []byte {
 	return s.K
 }
 
+// ServerState 是 SRP 服务端会话的可序列化状态，用于跨实例共享（如存入 StateStore/Redis）。
+// 仅包含 VerifySRP 所需的字段：私有 ephemeral b、公开 ephemeral B、verifier v。
+// params 可由 NewSRPParams 重建，A 与 K 在 verify 阶段重新推导，无需持久化。
+type ServerState struct {
+	B  []byte // 服务端私有 ephemeral b
+	Bb []byte // 服务端公开 ephemeral B
+	V  []byte // verifier v
+}
+
+// ExportState 导出 SRP 服务端会话状态用于序列化存储。
+// 调用前需已执行 ComputeB（保证 b/B/v 非空）。
+func (s *SRPServer) ExportState() ServerState {
+	state := ServerState{}
+	if s.b != nil {
+		state.B = s.b.Bytes()
+	}
+	if s.B != nil {
+		state.Bb = s.B.Bytes()
+	}
+	if s.v != nil {
+		state.V = s.v.Bytes()
+	}
+	return state
+}
+
+// NewSRPServerFromState 从序列化状态重建 SRP 服务端会话。
+// 用于在 VerifySRP 阶段从 StateStore 恢复会话。
+func NewSRPServerFromState(params *SRPParams, state ServerState) *SRPServer {
+	srv := &SRPServer{params: params}
+	if len(state.B) > 0 {
+		srv.b = new(big.Int).SetBytes(state.B)
+	}
+	if len(state.Bb) > 0 {
+		srv.B = new(big.Int).SetBytes(state.Bb)
+	}
+	if len(state.V) > 0 {
+		srv.v = new(big.Int).SetBytes(state.V)
+	}
+	return srv
+}
+
 // computeU calculates the scrambling parameter u = SHA256(A || B)
 func computeU(A, B *big.Int) *big.Int {
 	h := sha256.New()

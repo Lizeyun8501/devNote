@@ -12,12 +12,12 @@ import (
 
 // MetadataHandler handles HTTP requests for note metadata.
 type MetadataHandler struct {
-	svc    *service.MetadataService
+	svc    service.MetadataServiceInterface
 	logger *zap.Logger
 }
 
 // NewMetadataHandler creates a new MetadataHandler.
-func NewMetadataHandler(svc *service.MetadataService, logger *zap.Logger) *MetadataHandler {
+func NewMetadataHandler(svc service.MetadataServiceInterface, logger *zap.Logger) *MetadataHandler {
 	return &MetadataHandler{svc: svc, logger: logger}
 }
 

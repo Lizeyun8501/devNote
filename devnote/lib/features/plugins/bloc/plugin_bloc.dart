@@ -1,4 +1,5 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/plugins/bloc/plugin_event.dart';
 import 'package:devnote/features/plugins/bloc/plugin_state.dart';
 import 'package:devnote/features/plugins/plugin_service.dart';
@@ -28,8 +29,10 @@ class PluginBloc extends Bloc<PluginEvent, PluginsState> {
       List<MarketplacePlugin> marketplacePlugins = <MarketplacePlugin>[];
       try {
         marketplacePlugins = await _pluginService.fetchMarketplacePlugins();
-      } catch (_) {
-        // marketplace 获取失败时，本地插件仍可正常使用
+      } catch (e) {
+        // P2 修复 (P2-6): marketplace 获取失败时记录日志，原 catch(_) 静默吞异常。
+        // 本地插件仍可正常使用，故不切换到错误状态，仅记录便于排查。
+        AppLogger.w('PluginBloc', 'fetchMarketplacePlugins failed, local plugins still available', error: e);
       }
       emit(PluginsLoaded(
         plugins: plugins,

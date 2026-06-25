@@ -779,3 +779,6 @@ func (s *KnowledgeService) FindShortestPath(userID, fromNoteID, toNoteID string)
 
 	return path, dist[toNoteID], nil
 }
+
+// 编译期断言: 确保 KnowledgeService 实现 KnowledgeServiceInterface
+var _ KnowledgeServiceInterface = (*KnowledgeService)(nil)

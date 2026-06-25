@@ -31,8 +31,21 @@ func NewSQLiteStorage(dbPath, migrationsPath string) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// P0 修复: SQLite 连接池配置
+	// SQLite 是文件级锁，多写连接会导致 SQLITE_BUSY。
+	// WAL 模式允许并发读，但写仍串行。
+	// 设置 MaxOpenConns=1 确保写操作串行化，避免 BUSY 错误。
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // 永不过期
+
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("ping database: %w", err)
+	}
+
+	// P0 修复: 设置 busy_timeout，写冲突时等待 5 秒而非立即返回 BUSY
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
 
 	store := &SQLiteStorage{DB: db}

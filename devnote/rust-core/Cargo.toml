@@ -20,11 +20,13 @@ members = [
     "devnote-editor",
     "devnote-extensions",
     "devnote-crdt",
-    "devnote-p2p",
+    # devnote-p2p removed: 未被任何生产 crate 依赖，属于死代码，保留目录供未来参考
+    # "devnote-p2p",
     "devnote-plugin",
     "devnote-graph",
     "devnote-flashcard",
-    "devnote-perf",
+    # devnote-perf removed: 未被任何生产 crate 依赖，属于死代码，保留目录供未来参考
+    # "devnote-perf",
     # devnote-grpc removed: gRPC 契约已移除，当前架构使用 FRB v2 (Flutter↔Rust) + REST/WebSocket (Flutter↔Go)
     # devnote-websocket removed: 未被任何 crate 依赖，实时通信由 Go sync-server 的 gorilla/websocket 承担
     # devnote-qt removed: Qt 桥接 crate 已从 workspace 中移除，不再作为成员编译
@@ -58,12 +60,14 @@ devnote-search = { path = "devnote-search" }
 devnote-editor = { path = "devnote-editor" }
 devnote-extensions = { path = "devnote-extensions" }
 devnote-crdt = { path = "devnote-crdt" }
-devnote-p2p = { path = "devnote-p2p" }
+# devnote-p2p removed: 未被任何生产 crate 依赖，属于死代码，保留目录供未来参考
+# devnote-p2p = { path = "devnote-p2p" }
 devnote-database = { path = "devnote-database" }
 devnote-object = { path = "devnote-object" }
 devnote-graph = { path = "devnote-graph" }
 devnote-flashcard = { path = "devnote-flashcard" }
-devnote-perf = { path = "devnote-perf" }
+# devnote-perf removed: 未被任何生产 crate 依赖，属于死代码，保留目录供未来参考
+# devnote-perf = { path = "devnote-perf" }
 # devnote-qt removed: Qt 桥接 crate 已从 workspace 依赖中移除
 # devnote-qt = { path = "devnote-qt" }
 # devnote-grpc removed: gRPC 契约已移除

@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/workflow/file_watcher_service.dart';
 
 /// 外部编辑器实时同步服务
@@ -45,7 +45,7 @@ class ExternalEditorSyncService {
       (event) => _handleFileChange(event, notesDir),
       onError: (error) {
         // 文件监听错误处理，记录但不中断
-        debugPrint('File watcher error: $error');
+        AppLogger.e('FileWatcher', 'File watcher error', error: error);
       },
     );
   }

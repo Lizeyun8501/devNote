@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/workflow/git_service.dart';
 
 class GitStatusIndicator extends StatefulWidget {
@@ -28,7 +29,7 @@ class _GitStatusIndicatorState extends State<GitStatusIndicator> {
       }
     } catch (e) {
       // Git status 加载失败，静默保持空状态
-      debugPrint('Git status indicator load failed: $e');
+      AppLogger.w('GitStatus', 'Git status indicator load failed', error: e);
     }
   }
 

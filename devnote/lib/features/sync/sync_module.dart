@@ -1,11 +1,15 @@
 // 修复(P1): 将 features 层的依赖注册从 core/di/injection.dart 迁移至此，
 // 消除 core → features 的反向依赖。
 
+import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/di/injection.dart';
+import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/features/sync/crypto/e2e_crypto_service.dart';
 import 'package:devnote/features/sync/incremental_sync_service.dart';
 import 'package:devnote/features/sync/p2p/p2p_service.dart';
 import 'package:devnote/features/sync/realtime/realtime_collab_service.dart';
+import 'package:devnote/features/sync/storage/s3_storage_adapter.dart';
+import 'package:devnote/features/sync/storage/storage_adapter.dart';
 import 'package:devnote/features/sync/sync_service.dart';
 import 'package:devnote/features/sync/sync_settings_service.dart';
 
@@ -15,7 +19,27 @@ import 'package:devnote/features/sync/sync_settings_service.dart';
 Future<void> registerSyncDependencies() async {
   getIt.registerLazySingleton<E2ECryptoService>(() => E2ECryptoService());
   getIt.registerLazySingleton<P2PService>(() => P2PService());
-  getIt.registerLazySingleton<SyncService>(() => SyncService());
+
+  // P1 修复 (2-F): 若 S3 已配置，创建 S3StorageAdapter 注入 SyncService
+  StorageAdapter? storageAdapter;
+  final config = AppConfig.instance;
+  if (config.isS3Configured) {
+    try {
+      storageAdapter = S3StorageAdapter(
+        endpoint: config.s3Endpoint,
+        bucket: config.s3Bucket,
+        accessKey: config.s3AccessKey,
+        secretKey: config.s3SecretKey,
+      );
+      AppLogger.i('SyncModule', 'S3 storage adapter configured: ${config.s3Endpoint}/${config.s3Bucket}');
+    } catch (e) {
+      AppLogger.w('SyncModule', 'S3 storage adapter creation failed, sync will use inline payload', error: e);
+    }
+  }
+
+  getIt.registerLazySingleton<SyncService>(
+    () => SyncService(storageAdapter: storageAdapter),
+  );
   getIt.registerLazySingleton<IncrementalSyncService>(
     () => IncrementalSyncService(),
   );

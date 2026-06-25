@@ -12,12 +12,12 @@ import (
 
 // KnowledgeHandler handles HTTP requests for knowledge relationship computation.
 type KnowledgeHandler struct {
-	svc    *service.KnowledgeService
+	svc    service.KnowledgeServiceInterface
 	logger *zap.Logger
 }
 
 // NewKnowledgeHandler creates a new KnowledgeHandler.
-func NewKnowledgeHandler(svc *service.KnowledgeService, logger *zap.Logger) *KnowledgeHandler {
+func NewKnowledgeHandler(svc service.KnowledgeServiceInterface, logger *zap.Logger) *KnowledgeHandler {
 	return &KnowledgeHandler{svc: svc, logger: logger}
 }
 

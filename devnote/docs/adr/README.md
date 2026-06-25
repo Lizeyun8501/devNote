@@ -27,4 +27,4 @@
 ## 相关文件
 
 - [C4 架构模型](../c4-architecture.md) — DevNote 的系统架构可视化
-- [架构审查报告](../architecture-review.md) — 四轮独立架构审查结果
+- [架构审查报告](../architecture-review.md) — 十二轮独立架构审查结果

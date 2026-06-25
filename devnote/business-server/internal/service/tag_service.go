@@ -588,3 +588,6 @@ func (s *TagService) GetTopTags(userID string, limit int) ([]model.TagMeta, erro
 	}
 	return tags, nil
 }
+
+// 编译期断言: 确保 TagService 实现 TagServiceInterface
+var _ TagServiceInterface = (*TagService)(nil)

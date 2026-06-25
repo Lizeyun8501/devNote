@@ -189,6 +189,16 @@ impl SqliteFlashcardEngine {
         Ok(engine)
     }
 
+    /// 基于已有 SQLite 连接构造闪卡引擎 —— 用于共享连接池场景
+    /// 调用方负责确保传入的连接已设置合适的 PRAGMA（如 WAL、foreign_keys）
+    pub fn new(conn: rusqlite::Connection) -> Result<Self, FlashcardError> {
+        let engine = Self {
+            conn: Mutex::new(conn),
+        };
+        engine.init_schema()?;
+        Ok(engine)
+    }
+
     pub fn in_memory() -> Result<Self, FlashcardError> {
         let conn = rusqlite::Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;

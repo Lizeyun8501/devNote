@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:devnote/core/config/app_config.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/performance/cache_manager.dart';
@@ -24,7 +25,7 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  bool _darkMode = false;
+  // P1 修复 (2-F): darkMode 改为通过 AppConfig 管理，持久化 + 通知 MaterialApp 重建
   bool _autoSave = true;
   double _fontSize = 14.0;
   String _defaultEditMode = 'rich';
@@ -194,11 +195,11 @@ class _SettingsPageState extends State<SettingsPage> {
             SwitchListTile(
               title: Text(l10n.darkMode),
               subtitle: Text(l10n.darkModeSubtitle),
-              value: _darkMode,
+              // P1 修复 (2-F): 绑定 AppConfig.darkMode，切换时持久化并通知 MaterialApp 重建
+              value: AppConfig.instance.darkMode,
               onChanged: (value) {
-                setState(() {
-                  _darkMode = value;
-                });
+                AppConfig.instance.darkMode = value;
+                setState(() {});
               },
             ),
             ListTile(

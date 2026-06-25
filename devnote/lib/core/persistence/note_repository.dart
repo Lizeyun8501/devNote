@@ -4,7 +4,7 @@
 // 借鉴内容: Repository 模式通过 FFI 桥接调 Rust 持久化层
 
 import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/persistence_dispatch.dart';
+import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
@@ -30,7 +30,8 @@ abstract class NoteRepository {
 
 class SqliteNoteRepository implements NoteRepository {
   final DatabaseHelper _dbHelper;
-  final PersistenceDispatch _dispatch = PersistenceDispatch();
+  // P1 修复 (2-E): 直接使用 Dispatch 类型安全方法，消除 PersistenceDispatch 冗余转换层
+  final Dispatch _dispatch = Dispatch();
   final FFIBridge _bridge = getIt<FFIBridge>();
 
   SqliteNoteRepository(this._dbHelper);
@@ -45,8 +46,11 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<NoteModel> createNote(NoteModel note) async {
     if (_useFFI) {
-      final result = await _dispatch.create(entity: 'note', data: note.toJson());
-      return NoteModel.fromJson(result);
+      return await _dispatch.createNote(
+        title: note.title,
+        content: note.content,
+        folderId: note.folderId,
+      );
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for createNote');
     final db = await _dbHelper.database;
@@ -57,13 +61,7 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<NoteModel?> getNote(String id) async {
     if (_useFFI) {
-      // 修复(P0): 原代码调用 _dispatch.list(filter: {'id': id})，
-      // 但 PersistenceDispatch.list 对 'note' 实体只读取 filter['folder_id']，
-      // 完全忽略 filter['id']，实际调用 listNotes('') 返回所有根目录笔记再取第一个，
-      // 返回的是错误的笔记。改用 _dispatch.get() 直接调用 Dispatch.getNote(id)。
-      final result = await _dispatch.get(entity: 'note', id: id);
-      if (result == null) return null;
-      return NoteModel.fromJson(result);
+      return await _dispatch.getNote(id);
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for getNote');
     final db = await _dbHelper.database;
@@ -79,8 +77,11 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<NoteModel> updateNote(NoteModel note) async {
     if (_useFFI) {
-      final result = await _dispatch.update(entity: 'note', id: note.id, data: note.toJson());
-      return NoteModel.fromJson(result);
+      return await _dispatch.updateNote(
+        id: note.id,
+        title: note.title,
+        content: note.content,
+      );
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for updateNote');
     final db = await _dbHelper.database;
@@ -102,7 +103,7 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<void> deleteNote(String id) async {
     if (_useFFI) {
-      await _dispatch.delete(entity: 'note', id: id);
+      await _dispatch.deleteNote(id);
       // P1-2 修复: 不再同步删除 Dart sqflite 镜像（双写已移除）
       return;
     }
@@ -114,8 +115,7 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<List<NoteModel>> listNotes(String folderId) async {
     if (_useFFI) {
-      final items = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
-      return items.map((json) => NoteModel.fromJson(json)).toList();
+      return await _dispatch.listNotes(folderId);
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for listNotes');
     final db = await _dbHelper.database;
@@ -131,14 +131,10 @@ class SqliteNoteRepository implements NoteRepository {
   @override
   Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0}) async {
     if (_useFFI) {
-      // 修复(P0): 原代码将 limit/offset 放入 filter 传给 _dispatch.list，
-      // 但 PersistenceDispatch.list 对 'note' 实体只读取 filter['folder_id']，
-      // 完全忽略 limit/offset，每次"加载更多"都返回全量数据，分页失效。
       // FFI listNotes 不支持原生分页，此处先取全量再客户端分页。
       // TODO: Rust 端 listNotes 应增加 limit/offset 参数以支持服务端分页。
-      final items = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
-      final paged = items.skip(offset).take(limit).toList();
-      return paged.map((json) => NoteModel.fromJson(json)).toList();
+      final items = await _dispatch.listNotes(folderId);
+      return items.skip(offset).take(limit).toList();
     }
     AppLogger.d('NoteRepository', 'FFI not available, falling back to sqflite for listNotesPaged');
     final db = await _dbHelper.database;

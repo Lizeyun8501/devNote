@@ -37,6 +37,17 @@ lazy_static = "1"
 sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "tracing"] }
 sentry-anyhow = "0.34"
 # ============================================================
+# 共享 SQLite 连接池 (Phase 2-D)
+# 使用 r2d2 通用连接池 + r2d2_sqlite 适配 rusqlite，
+# 让所有需要 DB 访问的引擎共享同一个连接池，避免多连接导致的
+# 锁竞争和数据视图不一致问题。
+# r2d2_sqlite 0.25 对应 rusqlite ^0.32（与各 engine crate 使用的版本一致）。
+# 来源: https://crates.io/crates/r2d2_sqlite
+# ============================================================
+r2d2 = "0.8"
+r2d2_sqlite = { version = "0.25", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+# ============================================================
 # flutter_rust_bridge v2 —— 类型安全 FFI 绑定
 # 自动生成 Dart 绑定，消除手写 malloc/free 和 JSON 序列化
 # 支持 async/await、Stream、SSE 编解码器

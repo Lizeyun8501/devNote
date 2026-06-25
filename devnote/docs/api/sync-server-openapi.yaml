@@ -22,6 +22,16 @@ tags:
     description: SRP (Secure Remote Password) zero-knowledge authentication
   - name: sync
     description: Note synchronization operations (push, pull, status, conflict resolution)
+  - name: version-history
+    description: Note version history and snapshot retrieval
+  - name: sharing
+    description: Public note sharing and publishing
+  - name: email
+    description: Email-to-note alias management and inbound webhooks
+  - name: clipper
+    description: Web clipper extension for saving web content as notes
+  - name: realtime
+    description: Real-time collaboration over WebSocket
 
 security:
   - BearerAuth: []
@@ -462,6 +472,465 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/v1/sync/notes/{noteId}/history:
+    get:
+      tags:
+        - version-history
+      summary: Get note version history
+      operationId: getNoteHistory
+      security:
+        - BearerAuth: []
+      description: Retrieve the version history (snapshots) for a given note.
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          description: The note identifier
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          description: Maximum number of versions to return (1-1000, default 50)
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: Version history retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NoteVersionItem'
+        '400':
+          description: Invalid limit parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/notes/{noteId}/versions/{version}:
+    get:
+      tags:
+        - version-history
+      summary: Get a specific note version
+      operationId: getNoteVersion
+      security:
+        - BearerAuth: []
+      description: Retrieve a specific version (snapshot) of a note.
+      parameters:
+        - name: noteId
+          in: path
+          required: true
+          description: The note identifier
+          schema:
+            type: string
+            format: uuid
+        - name: version
+          in: path
+          required: true
+          description: The version number (int64)
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Note version retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteVersionDetail'
+        '400':
+          description: Invalid version parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/notes/clip:
+    post:
+      tags:
+        - clipper
+      summary: Clip a web page as a new note
+      operationId: clipNote
+      security:
+        - BearerAuth: []
+      description: |
+        Save web content (from the browser clipper extension) as a new note via the sync pipeline.
+        The clipped content is stored as Markdown and persisted through SyncService.Push.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClipRequest'
+      responses:
+        '200':
+          description: Note clipped successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClipResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/shares:
+    post:
+      tags:
+        - sharing
+      summary: Create a share for a note
+      operationId: createShare
+      security:
+        - BearerAuth: []
+      description: |
+        Create a public share link for a note. Optionally protect it with a password
+        and set an expiration time. Returns the share token and URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShareRequest'
+      responses:
+        '200':
+          description: Share created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateShareResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+        - sharing
+      summary: List all shares for the current user
+      operationId: listShares
+      security:
+        - BearerAuth: []
+      description: Retrieve all shares created by the authenticated user.
+      responses:
+        '200':
+          description: Shares retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shares:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Share'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/shares/{shareId}:
+    delete:
+      tags:
+        - sharing
+      summary: Delete a share
+      operationId: deleteShare
+      security:
+        - BearerAuth: []
+      description: Soft-delete a share by its ID. The shared note will no longer be publicly accessible.
+      parameters:
+        - name: shareId
+          in: path
+          required: true
+          description: The share identifier
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Share deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: deleted
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /s/{token}:
+    get:
+      tags:
+        - sharing
+      summary: Access a shared note publicly
+      operationId: getSharedNote
+      description: |
+        Publicly access a shared note by its token. No authentication required.
+        If the share is password-protected, supply the password via the `password` query parameter.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The share token
+          schema:
+            type: string
+        - name: password
+          in: query
+          required: false
+          description: Password for password-protected shares
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Shared note retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedNotePublic'
+        '404':
+          description: Share not found, expired, or invalid password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/email/alias:
+    get:
+      tags:
+        - email
+      summary: Get the current user's email alias
+      operationId: getEmailAlias
+      security:
+        - BearerAuth: []
+      description: |
+        Retrieve the active email alias for the authenticated user.
+        If no alias exists yet, a new one is created on demand.
+      responses:
+        '200':
+          description: Email alias retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailAlias'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/email/alias/regenerate:
+    post:
+      tags:
+        - email
+      summary: Regenerate the user's email alias
+      operationId: regenerateEmailAlias
+      security:
+        - BearerAuth: []
+      description: |
+        Deactivate the current email alias (if any) and generate a new one.
+        The old alias immediately stops receiving emails.
+      responses:
+        '200':
+          description: New email alias generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailAlias'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /webhooks/email:
+    post:
+      tags:
+        - email
+      summary: Inbound email webhook
+      operationId: incomingEmailWebhook
+      description: |
+        Receives inbound emails from providers such as SendGrid, Mailgun, or SES,
+        and converts them into notes via the email-to-note pipeline.
+
+        **签名验证机制：** 当服务端配置了 webhook 密钥时，调用方必须使用该共享密钥
+        对原始请求体计算 HMAC-SHA256，并将十六进制编码的摘要放入
+        `X-Webhook-Signature` 请求头。服务端使用同一密钥重新计算 HMAC，
+        并通过 `hmac.Equal` 进行常量时间比较以防止时序攻击。缺失或不匹配的
+        签名将被拒绝并返回 401。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncomingEmailRequest'
+      responses:
+        '200':
+          description: Email processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: processed
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid webhook signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /realtime:
+    get:
+      tags:
+        - realtime
+      summary: WebSocket endpoint for real-time collaboration
+      operationId: realtimeConnect
+      x-websocket: true
+      description: |
+        WebSocket 升级端点，用于笔记实时协作。
+
+        这**不是**普通的 HTTP GET 请求；客户端必须发起 WebSocket 升级握手
+        （`Upgrade: websocket`）。升级成功后，连接作为双向 WebSocket 保持打开。
+
+        **认证方式：** 由于 WebSocket 客户端在升级期间无法发送标准的
+        `Authorization: Bearer` 请求头，JWT 访问令牌通过 `token` 查询参数传递。
+        服务端在完成升级前校验该令牌；缺失或无效的令牌将返回 401。
+
+        **消息协议：** 连接建立后，客户端必须以 `join` 消息作为首帧，指定
+        `noteId`、`deviceId`、`userId` 和 `name`。服务端响应携带当前协作者列表的
+        `join` ack，随后在同一笔记房间内广播 `presence` 更新并中继 `op` 消息。
+        还支持 `sync_request` / `sync_response` 和 `heartbeat` 消息。
+        消息格式参见 `WSMessage` schema。
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: JWT access token (WebSocket 升级期间无法使用 Bearer 请求头)
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket 升级成功
+        '401':
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -787,3 +1256,275 @@ components:
         error:
           type: string
           description: Error description
+
+    CreateShareRequest:
+      type: object
+      required:
+        - note_id
+        - title
+        - content
+      properties:
+        note_id:
+          type: string
+          format: uuid
+          description: The note to share
+        title:
+          type: string
+          description: Title displayed on the shared page
+        content:
+          type: string
+          description: Note content to publish (Markdown)
+        password:
+          type: string
+          description: Optional password to protect the share. Omit for a public share.
+        expires_in:
+          type: integer
+          format: int64
+          description: Expiration duration in seconds. 0 (default) means never expires.
+          example: 86400
+
+    CreateShareResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The share identifier
+        share_token:
+          type: string
+          description: Public token used to access the share at /s/{token}
+        share_url:
+          type: string
+          description: Relative URL for public access
+          example: /s/abc123def456
+        has_password:
+          type: boolean
+          description: Whether the share is password-protected
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiration timestamp, or null if never expires
+        created_at:
+          type: string
+          format: date-time
+
+    Share:
+      type: object
+      description: A share record as stored on the server
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        note_id:
+          type: string
+          format: uuid
+        share_token:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        has_password:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        view_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SharedNotePublic:
+      type: object
+      description: Public view of a shared note (returned by /s/{token})
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+          description: Note content (Markdown)
+        view_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        has_password:
+          type: boolean
+          description: Whether the share is password-protected
+
+    EmailAlias:
+      type: object
+      properties:
+        alias:
+          type: string
+          description: Short random alias
+          example: a1b2c3d4
+        email_addr:
+          type: string
+          description: Full email address to which inbound emails are sent
+          example: a1b2c3d4@mail.devnote.app
+        active:
+          type: boolean
+          description: Whether the alias is currently active
+
+    IncomingEmailRequest:
+      type: object
+      properties:
+        to:
+          type: string
+          description: Recipient address (the user's alias)
+        from:
+          type: string
+          description: Sender address
+        subject:
+          type: string
+          description: Email subject
+        text_body:
+          type: string
+          description: Plain-text email body
+        html_body:
+          type: string
+          description: HTML email body
+
+    ClipRequest:
+      type: object
+      required:
+        - title
+        - content
+        - source_url
+      properties:
+        title:
+          type: string
+          description: Note title
+        content:
+          type: string
+          description: Clipped content in Markdown format
+        source_url:
+          type: string
+          format: uri
+          description: Original URL of the clipped page
+        folder_id:
+          type: string
+          format: uuid
+          description: Optional target folder for the new note
+        tags:
+          type: array
+          items:
+            type: string
+          description: Optional tags to attach to the note
+
+    ClipResponse:
+      type: object
+      properties:
+        note_id:
+          type: string
+          format: uuid
+          description: The newly created note's identifier
+        version:
+          type: integer
+          format: int64
+          description: Server-assigned version number of the created note
+        created_at:
+          type: string
+          format: date-time
+
+    NoteVersionItem:
+      type: object
+      description: A single version entry in the note history
+      properties:
+        version:
+          type: integer
+          format: int64
+        content:
+          type: string
+          description: Note content snapshot
+        checksum:
+          type: string
+          description: Content checksum for integrity verification
+        created_at:
+          type: string
+          format: date-time
+
+    NoteVersionDetail:
+      type: object
+      description: A specific note version snapshot
+      properties:
+        version:
+          type: integer
+          format: int64
+        content:
+          type: string
+          description: Note content snapshot
+        checksum:
+          type: string
+          description: Content checksum for integrity verification
+        created_at:
+          type: string
+          format: date-time
+
+    WSMessage:
+      type: object
+      description: |
+        WebSocket 消息信封，由 /realtime 端点使用。
+        字段名采用 camelCase，与客户端 Dart 协议对齐。
+        每种 `type` 只填充与其相关的字段。
+      properties:
+        type:
+          type: string
+          enum:
+            - join
+            - op
+            - presence
+            - sync_request
+            - sync_response
+            - heartbeat
+          description: 消息类型
+        noteId:
+          type: string
+          description: 笔记标识符（用于 `join`）
+        userId:
+          type: string
+          description: 用户标识符（用于 `join`）
+        deviceId:
+          type: string
+          description: 设备标识符（用于 `join`、`sync_request`）
+        name:
+          type: string
+          description: 显示名称（用于 `join`）
+        operation:
+          type: object
+          additionalProperties: true
+          description: 操作载荷（用于 `op`）
+        state:
+          type: object
+          additionalProperties: true
+          description: presence 状态（用于 `presence`）
+        since:
+          description: 增量同步游标（用于 `sync_request`）
+        operations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: 操作历史（用于 `sync_response`）
+        peers:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: 当前协作者列表（用于 `join` ack）
+        timestamp:
+          type: integer
+          format: int64
+          description: 服务端时间戳，毫秒（用于 `heartbeat`）

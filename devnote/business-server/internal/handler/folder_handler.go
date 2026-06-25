@@ -12,12 +12,12 @@ import (
 
 // FolderHandler handles HTTP requests for directory/folder management.
 type FolderHandler struct {
-	svc    *service.FolderService
+	svc    service.FolderServiceInterface
 	logger *zap.Logger
 }
 
 // NewFolderHandler creates a new FolderHandler.
-func NewFolderHandler(svc *service.FolderService, logger *zap.Logger) *FolderHandler {
+func NewFolderHandler(svc service.FolderServiceInterface, logger *zap.Logger) *FolderHandler {
 	return &FolderHandler{svc: svc, logger: logger}
 }
 

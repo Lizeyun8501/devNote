@@ -11,6 +11,7 @@ import (
 
 	"github.com/devnote/sync-server/internal/config"
 	"github.com/devnote/sync-server/internal/service"
+	"github.com/devnote/shared/pkg/state"
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3" // 注册 sqlite3 驱动供测试使用
@@ -128,7 +129,7 @@ func setupFullRouter(t *testing.T) *testEnv {
 		EmailDomain:    "test.devnote.app",
 	}
 
-	authService := service.NewAuthService(db, cfg)
+	authService := service.NewAuthService(db, cfg, state.NewMemoryStore())
 	// SyncService.Push/Pull/GetStatus 仅依赖 db，S3 传 nil 不影响这些操作
 	syncService := service.NewSyncService(db, nil)
 	shareService := service.NewShareService(db)

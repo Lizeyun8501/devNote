@@ -4,7 +4,7 @@
 // 借鉴内容: Repository 模式通过 FFI 桥接调 Rust 持久化层
 
 import 'package:devnote/core/bridge/ffi_bridge.dart';
-import 'package:devnote/core/bridge/persistence_dispatch.dart';
+import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
@@ -19,7 +19,8 @@ abstract class FolderRepository {
 
 class SqliteFolderRepository implements FolderRepository {
   final DatabaseHelper _dbHelper;
-  final PersistenceDispatch _dispatch = PersistenceDispatch();
+  // P1 修复 (2-E): 直接使用 Dispatch 类型安全方法，消除 PersistenceDispatch 冗余转换层
+  final Dispatch _dispatch = Dispatch();
   final FFIBridge _bridge = getIt<FFIBridge>();
 
   SqliteFolderRepository(this._dbHelper);
@@ -29,8 +30,10 @@ class SqliteFolderRepository implements FolderRepository {
   @override
   Future<FolderModel> createFolder(FolderModel folder) async {
     if (_useFFI) {
-      final result = await _dispatch.create(entity: 'folder', data: folder.toJson());
-      return FolderModel.fromJson(result);
+      return await _dispatch.createFolder(
+        name: folder.name,
+        parentId: folder.parentId,
+      );
     }
     AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for createFolder');
     final db = await _dbHelper.database;
@@ -41,14 +44,7 @@ class SqliteFolderRepository implements FolderRepository {
   @override
   Future<List<FolderModel>> listFolders(String? parentId) async {
     if (_useFFI) {
-      final filter = <String, dynamic>{};
-      if (parentId != null) {
-        filter['parent_id'] = parentId;
-      } else {
-        filter['parent_id'] = null;
-      }
-      final items = await _dispatch.list(entity: 'folder', filter: filter);
-      return items.map((json) => FolderModel.fromJson(json)).toList();
+      return await _dispatch.listFolders(parentId: parentId);
     }
     AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for listFolders');
     final db = await _dbHelper.database;
@@ -80,16 +76,15 @@ class SqliteFolderRepository implements FolderRepository {
 
       // 删除每个文件夹中的笔记（FFI 路径）
       for (final folderId in allFolderIds) {
-        final notes = await _dispatch.list(entity: 'note', filter: {'folder_id': folderId});
+        final notes = await _dispatch.listNotes(folderId);
         for (final note in notes) {
-          final noteId = note['id'] as String;
-          await _dispatch.delete(entity: 'note', id: noteId);
+          await _dispatch.deleteNote(note.id);
         }
       }
 
       // 删除所有文件夹（按最深层优先避免 FK 冲突）
       for (final folderId in allFolderIds.reversed) {
-        await _dispatch.delete(entity: 'folder', id: folderId);
+        await _dispatch.deleteFolder(folderId);
       }
       return;
     }
@@ -118,12 +113,11 @@ class SqliteFolderRepository implements FolderRepository {
 
   /// 通过 FFI 递归收集指定文件夹的所有子文件夹 ID
   Future<List<String>> _collectSubfolderIdsViaFFI(String parentId) async {
-    final children = await _dispatch.list(entity: 'folder', filter: {'parent_id': parentId});
+    final children = await _dispatch.listFolders(parentId: parentId);
     final ids = <String>[];
     for (final child in children) {
-      final childId = child['id'] as String;
-      ids.add(childId);
-      ids.addAll(await _collectSubfolderIdsViaFFI(childId));
+      ids.add(child.id);
+      ids.addAll(await _collectSubfolderIdsViaFFI(child.id));
     }
     return ids;
   }
@@ -164,8 +158,11 @@ class SqliteFolderRepository implements FolderRepository {
     }
 
     if (_useFFI) {
-      final result = await _dispatch.update(entity: 'folder', id: folder.id, data: folder.toJson());
-      return FolderModel.fromJson(result);
+      return await _dispatch.updateFolder(
+        id: folder.id,
+        name: folder.name,
+        parentId: folder.parentId,
+      );
     }
     AppLogger.d('FolderRepository', 'FFI not available, falling back to sqflite for updateFolder');
     final db = await _dbHelper.database;
