@@ -23,6 +23,7 @@ type Config struct {
 	PageRankDamping float64
 	PageRankIters   int
 	RateLimit       int
+	RedisURL        string
 }
 
 // Load reads configuration via Viper，优先级：环境变量 > 配置文件 > 默认值。
@@ -76,6 +77,7 @@ func Load() *Config {
 	v.BindEnv("pagerank_damping", "PAGERANK_DAMPING")
 	v.BindEnv("pagerank_iters", "PAGERANK_ITERS")
 	v.BindEnv("rate_limit", "RATE_LIMIT")
+	v.BindEnv("redis_url", "REDIS_URL")
 	v.BindEnv("go_env", "GO_ENV")
 
 	// JWT 密钥处理（P1 SEC-06: business-server 优先使用独立密钥）
@@ -108,6 +110,7 @@ func Load() *Config {
 		PageRankDamping: v.GetFloat64("pagerank_damping"),
 		PageRankIters:   v.GetInt("pagerank_iters"),
 		RateLimit:       v.GetInt("rate_limit"),
+		RedisURL:        v.GetString("redis_url"),
 	}
 }
 

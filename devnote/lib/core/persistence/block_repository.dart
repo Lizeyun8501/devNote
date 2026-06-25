@@ -79,16 +79,47 @@ class SqliteBlockRepository implements BlockRepository {
 
   bool get _useFFI => _bridge.isAvailable;
 
+  /// P0 修复（双持久化统一）: 将 sqflite 中的 block 数据同步到 Rust DB（FFI）
+  ///
+  /// 解决双持久化数据分裂：所有写操作以 sqflite 为唯一 source of truth，
+  /// 写入 sqflite 后调用此方法将变更同步到 Rust DB，保证两端一致。
+  /// FFI 同步失败不影响主流程（best-effort），仅记录日志。
+  Future<void> _syncNoteBlocksToFFI(String noteId) async {
+    if (!_useFFI) return;
+    try {
+      // 1. 读取 sqflite 中的最新 block 列表
+      final db = await _dbHelper.database;
+      final rows = await db.query(
+        'blocks',
+        where: 'note_id = ?',
+        whereArgs: [noteId],
+        orderBy: 'position ASC',
+      );
+      final sqfliteBlocks = rows.map(_rowToBlock).toList();
+
+      // 2. 删除 Rust DB 中该笔记的所有 block
+      final ffiBlocks = await _dispatch.getBlocks(noteId);
+      for (final b in ffiBlocks) {
+        await _dispatch.deleteBlock(b.id);
+      }
+
+      // 3. 将 sqflite 中的 block 重新插入 Rust DB
+      for (final b in sqfliteBlocks) {
+        await _dispatch.insertBlock(
+          noteId: noteId,
+          blockType: b.blockType.name,
+          content: b.content,
+          position: b.position,
+        );
+      }
+    } catch (e) {
+      AppLogger.w('BlockRepository', 'FFI sync failed for note $noteId (non-fatal)', error: e);
+    }
+  }
+
   @override
   Future<List<BlockModel>> loadBlocks(String noteId) async {
-    if (_useFFI) {
-      try {
-        return await _dispatch.getBlocks(noteId);
-      } catch (e) {
-        AppLogger.w('BlockRepository', 'FFI loadBlocks failed, falling back to sqflite', error: e);
-      }
-    }
-    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for loadBlocks');
+    // P0 修复: 统一从 sqflite 读取，避免 FFI/sqflite 数据分裂
     final db = await _dbHelper.database;
     final rows = await db.query(
       'blocks',
@@ -107,22 +138,7 @@ class SqliteBlockRepository implements BlockRepository {
     required int position,
     String? language,
   }) async {
-    if (_useFFI) {
-      try {
-        // FFI 路径：调用 Rust 端 insert_block
-        // Rust 端会自动处理 position 后移逻辑
-        final block = await _dispatch.insertBlock(
-          noteId: noteId,
-          blockType: blockType.name,
-          content: content,
-          position: position,
-        );
-        return block;
-      } catch (e) {
-        AppLogger.w('BlockRepository', 'FFI createBlock failed, falling back to sqflite', error: e);
-      }
-    }
-    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for createBlock');
+    // P0 修复: 统一写入 sqflite，再同步到 FFI，避免双持久化数据分裂
     final now = DateTime.now();
     final block = BlockModel(
       id: _uuid.v4(),
@@ -146,24 +162,15 @@ class SqliteBlockRepository implements BlockRepository {
       await txn.insert('blocks', _blockToRow(block));
     });
 
+    // 同步到 Rust DB（best-effort）
+    await _syncNoteBlocksToFFI(noteId);
+
     return block;
   }
 
   @override
   Future<BlockModel?> getBlock(String blockId) async {
-    if (_useFFI) {
-      try {
-        // FFI 路径：Rust 端无 get_block 单个查询，通过 getBlocks 后过滤
-        // TODO: Rust 端可添加 get_block(id) 单查询优化
-        final noteId = await _findNoteIdForBlock(blockId);
-        if (noteId == null) return null;
-        final blocks = await _dispatch.getBlocks(noteId);
-        return blocks.where((b) => b.id == blockId).firstOrNull;
-      } catch (e) {
-        AppLogger.w('BlockRepository', 'FFI getBlock failed, falling back to sqflite', error: e);
-      }
-    }
-    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for getBlock');
+    // P0 修复: 统一从 sqflite 读取，消除 _findNoteIdForBlock 查空的问题
     final db = await _dbHelper.database;
     final rows = await db.query(
       'blocks',
@@ -180,23 +187,21 @@ class SqliteBlockRepository implements BlockRepository {
     required String blockId,
     required String content,
   }) async {
-    if (_useFFI) {
-      try {
-        await _dispatch.updateBlock(id: blockId, content: content);
-        return;
-      } catch (e) {
-        AppLogger.w('BlockRepository', 'FFI updateBlock failed, falling back to sqflite', error: e);
-      }
-    }
-    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for updateBlock');
+    // P0 修复: 统一写入 sqflite，再同步到 FFI
     final db = await _dbHelper.database;
     final now = DateTime.now().toIso8601String();
+    final rows = await db.query('blocks',
+        where: 'id = ?', whereArgs: [blockId], limit: 1, columns: ['note_id']);
     await db.update(
       'blocks',
       {'content': content, 'updated_at': now},
       where: 'id = ?',
       whereArgs: [blockId],
     );
+    // 同步到 Rust DB
+    if (rows.isNotEmpty) {
+      await _syncNoteBlocksToFFI(rows.first['note_id'] as String);
+    }
   }
 
   @override
@@ -204,32 +209,26 @@ class SqliteBlockRepository implements BlockRepository {
     required String blockId,
     required BlockType newType,
   }) async {
-    if (_useFFI) {
-      // Rust 端 update_block 仅更新 content，类型更新需通过 update_block_content
-      // 或在 Rust 端添加 update_block_type。当前回退到 sqflite。
-      AppLogger.d('BlockRepository', 'FFI updateBlockType not supported, using sqflite');
-    }
+    // P0 修复: 统一写入 sqflite，再同步到 FFI
     final db = await _dbHelper.database;
     final now = DateTime.now().toIso8601String();
+    final rows = await db.query('blocks',
+        where: 'id = ?', whereArgs: [blockId], limit: 1, columns: ['note_id']);
     await db.update(
       'blocks',
       {'block_type': newType.name, 'updated_at': now},
       where: 'id = ?',
       whereArgs: [blockId],
     );
+    // 同步到 Rust DB
+    if (rows.isNotEmpty) {
+      await _syncNoteBlocksToFFI(rows.first['note_id'] as String);
+    }
   }
 
   @override
   Future<void> deleteBlock(String blockId) async {
-    if (_useFFI) {
-      try {
-        await _dispatch.deleteBlock(blockId);
-        return;
-      } catch (e) {
-        AppLogger.w('BlockRepository', 'FFI deleteBlock failed, falling back to sqflite', error: e);
-      }
-    }
-    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for deleteBlock');
+    // P0 修复: 统一写入 sqflite，再同步到 FFI
     final db = await _dbHelper.database;
     // 先查出 noteId 和 position，用于删除后重排
     final rows = await db.query(
@@ -252,6 +251,9 @@ class SqliteBlockRepository implements BlockRepository {
         [DateTime.now().toIso8601String(), noteId, deletedPosition],
       );
     });
+
+    // 同步到 Rust DB
+    await _syncNoteBlocksToFFI(noteId);
   }
 
   @override
@@ -259,8 +261,7 @@ class SqliteBlockRepository implements BlockRepository {
     required String blockId,
     required int newPosition,
   }) async {
-    // moveBlock 涉及复杂的位置重排，Rust 端无对应 API
-    // 当前统一走 sqflite 事务保证原子性
+    // P0 修复: 统一写入 sqflite，再同步到 FFI
     final db = await _dbHelper.database;
     final rows = await db.query(
       'blocks',
@@ -297,12 +298,14 @@ class SqliteBlockRepository implements BlockRepository {
         whereArgs: [blockId],
       );
     });
+
+    // 同步到 Rust DB
+    await _syncNoteBlocksToFFI(noteId);
   }
 
   @override
   Future<void> replaceBlocks(String noteId, List<BlockModel> blocks) async {
-    // replaceBlocks 涉及批量操作，Rust 端无批量 API
-    // 当前统一走 sqflite 事务保证原子性
+    // P0 修复: 统一写入 sqflite，再同步到 FFI
     final db = await _dbHelper.database;
     final now = DateTime.now().toIso8601String();
     await db.transaction((txn) async {
@@ -311,25 +314,9 @@ class SqliteBlockRepository implements BlockRepository {
         await txn.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
       }
     });
-  }
 
-  // ── FFI 辅助方法 ──────────────────────────────────────────
-
-  /// 查找 block 所属的 noteId（FFI 路径用）
-  ///
-  /// 由于 Rust 端无 get_block 单查询，需要从 sqflite 查找 noteId。
-  /// 这是 FFI 路径的已知限制，TODO: Rust 端添加 get_block(id) 单查询。
-  Future<String?> _findNoteIdForBlock(String blockId) async {
-    final db = await _dbHelper.database;
-    final rows = await db.query(
-      'blocks',
-      columns: ['note_id'],
-      where: 'id = ?',
-      whereArgs: [blockId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['note_id'] as String?;
+    // 同步到 Rust DB
+    await _syncNoteBlocksToFFI(noteId);
   }
 
   // ── 序列化辅助方法 ──────────────────────────────────────────

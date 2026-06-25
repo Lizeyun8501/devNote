@@ -1084,7 +1084,10 @@ impl NoteRepository for EncryptedNoteRepository {
         let content = serde_json::to_string(&note.blocks)?;
         let encrypted = self.encrypt_content(&content)?;
         note.is_encrypted = true;
+        // P0 修复: 清空 blocks 和 content 字段，避免明文残留在返回值中
+        // 数据库 content 列已存储加密后的密文，明文不应保留在 Note 对象中
         note.blocks = Vec::new();
+        note.content = String::new();
 
         let mut inner = self.inner.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
         let mut conn = inner.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
@@ -1122,11 +1125,19 @@ impl NoteRepository for EncryptedNoteRepository {
 
         match result {
             Some(mut note) => {
-                if note.is_encrypted && self.is_unlocked() {
-                    let content = serde_json::to_string(&note.blocks)?;
-                    let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                    note.blocks = serde_json::from_str(&decrypted)
-                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+                if note.is_encrypted {
+                    if self.is_unlocked() {
+                        // P0 修复: note.content 持有数据库 content 列的原始密文
+                        // 直接对密文解密，而非对 note.blocks 重新序列化（blocks 是从密文错误解析的）
+                        let decrypted = self.decrypt_content(&note.content)?;
+                        note.blocks = serde_json::from_str(&decrypted)
+                            .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+                        note.content = decrypted;
+                    } else {
+                        // P0 修复: 未解锁时不暴露密文或明文，避免密文当作明文返回
+                        note.blocks = Vec::new();
+                        note.content = String::new();
+                    }
                 }
                 Ok(Some(note))
             }
@@ -1167,11 +1178,18 @@ impl NoteRepository for EncryptedNoteRepository {
 
         let mut result = Vec::new();
         for mut note in notes {
-            if note.is_encrypted && self.is_unlocked() {
-                let content = serde_json::to_string(&note.blocks)?;
-                let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                note.blocks = serde_json::from_str(&decrypted)
-                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+            if note.is_encrypted {
+                if self.is_unlocked() {
+                    // P0 修复: note.content 持有数据库 content 列的原始密文，直接解密
+                    let decrypted = self.decrypt_content(&note.content)?;
+                    note.blocks = serde_json::from_str(&decrypted)
+                        .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+                    note.content = decrypted;
+                } else {
+                    // P0 修复: 未解锁时不暴露密文
+                    note.blocks = Vec::new();
+                    note.content = String::new();
+                }
             }
             result.push(note);
         }

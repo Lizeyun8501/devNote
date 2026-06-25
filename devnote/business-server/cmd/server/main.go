@@ -10,8 +10,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	sharedmw "github.com/devnote/shared/pkg/middleware"
 	"github.com/devnote/shared/pkg/state"
@@ -42,9 +48,9 @@ func main() {
 		zap.String("db_path", cfg.DBPath),
 	)
 
-	// P0 修复（单实例状态）: 创建分布式状态存储
+	// P0 修复: 使用 cfg.RedisURL 而非硬编码空字符串，使配置生效
 	// RedisURL 为空时使用 MemoryStore（单实例部署），非空时使用 RedisStore（多实例部署）
-	stateStore, err := state.NewStore("")
+	stateStore, err := state.NewStore(cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("failed to create state store: %v", err)
 	}
@@ -197,9 +203,35 @@ func main() {
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	logger.Info("server listening", zap.String("addr", addr))
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+
+	// P0 修复: 使用 http.Server + 信号监听实现优雅关闭
+	// 原实现 r.Run() 无信号监听、无 Shutdown，log.Fatalf 调用 os.Exit(1)
+	// 导致所有 defer 不执行，SQLite WAL 可能未正常 checkpoint
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("failed to start server: %v", err)
+		}
+	}()
+
+	sig := <-quit
+	logger.Info("shutting down server", zap.String("signal", sig.String()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Fatal("server forced to shutdown", zap.Error(err))
+	}
+
+	logger.Info("server stopped gracefully")
 }
 
 func newLogger(level string) *zap.Logger {

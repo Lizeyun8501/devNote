@@ -155,9 +155,10 @@ pub struct ClientSyncEngine {
 }
 
 impl ClientSyncEngine {
-    pub fn new(document_id: String, device_id: String) -> Self {
+    /// P0 修复: 返回 Result 而非 expect panic，避免极端情况下整个应用启动崩溃
+    pub fn new(document_id: String, device_id: String) -> Result<Self, SyncError> {
         let db = Connection::open_in_memory()
-            .expect("Failed to open in-memory database");
+            .map_err(|e| SyncError::DatabaseError(format!("Failed to open in-memory database: {}", e)))?;
 
         db.execute(
             "CREATE TABLE IF NOT EXISTS sync_state (
@@ -165,7 +166,7 @@ impl ClientSyncEngine {
                 value TEXT NOT NULL
             )",
             [],
-        ).expect("Failed to create sync_state table");
+        ).map_err(|e| SyncError::DatabaseError(format!("Failed to create sync_state table: {}", e)))?;
 
         db.execute(
             "CREATE TABLE IF NOT EXISTS operations (
@@ -173,9 +174,9 @@ impl ClientSyncEngine {
                 data TEXT NOT NULL
             )",
             [],
-        ).expect("Failed to create operations table");
+        ).map_err(|e| SyncError::DatabaseError(format!("Failed to create operations table: {}", e)))?;
 
-        Self {
+        Ok(Self {
             device_id: device_id.clone(),
             local_state: LocalState {
                 document: CRDTDocument::new(document_id, device_id),
@@ -185,7 +186,7 @@ impl ClientSyncEngine {
             status: SyncStatus::Idle,
             conflicts: Vec::new(),
             db: Mutex::new(db),
-        }
+        })
     }
 
     #[instrument(skip(self, remote_changes))]

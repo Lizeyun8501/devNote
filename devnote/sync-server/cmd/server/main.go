@@ -221,6 +221,8 @@ func main() {
 
 	// Setup HTTP server with optional TLS/HTTP2
 	var srv *http.Server
+	// P0 修复: redirectServer 提升为外层变量，纳入优雅关闭
+	var redirectServer *http.Server
 	if cfg.EnableTLS {
 		srv = &http.Server{
 			Addr:    fmt.Sprintf(":%s", cfg.Port),
@@ -236,21 +238,22 @@ func main() {
 		}
 
 		// Start HTTP-to-HTTPS redirect server
+		// P0 修复: 将 redirectServer 提升为外层变量，纳入优雅关闭
+		redirectServer = &http.Server{
+			Addr: fmt.Sprintf(":%s", cfg.HTTPPort),
+			Handler: h2c.NewHandler(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					target := fmt.Sprintf("https://%s%s", r.Host, r.URL.RequestURI())
+					if cfg.Port != "443" {
+						target = fmt.Sprintf("https://%s:%s%s", r.Host, cfg.Port, r.URL.RequestURI())
+					}
+					http.Redirect(w, r, target, http.StatusMovedPermanently)
+				}),
+				&http2.Server{},
+			),
+		}
+		logger.Info("starting HTTP redirect server", zap.String("addr", redirectServer.Addr))
 		go func() {
-			redirectServer := &http.Server{
-				Addr: fmt.Sprintf(":%s", cfg.HTTPPort),
-				Handler: h2c.NewHandler(
-					http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						target := fmt.Sprintf("https://%s%s", r.Host, r.URL.RequestURI())
-						if cfg.Port != "443" {
-							target = fmt.Sprintf("https://%s:%s%s", r.Host, cfg.Port, r.URL.RequestURI())
-						}
-						http.Redirect(w, r, target, http.StatusMovedPermanently)
-					}),
-					&http2.Server{},
-				),
-			}
-			logger.Info("starting HTTP redirect server", zap.String("addr", redirectServer.Addr))
 			if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("HTTP redirect server error", zap.Error(err))
 			}
@@ -298,6 +301,13 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Fatal("server forced to shutdown", zap.Error(err))
+	}
+
+	// P0 修复: 关闭 HTTP 重定向服务器，避免 goroutine 泄漏导致进程无法退出
+	if redirectServer != nil {
+		if err := redirectServer.Shutdown(ctx); err != nil {
+			logger.Error("redirect server forced to shutdown", zap.Error(err))
+		}
 	}
 
 	logger.Info("server stopped gracefully")

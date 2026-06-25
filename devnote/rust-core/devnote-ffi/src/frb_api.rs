@@ -365,10 +365,20 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
     reg.note_repo = Some(repo);
     reg.block_editor = Some(DefaultBlockEditor::new());
     reg.search_engine = search_engine;
-    reg.sync_engine = Some(ClientSyncEngine::new(
+    // P0 修复: ClientSyncEngine::new 返回 Result，失败时优雅降级而非 panic
+    let sync_engine = match ClientSyncEngine::new(
         "default-doc".to_string(),
         "default-device".to_string(),
-    ));
+    ) {
+        Ok(engine) => Some(engine),
+        Err(e) => {
+            let msg = format!("sync: {}", e);
+            warn!("引擎初始化失败，同步功能将不可用: {}", msg);
+            warnings.push(msg);
+            None
+        }
+    };
+    reg.sync_engine = sync_engine;
     reg.canvas_engine = Some(CanvasEngine::new());
     reg.database_engine = database_engine;
     reg.object_engine = object_engine;

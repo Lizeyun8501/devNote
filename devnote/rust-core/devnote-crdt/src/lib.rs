@@ -360,7 +360,7 @@ impl CRDTDocument {
                     content: content.clone(),
                     tombstone: false,
                     last_modified_id: id.clone(),
-                    text_crdt: TextCRDT::new(content.clone()),
+                    text_crdt: TextCRDT::new(content.clone(), id.node_id.clone()),
                 };
                 self.blocks.push(block);
                 self.blocks.sort_by(|a, b| a.last_modified_id.cmp(&b.last_modified_id));
@@ -397,7 +397,7 @@ impl CRDTDocument {
                 }
                 block.content = new_content.clone();
                 block.last_modified_id = id.clone();
-                block.text_crdt = TextCRDT::new(new_content.clone());
+                block.text_crdt = TextCRDT::new(new_content.clone(), id.node_id.clone());
             }
             Operation::Move {
                 id,
@@ -603,14 +603,14 @@ pub struct BlockCRDT {
 
 impl BlockCRDT {
     pub fn new(id: String, position: usize, content: String, device_id: String) -> Self {
-        let hlc = HLC::new(device_id);
+        let hlc = HLC::new(device_id.clone());
         Self {
             id,
             position,
             content: content.clone(),
             tombstone: false,
             last_modified_id: hlc,
-            text_crdt: TextCRDT::new(content),
+            text_crdt: TextCRDT::new(content, device_id),
         }
     }
 
@@ -641,7 +641,9 @@ pub struct TextCRDT {
 }
 
 impl TextCRDT {
-    pub fn new(content: String) -> Self {
+    /// P0 修复: 新增 node_id 参数，避免不同节点的 TextCRDT 合并时因 node_id 为空
+    /// 导致相同位置的字符被误判为重复而丢失。
+    pub fn new(content: String, node_id: String) -> Self {
         let chars = content
             .chars()
             .enumerate()
@@ -650,13 +652,13 @@ impl TextCRDT {
                 id: HLC {
                     physical_ms: 0,
                     logical: i as u32,
-                    node_id: String::new(),
+                    node_id: node_id.clone(),
                 },
                 left_id: if i > 0 {
                     Some(HLC {
                         physical_ms: 0,
                         logical: (i - 1) as u32,
-                        node_id: String::new(),
+                        node_id: node_id.clone(),
                     })
                 } else {
                     None
@@ -1004,7 +1006,7 @@ mod tests {
 
     #[test]
     fn test_text_crdt_insert_and_delete() {
-        let mut text = TextCRDT::new("Hello".to_string());
+        let mut text = TextCRDT::new("Hello".to_string(), "device_a".to_string());
         assert_eq!(text.to_string(), "Hello");
         let op_id = HLC::new("device_a".to_string());
         text.insert(5, '!', op_id);
@@ -1013,8 +1015,9 @@ mod tests {
 
     #[test]
     fn test_text_crdt_merge() {
-        let mut local = TextCRDT::new("Hello".to_string());
-        let mut remote = TextCRDT::new("Hello".to_string());
+        // P0 修复: 使用不同 node_id 避免合并时字符丢失
+        let mut local = TextCRDT::new("Hello".to_string(), "device_a".to_string());
+        let mut remote = TextCRDT::new("Hello".to_string(), "device_b".to_string());
         let mut op_id = HLC::new("device_b".to_string());
         op_id.logical = 100;
         remote.insert(5, '!', op_id);

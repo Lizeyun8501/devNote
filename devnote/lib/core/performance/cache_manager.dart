@@ -129,7 +129,6 @@ class CacheManager {
     final cache = _caches[type];
     final maxSize = _maxSizes[type] ?? 100;
     final maxBytes = _maxBytes[type] ?? 100 * 1024 * 1024;
-    final currentBytes = _currentBytes[type] ?? 0;
     if (cache == null) return;
 
     // Evict based on entry count
@@ -143,7 +142,11 @@ class CacheManager {
     }
 
     // Evict based on memory usage (threshold at 80% of maxBytes)
-    while (currentBytes > (maxBytes * 0.8).toInt() && cache.isNotEmpty) {
+    // P0 修复: 使用实时 _currentBytes[type] 而非局部变量 currentBytes，
+    // 原实现中 currentBytes 在循环外捕获一次后不再更新，导致：
+    // - 初始超阈值时无限循环清空整个缓存
+    // - 初始未超阈值时字节淘汰永不触发
+    while ((_currentBytes[type] ?? 0) > (maxBytes * 0.8).toInt() && cache.isNotEmpty) {
       final oldestKey = _findLruKey(cache);
       if (oldestKey == null) break;
       final removed = cache.remove(oldestKey);

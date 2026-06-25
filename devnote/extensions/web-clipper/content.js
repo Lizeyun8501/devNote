@@ -425,8 +425,26 @@
   }
 
   function escapeMarkdown(text) {
-    // 仅做最小限度处理：保留换行，避免破坏文本结构
-    return text;
+    // P0 修复: 原实现直接返回原文，未转义 Markdown 特殊字符，
+    // 导致剪藏的网页文本破坏生成的 Markdown 结构。
+    // 转义以下字符：\ ` * _ { } [ ] ( ) # + - ! | ~
+    return text
+      .replace(/\\/g, '\\\\')
+      .replace(/`/g, '\\`')
+      .replace(/\*/g, '\\*')
+      .replace(/_/g, '\\_')
+      .replace(/\{/g, '\\{')
+      .replace(/\}/g, '\\}')
+      .replace(/\[/g, '\\[')
+      .replace(/\]/g, '\\]')
+      .replace(/\(/g, '\\(')
+      .replace(/\)/g, '\\)')
+      .replace(/#/g, '\\#')
+      .replace(/\+/g, '\\+')
+      .replace(/-/g, '\\-')
+      .replace(/!/g, '\\!')
+      .replace(/\|/g, '\\|')
+      .replace(/~/g, '\\~');
   }
 
   // ============================================================

@@ -585,7 +585,12 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   Future<void> close() {
     _autoSyncTimer?.cancel();
     _serviceStateSubscription?.cancel();
-    _syncService.dispose();
+    // P0 修复: 不在此处调用 _syncService.dispose()。
+    // SyncService 是 getIt 单例，被多个 SyncBloc 实例共享
+    // （notes_page、sync_settings、conflicts 路由各创建一个 SyncBloc）。
+    // 任一 BLoC 销毁时 dispose SyncService 会关闭其 StreamController，
+    // 导致其他存活的 BLoC 监听 stateStream 抛 StateError。
+    // SyncService 的生命周期应由 disposeSyncModule() 统一管理。
     return super.close();
   }
 }
