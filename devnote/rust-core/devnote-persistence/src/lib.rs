@@ -1011,11 +1011,18 @@ impl NoteRepository for EncryptedNoteRepository {
 
         match result {
             Some(mut note) => {
-                if note.is_encrypted && self.is_unlocked() {
-                    let content = serde_json::to_string(&note.blocks)?;
-                    let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                    note.blocks = serde_json::from_str(&decrypted)
-                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+                if note.is_encrypted {
+                    // S3: 加密笔记在保险库未解锁时，清空 content 与 blocks，避免密文泄漏到调用方
+                    if !self.is_unlocked() {
+                        note.content = String::new();
+                        note.blocks = Vec::new();
+                    } else {
+                        // S3+S4: 使用 note.content 作为密文来源（原始数据库值），解密失败返回错误而非密文
+                        let decrypted = self.decrypt_content(&note.content)?;
+                        note.blocks = serde_json::from_str(&decrypted)
+                            .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+                        note.content = decrypted;
+                    }
                 }
                 Ok(Some(note))
             }
@@ -1056,11 +1063,18 @@ impl NoteRepository for EncryptedNoteRepository {
 
         let mut result = Vec::new();
         for mut note in notes {
-            if note.is_encrypted && self.is_unlocked() {
-                let content = serde_json::to_string(&note.blocks)?;
-                let decrypted = self.decrypt_content(&content).unwrap_or(content);
-                note.blocks = serde_json::from_str(&decrypted)
-                    .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+            if note.is_encrypted {
+                // S3: 加密笔记在保险库未解锁时，清空 content 与 blocks，避免密文泄漏
+                if !self.is_unlocked() {
+                    note.content = String::new();
+                    note.blocks = Vec::new();
+                } else {
+                    // S3+S4: 解密失败返回错误而非密文
+                    let decrypted = self.decrypt_content(&note.content)?;
+                    note.blocks = serde_json::from_str(&decrypted)
+                        .map_err(|e| PersistenceError::DeserializationError(format!("note blocks: {e}")))?;
+                    note.content = decrypted;
+                }
             }
             result.push(note);
         }

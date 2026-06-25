@@ -10,7 +10,7 @@
 //! - argon2 crate
 //! - rand crate (安全随机数)
 
-use devnote_observe::{info, instrument, warn};
+use devnote_observe::{instrument, warn};
 use thiserror::Error;
 use argon2::{Argon2, Algorithm, Version, Params};
 use chacha20poly1305::{XChaCha20Poly1305, Key, XNonce, KeyInit};
@@ -20,6 +20,7 @@ use rand_core::RngCore;
 use base64::Engine;
 // P1 修复 (R4/R5): 密钥材料用后清零；密码/哈希比较使用常量时间
 use zeroize::Zeroizing;
+use zeroize::Zeroize;
 use subtle::ConstantTimeEq;
 
 #[derive(Debug, Error)]
@@ -161,7 +162,7 @@ impl DefaultCryptoEngine {
         let params = Params::new(self.config.memory_kib, self.config.iterations, self.config.parallelism, Some(output_len))
             .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-        // P1 修复 (R4): 用 Zeroizing 包裹派生密钥，离开作用域时自动清零，避免密钥残留内存。
+        // P1 修复 (R4) + S1: 用 Zeroizing 包裹派生密钥，离开作用域时自动清零，避免密钥残留内存。
         let mut output = Zeroizing::new(vec![0u8; output_len]);
         argon2
             .hash_password_into(password.as_bytes(), salt, output.as_mut_slice())
@@ -198,14 +199,15 @@ impl DefaultCryptoEngine {
     pub fn key_from_recovery_phrase(phrase: &str, salt: &[u8]) -> Result<[u8; 32], CryptoError> {
         let mnemonic = bip39::Mnemonic::parse_normalized(phrase)
             .map_err(|e| CryptoError::KeyDerivationError(format!("Invalid recovery phrase: {}", e)))?;
-        let seed = mnemonic.to_seed("");
+        // S1: seed 用 Zeroizing 包裹，避免助记词种子残留内存
+        let seed = Zeroizing::new(mnemonic.to_seed(""));
         // Derive key using Argon2id from seed
         let params = argon2::Params::new(8192, 2, 1, Some(32))
             .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
-        // P1 修复 (R4): 派生密钥用 Zeroizing 包裹，用后清零。
+        // P1 修复 (R4) + S1: 派生密钥用 Zeroizing 包裹，用后清零。
         let mut key = Zeroizing::new([0u8; 32]);
         argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
-            .hash_password_into(&seed, salt, key.as_mut_slice())
+            .hash_password_into(seed.as_slice(), salt, key.as_mut_slice())
             .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
         Ok(*key)
     }
@@ -253,14 +255,14 @@ impl Default for DefaultCryptoEngine {
 impl CryptoEngine for DefaultCryptoEngine {
     #[instrument(skip(self, plaintext, key))]
     fn encrypt(&self, plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        info!("encrypt: plaintext_len={}", plaintext.len());
+        // S10: 不记录明文长度，避免通过日志泄漏明文大小信息
         let result = self.encrypt_structured(plaintext, key)?;
         Ok(result.to_bytes())
     }
 
     #[instrument(skip(self, ciphertext, key))]
     fn decrypt(&self, ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        info!("decrypt: ciphertext_len={}", ciphertext.len());
+        // S10: 不记录密文长度，避免通过日志间接推断明文大小
         let encrypted_data = EncryptedData::from_bytes(ciphertext)?;
         self.decrypt_structured(&encrypted_data, key)
     }
@@ -313,9 +315,10 @@ pub fn vault_encrypt(password: &str, plaintext: &str) -> Result<VaultEncryptedDa
         .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut key_bytes = [0u8; 32];
+    // S1: 密钥用 Zeroizing 包裹，离开作用域时自动清零
+    let mut key_bytes = Zeroizing::new([0u8; 32]);
     argon2
-        .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
+        .hash_password_into(password.as_bytes(), &salt, key_bytes.as_mut_slice())
         .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
 
     // 生成随机 nonce（24 字节，XChaCha20）
@@ -323,7 +326,7 @@ pub fn vault_encrypt(password: &str, plaintext: &str) -> Result<VaultEncryptedDa
     OsRng.fill_bytes(&mut nonce_bytes);
 
     // 加密
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key_bytes.as_slice()));
     let nonce = XNonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_bytes())
@@ -363,20 +366,25 @@ pub fn vault_decrypt(password: &str, encrypted: &VaultEncryptedData) -> Result<S
     .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut key_bytes = [0u8; 32];
+    // S1: 密钥用 Zeroizing 包裹，离开作用域时自动清零
+    let mut key_bytes = Zeroizing::new([0u8; 32]);
     argon2
-        .hash_password_into(password.as_bytes(), &salt, &mut key_bytes)
+        .hash_password_into(password.as_bytes(), &salt, key_bytes.as_mut_slice())
         .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
 
     // 解密
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key_bytes.as_slice()));
     let nonce = XNonce::from_slice(&nonce_bytes);
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+    // S1: 明文用 Zeroizing<Vec<u8>> 包裹，离开作用域时自动清零
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?
+    );
 
-    String::from_utf8(plaintext)
-        .map_err(|e| CryptoError::InvalidInput(e.to_string()))
+    let result = String::from_utf8(plaintext.to_vec())
+        .map_err(|e| CryptoError::InvalidInput(e.to_string()));
+    result
 }
 
 /// 验证 Vault 密码（通过尝试解密一个测试向量）

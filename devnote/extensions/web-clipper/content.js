@@ -51,7 +51,9 @@
 
       case CLIP_MODE.SIMPLIFIED_ARTICLE: {
         const article = readabilityExtract(document);
-        const md = htmlToMarkdown(article.html);
+        // S5: XSS 清理后再转换 Markdown
+        const sanitized = sanitizeHtml(article.html);
+        const md = htmlToMarkdown(sanitized);
         return buildPayload(title || article.title, sourceUrl, md, { description: article.excerpt });
       }
 
@@ -76,7 +78,9 @@
           container.appendChild(fragment);
           html = container.innerHTML;
         }
-        const md = html ? htmlToMarkdown(html) : escapeMarkdown(text);
+        // S5: XSS 清理选中的 HTML 内容
+        const sanitized = html ? sanitizeHtml(html) : '';
+        const md = sanitized ? htmlToMarkdown(sanitized) : escapeMarkdown(text);
         return buildPayload(title, sourceUrl, md);
       }
 
@@ -98,13 +102,65 @@
   }
 
   // ============================================================
+  // S5: XSS 清理 —— 在 HTML → Markdown 转换前清除危险内容
+  // ============================================================
+  function sanitizeHtml(html) {
+    if (!html) return '';
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    // 移除所有 script / style / iframe / svg / canvas
+    container.querySelectorAll('script, style, iframe, svg, canvas, noscript, template').forEach((el) => {
+      el.parentNode && el.parentNode.removeChild(el);
+    });
+
+    // 移除所有内联事件处理器 (onclick, onerror, onload 等)
+    const allElements = container.querySelectorAll('*');
+    allElements.forEach((el) => {
+      const attrsToRemove = [];
+      for (const attr of el.attributes) {
+        if (attr.name.toLowerCase().startsWith('on')) {
+          attrsToRemove.push(attr.name);
+        }
+      }
+      attrsToRemove.forEach((name) => el.removeAttribute(name));
+    });
+
+    // 清理 javascript: / data: URI 的链接和图片
+    container.querySelectorAll('a[href]').forEach((a) => {
+      const href = a.getAttribute('href') || '';
+      const lower = href.trim().toLowerCase();
+      if (lower.startsWith('javascript:') || lower.startsWith('data:')) {
+        a.removeAttribute('href');
+      }
+    });
+
+    container.querySelectorAll('img[src]').forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      const lower = src.trim().toLowerCase();
+      if (lower.startsWith('javascript:') || lower.startsWith('data:text/html')) {
+        img.removeAttribute('src');
+      }
+    });
+
+    // 移除 form / input / button 等交互元素
+    container.querySelectorAll('form, input, button, select, textarea').forEach((el) => {
+      el.parentNode && el.parentNode.removeChild(el);
+    });
+
+    return container.innerHTML;
+  }
+
+  // ============================================================
   // full_page：整页 HTML → Markdown
   // ============================================================
   function fullPageMarkdown() {
     // 克隆 body，移除 script/style/noscript/template 等噪声节点
     const clone = document.body.cloneNode(true);
     removeNoise(clone);
-    return htmlToMarkdown(clone.innerHTML);
+    // S5: XSS 清理后再转换 Markdown
+    const sanitized = sanitizeHtml(clone.innerHTML);
+    return htmlToMarkdown(sanitized);
   }
 
   // ============================================================
@@ -424,9 +480,25 @@
     return lines.join('\n');
   }
 
+  // P0 修复 (R1.11): 实现真实的 Markdown 特殊字符转义，避免注入
   function escapeMarkdown(text) {
-    // 仅做最小限度处理：保留换行，避免破坏文本结构
-    return text;
+    if (!text) return '';
+    return text
+      .replace(/\\/g, '\\\\')
+      .replace(/\*/g, '\\*')
+      .replace(/_/g, '\\_')
+      .replace(/`/g, '\\`')
+      .replace(/#/g, '\\#')
+      .replace(/\+/g, '\\+')
+      .replace(/-/g, '\\-')
+      .replace(/\./g, '\\.')
+      .replace(/!/g, '\\!')
+      .replace(/\[/g, '\\[')
+      .replace(/\]/g, '\\]')
+      .replace(/\(/g, '\\(')
+      .replace(/\)/g, '\\)')
+      .replace(/</g, '\\<')
+      .replace(/>/g, '\\>');
   }
 
   // ============================================================
