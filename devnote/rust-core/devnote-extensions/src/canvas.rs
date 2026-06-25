@@ -22,17 +22,15 @@ use std::path::Path;
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Backend canvas renderer selection.
+/// 画布渲染后端选择。
 ///
-/// On desktop platforms the Qt backend provides a native QGraphicsView-based
-/// canvas with advanced editing features.  When Qt is not available the
-/// Flutter backend is used as a fallback.
+/// P1 架构修复 (3.7): 原实现包含 Qt 后端枚举与探测逻辑，
+/// 但 devnote-qt crate 已移除，qt-backend feature 无法启用，
+/// 相关代码为死代码。现简化为单一 Flutter 后端。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CanvasBackend {
-    /// Render canvas using Flutter custom painters.
+    /// 通过 Flutter CustomPainter 渲染画布
     Flutter,
-    /// Render canvas using Qt QGraphicsScene/QGraphicsView (desktop only).
-    Qt,
 }
 
 impl Default for CanvasBackend {
@@ -42,23 +40,12 @@ impl Default for CanvasBackend {
 }
 
 impl CanvasBackend {
-    /// Detect the best available backend for the current platform.
+    /// 检测当前平台可用的最佳后端（始终返回 Flutter）
     pub fn detect() -> Self {
-        #[cfg(feature = "qt-backend")]
-        {
-            if devnote_qt::QtBridge::new().is_ok() {
-                return CanvasBackend::Qt;
-            }
-        }
         CanvasBackend::Flutter
     }
 
-    /// Returns `true` when the Qt backend is available.
-    pub fn is_qt(&self) -> bool {
-        matches!(self, CanvasBackend::Qt)
-    }
-
-    /// Returns `true` when the Flutter backend is in use.
+    /// 返回 `true` 当使用 Flutter 后端
     pub fn is_flutter(&self) -> bool {
         matches!(self, CanvasBackend::Flutter)
     }

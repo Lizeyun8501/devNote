@@ -68,153 +68,9 @@ pub struct FeatureFlag {
     pub updated_at: i64,
 }
 
-const _DB_VERSION: i32 = 5;
-
-const SCHEMA_V1: &str = r#"
-CREATE TABLE IF NOT EXISTS notes (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    folder_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS folders (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    parent_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS tags (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS note_tags (
-    note_id TEXT NOT NULL,
-    tag_id TEXT NOT NULL,
-    PRIMARY KEY (note_id, tag_id),
-    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
-    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS attachments (
-    id TEXT PRIMARY KEY,
-    note_id TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_size INTEGER NOT NULL,
-    mime_type TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS blocks (
-    id TEXT PRIMARY KEY,
-    note_id TEXT NOT NULL,
-    block_type TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    position INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS ipfs_metadata (
-    id TEXT PRIMARY KEY,
-    note_id TEXT NOT NULL,
-    attachment_id TEXT,
-    cid TEXT NOT NULL,
-    content_type TEXT NOT NULL DEFAULT '',
-    size_bytes INTEGER NOT NULL DEFAULT 0,
-    pinned INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
-    FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER PRIMARY KEY
-);
-"#;
-
-const SCHEMA_V2: &str = r#"
-CREATE TABLE IF NOT EXISTS resource_acls (
-    id TEXT PRIMARY KEY,
-    resource_id TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    permission TEXT NOT NULL,
-    granted_by TEXT NOT NULL,
-    granted_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_resource_acls_resource ON resource_acls(resource_id, resource_type);
-CREATE INDEX IF NOT EXISTS idx_resource_acls_user ON resource_acls(user_id);
-
-CREATE TABLE IF NOT EXISTS workspaces (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_id);
-
-CREATE TABLE IF NOT EXISTS workspace_members (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    joined_at TEXT NOT NULL,
-    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace ON workspace_members(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
-"#;
-
-const SCHEMA_V3: &str = r#"
-CREATE TABLE IF NOT EXISTS audit_log (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_id TEXT NOT NULL,
-    timestamp INTEGER NOT NULL,
-    metadata TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_log(resource_type, resource_id);
-CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
-"#;
-
-const SCHEMA_V4: &str = r#"
-CREATE TABLE IF NOT EXISTS feature_flags (
-    key TEXT PRIMARY KEY,
-    enabled INTEGER NOT NULL DEFAULT 0,
-    description TEXT NOT NULL DEFAULT '',
-    updated_at INTEGER NOT NULL
-);
-"#;
-
-// P1 修复 (P1-6): 跨端数据模型对齐
-// 为 notes 添加 is_pinned/is_encrypted 列（与 Rust Note 模型对齐）
-// 为 folders 添加 sort_order 列（与 Rust Folder 模型对齐）
-// 为 tags 添加 color 列（与 Rust Tag 模型对齐）
-// 注意: notes.blocks/tags 不添加列，因为它们由 blocks/note_tags 关联表管理
-const SCHEMA_V5: &str = r#"
-ALTER TABLE notes ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE notes ADD COLUMN is_encrypted INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE tags ADD COLUMN color TEXT;
-"#;
+// P1 架构修复 (3.4): 移除手动 SCHEMA_V1~V5 迁移常量
+// Schema 迁移统一由 refinery 管理，迁移文件位于 migrations/ 目录
+// 旧数据库通过 migrate_bootstrap_from_manual() 引导到 refinery
 
 pub struct SqliteNoteRepository {
     conn: Mutex<rusqlite::Connection>,
@@ -230,99 +86,130 @@ impl SqliteNoteRepository {
     pub fn init(db_path: &str) -> Result<Self> {
         let mut conn = rusqlite::Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        // 运行 refinery 版本化迁移（Phase 3-B Part 2）
-        // refinery 通过 refinery_schema_history 表跟踪已应用的迁移，
-        // 仅执行尚未应用的迁移，已应用的迁移不会重复执行
+        // P1 架构修复 (3.4): 统一迁移系统到 refinery，移除手动 SCHEMA_V1~V5 迁移
+        // 先执行向后兼容 bootstrap：若旧的手动迁移系统已应用过迁移，
+        // 则将对应版本标记到 refinery_schema_history，避免重复执行。
+        migrate_bootstrap_from_manual(&mut conn)?;
         crate::refinery_migrations::migrations::runner().run(&mut conn)
             .map_err(|e| PersistenceError::DatabaseError(format!("refinery migration failed: {}", e)))?;
         let repo = Self {
             conn: Mutex::new(conn),
         };
-        // 保留原有手动迁移作为 fallback，确保向后兼容
-        repo.run_migrations()?;
         Ok(repo)
     }
 
     pub fn new(mut conn: rusqlite::Connection) -> Result<Self> {
-        // 运行 refinery 版本化迁移（Phase 3-B Part 2）
-        // 注意: new() 接收外部传入的连接，调用方负责设置 PRAGMA
+        // P1 架构修复 (3.4): 统一迁移系统到 refinery
+        migrate_bootstrap_from_manual(&mut conn)?;
         crate::refinery_migrations::migrations::runner().run(&mut conn)
             .map_err(|e| PersistenceError::DatabaseError(format!("refinery migration failed: {}", e)))?;
         let repo = Self {
             conn: Mutex::new(conn),
         };
-        // 保留原有手动迁移作为 fallback，确保向后兼容
-        repo.run_migrations()?;
         Ok(repo)
     }
 
     pub fn in_memory() -> Result<Self> {
         let mut conn = rusqlite::Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        // 运行 refinery 版本化迁移（Phase 3-B Part 2）
+        // P1 架构修复 (3.4): 统一迁移系统到 refinery
+        migrate_bootstrap_from_manual(&mut conn)?;
         crate::refinery_migrations::migrations::runner().run(&mut conn)
             .map_err(|e| PersistenceError::DatabaseError(format!("refinery migration failed: {}", e)))?;
         let repo = Self {
             conn: Mutex::new(conn),
         };
-        // 保留原有手动迁移作为 fallback，确保向后兼容
-        repo.run_migrations()?;
         Ok(repo)
     }
+}
 
-    fn run_migrations(&self) -> Result<()> {
-        let mut conn = self.conn.lock().map_err(|e| PersistenceError::DatabaseError(e.to_string()))?;
-        let current_version: i32 = conn
-            .query_row(
-                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+/// P1 架构修复 (3.4): 从旧手动迁移系统（schema_version 表）引导到 refinery。
+///
+/// 背景：旧版本同时运行 refinery 和手动 SCHEMA_V1~V5 两套迁移，
+/// 各自维护版本表（refinery_schema_history vs schema_version）。
+/// 对于已经通过手动迁移系统升级到 V5 的数据库，直接运行 refinery 会因
+/// V005 的 ALTER TABLE ADD COLUMN 非幂等而报错。
+///
+/// 策略：若检测到旧 schema_version 表且有版本记录，
+/// 则将对应版本标记为已应用到 refinery_schema_history，
+/// 确保 refinery 不会重复执行已应用的迁移。
+fn migrate_bootstrap_from_manual(conn: &mut rusqlite::Connection) -> Result<()> {
+    // 检查旧的 schema_version 表是否存在
+    let has_old_table: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='schema_version'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(false);
 
-        // P1 修复 (P1-7): 每个迁移版本块用事务包裹，确保 schema 变更与版本记录原子提交。
-        // 若 execute_batch 成功但版本记录失败（或反之），事务回滚避免数据库处于
-        // 部分迁移的不一致状态。特别是 V5 的 ALTER TABLE ADD COLUMN 非幂等，
-        // 重复执行会报 "duplicate column name"，事务保护可避免此问题。
-        // Phase 3-B Part 2: V5 进一步通过 pragma_table_info 检查列是否存在，实现幂等。
-        let migrations: [(i32, &str); 5] = [
-            (1, SCHEMA_V1),
-            (2, SCHEMA_V2),
-            (3, SCHEMA_V3),
-            (4, SCHEMA_V4),
-            (5, SCHEMA_V5),
-        ];
-
-        for (version, schema_sql) in &migrations {
-            if current_version < *version {
-                let tx = conn.transaction()?;
-                // V5 的 ALTER TABLE ADD COLUMN 非幂等，需检查列是否已存在。
-                // 若 refinery 或前次迁移已添加列，直接执行 ALTER TABLE 会报
-                // "duplicate column name" 错误，因此先通过 pragma_table_info 检查。
-                if *version == 5 {
-                    // 检查 notes 表是否已有 is_pinned 列（作为 V5 是否已应用的标志）
-                    let has_is_pinned: bool = tx.query_row(
-                        "SELECT COUNT(*) > 0 FROM pragma_table_info('notes') WHERE name='is_pinned'",
-                        [],
-                        |row| row.get(0),
-                    ).unwrap_or(false);
-                    if !has_is_pinned {
-                        tx.execute_batch(schema_sql)?;
-                    }
-                } else {
-                    tx.execute_batch(schema_sql)?;
-                }
-                tx.execute(
-                    "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
-                    params![*version],
-                )?;
-                tx.commit()?;
-            }
-        }
-
-        Ok(())
+    if !has_old_table {
+        // 新数据库，直接由 refinery 管理，无需引导
+        return Ok(());
     }
 
+    // 获取旧系统的当前版本
+    let old_version: i32 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    if old_version == 0 {
+        return Ok(());
+    }
+
+    // 检查 refinery_schema_history 表是否已存在（refinery 自己创建）
+    let has_refinery_table: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='refinery_schema_history'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(false);
+
+    if !has_refinery_table {
+        // 创建 refinery 版本表（与 refinery 库的 schema 保持一致）
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS refinery_schema_history (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_on TEXT NOT NULL,
+                checksum TEXT NOT NULL DEFAULT ''
+            );"
+        )?;
+    }
+
+    // 将旧系统已应用的版本标记到 refinery 历史表中
+    // 旧 V1~V4 对应 refinery V001~V004，旧 V5 对应 refinery V005
+    let version_names: [(i32, &str); 5] = [
+        (1, "initial_schema"),
+        (2, "add_workspaces_acls"),
+        (3, "add_audit_log"),
+        (4, "add_feature_flags"),
+        (5, "add_pinned_sort_order_color"),
+    ];
+
+    let now = chrono::Utc::now().to_rfc3339();
+    for (ver, name) in &version_names {
+        if old_version >= *ver {
+            // 检查是否已存在，避免重复插入
+            let exists: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM refinery_schema_history WHERE version = ?1",
+                params![*ver as i32],
+                |row| row.get(0),
+            ).unwrap_or(false);
+            if !exists {
+                conn.execute(
+                    "INSERT INTO refinery_schema_history (version, name, applied_on, checksum) VALUES (?1, ?2, ?3, '')",
+                    params![*ver as i32, *name, now],
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+impl SqliteNoteRepository {
     fn row_to_note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
         let id_str: String = row.get(0)?;
         let title: String = row.get(1)?;

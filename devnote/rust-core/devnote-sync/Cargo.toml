@@ -6,7 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-devnote-crypto = { path = "../devnote-crypto" }
+# P1 架构修复 (3.7): 清理未使用依赖
+# 已移除: devnote-crypto（未使用）、x25519-dalek（未使用）、rand_core（未使用）、hmac（未使用）
+# 注: tracing 被 devnote-observe 导出的 #[instrument] 宏内部引用，需显式依赖
 devnote-observe = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
@@ -14,9 +16,6 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 devnote-crdt = { workspace = true }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-rand_core = { version = "0.6", features = ["std"] }
 sha2 = "0.10"
-hmac = "0.12"
 rusqlite = { version = "0.32", features = ["bundled"] }
 lazy_static = "1"

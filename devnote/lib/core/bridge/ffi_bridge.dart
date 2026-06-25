@@ -350,6 +350,36 @@ class FFIBridge
     return blocks.map(_blockToMap).toList();
   }
 
+  /// P1 架构修复 (3.3): 补齐 FFI block API
+  Future<Map<String, dynamic>?> getBlock(String id) async {
+    _checkAvailable();
+    final block = await rust.getBlock(id: id);
+    return block != null ? _blockToMap(block) : null;
+  }
+
+  /// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
+  Future<void> moveBlock({required String id, required int newPosition}) async {
+    _checkAvailable();
+    await rust.moveBlock(id: id, newPosition: BigInt.from(newPosition));
+  }
+
+  /// P1 架构修复 (3.3): 补齐 FFI block API
+  Future<void> updateBlockType({required String id, required String blockType}) async {
+    _checkAvailable();
+    await rust.updateBlockType(id: id, blockType: blockType);
+  }
+
+  /// P1 架构修复 (3.3): 补齐 FFI block API
+  Future<List<Map<String, dynamic>>> replaceBlocks({
+    required String noteId,
+    required List<Map<String, dynamic>> blocks,
+  }) async {
+    _checkAvailable();
+    final blockDataList = blocks.map((b) => _mapToBlockData(b)).toList();
+    final result = await rust.replaceBlocks(noteId: noteId, blocks: blockDataList);
+    return result.map(_blockToMap).toList();
+  }
+
   // ============================================================
   // 搜索 API
   // ============================================================
@@ -568,6 +598,17 @@ class FFIBridge
         'created_at': block.createdAt,
         'updated_at': block.updatedAt,
       };
+
+  /// P1 架构修复 (3.3): Map 转 BlockData，用于 replaceBlocks 批量传入
+  static rust.BlockData _mapToBlockData(Map<String, dynamic> map) => rust.BlockData(
+        id: map['id'] as String? ?? '',
+        noteId: map['note_id'] as String? ?? '',
+        blockType: map['block_type'] as String? ?? 'paragraph',
+        content: map['content'] as String? ?? '',
+        position: (map['position'] as int?) ?? 0,
+        createdAt: (map['created_at'] as String?) ?? DateTime.now().toIso8601String(),
+        updatedAt: (map['updated_at'] as String?) ?? DateTime.now().toIso8601String(),
+      );
 
   static Map<String, dynamic> _searchResultToMap(rust.SearchResult r) => {
         'note_id': r.noteId,

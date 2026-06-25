@@ -100,11 +100,13 @@ pub trait BlockEditor: Send + Sync {
     fn create_block(&mut self, note_id: Uuid, block_type: BlockType, content: String, position: usize) -> anyhow::Result<Block>;
     fn get_block(&self, id: &Uuid) -> anyhow::Result<Option<Block>>;
     fn update_block(&mut self, id: &Uuid, content: String) -> anyhow::Result<()>;
+    fn update_block_type(&mut self, id: &Uuid, block_type: BlockType) -> anyhow::Result<()>;
     fn delete_block(&mut self, id: &Uuid) -> anyhow::Result<()>;
     fn move_block(&mut self, id: &Uuid, new_position: usize) -> anyhow::Result<()>;
     fn list_blocks(&mut self, note_id: &Uuid, offset: Option<usize>, limit: Option<usize>) -> anyhow::Result<Vec<Block>>;
     fn list_blocks_paged(&mut self, note_id: &Uuid, page: usize, page_size: usize) -> anyhow::Result<Vec<Block>>;
     fn parse_markdown(&mut self, content: &str, note_id: Uuid) -> anyhow::Result<Vec<Block>>;
+    fn replace_blocks(&mut self, note_id: Uuid, blocks: Vec<Block>) -> anyhow::Result<Vec<Block>>;
 
     fn insert_block(&mut self, parent_id: Option<&Uuid>, index: usize, block: Block) -> anyhow::Result<()>;
     fn remove_block(&mut self, block_id: &Uuid) -> anyhow::Result<Block>;
@@ -272,6 +274,27 @@ impl BlockEditor for DefaultBlockEditor {
 
     fn get_children(&self, parent_id: &Uuid) -> anyhow::Result<Vec<&Block>> {
         Ok(self.blocks.iter().filter(|b| &b.note_id == parent_id).collect())
+    }
+
+    fn update_block_type(&mut self, id: &Uuid, block_type: BlockType) -> anyhow::Result<()> {
+        let block = self.blocks.iter_mut().find(|b| &b.id == id)
+            .ok_or_else(|| anyhow::anyhow!("Block not found"))?;
+        block.block_type = block_type;
+        block.updated_at = Utc::now();
+        Ok(())
+    }
+
+    fn replace_blocks(&mut self, note_id: Uuid, blocks: Vec<Block>) -> anyhow::Result<Vec<Block>> {
+        self.blocks.retain(|b| b.note_id != note_id);
+        let now = Utc::now();
+        let mut new_blocks: Vec<Block> = blocks.into_iter().enumerate().map(|(i, mut b)| {
+            b.position = i;
+            b.note_id = note_id;
+            b.updated_at = now;
+            b
+        }).collect();
+        self.blocks.extend(new_blocks);
+        self.list_blocks(&note_id, None, None)
     }
 }
 

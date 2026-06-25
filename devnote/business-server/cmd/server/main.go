@@ -87,6 +87,8 @@ func main() {
 	r := gin.New()
 
 	// Middleware
+	// P1 架构修复 (3.6): Request ID 中间件，注入 X-Request-ID 便于跨服务链路追踪
+	r.Use(middleware.RequestIDMiddleware())
 	r.Use(sharedmw.SentryGin())
 	r.Use(middleware.Recovery(logger))
 	r.Use(middleware.LoggerMiddleware(logger))

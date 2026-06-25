@@ -35,6 +35,9 @@ func LoggerMiddleware(logger *zap.Logger) gin.HandlerFunc {
 			zap.String("client_ip", c.ClientIP()),
 			zap.Int("body_size", bodySize),
 		}
+		if requestID, exists := c.Get("request_id"); exists {
+			fields = append(fields, zap.String("request_id", requestID.(string)))
+		}
 		if rawQuery != "" {
 			fields = append(fields, zap.String("query", rawQuery))
 		}

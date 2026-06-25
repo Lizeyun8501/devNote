@@ -153,12 +153,8 @@ class SqliteBlockRepository implements BlockRepository {
   Future<BlockModel?> getBlock(String blockId) async {
     if (_useFFI) {
       try {
-        // FFI 路径：Rust 端无 get_block 单个查询，通过 getBlocks 后过滤
-        // TODO: Rust 端可添加 get_block(id) 单查询优化
-        final noteId = await _findNoteIdForBlock(blockId);
-        if (noteId == null) return null;
-        final blocks = await _dispatch.getBlocks(noteId);
-        return blocks.where((b) => b.id == blockId).firstOrNull;
+        // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 get_block 单查询
+        return await _dispatch.getBlock(blockId);
       } catch (e) {
         AppLogger.w('BlockRepository', 'FFI getBlock failed, falling back to sqflite', error: e);
       }
@@ -205,10 +201,15 @@ class SqliteBlockRepository implements BlockRepository {
     required BlockType newType,
   }) async {
     if (_useFFI) {
-      // Rust 端 update_block 仅更新 content，类型更新需通过 update_block_content
-      // 或在 Rust 端添加 update_block_type。当前回退到 sqflite。
-      AppLogger.d('BlockRepository', 'FFI updateBlockType not supported, using sqflite');
+      try {
+        // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 update_block_type
+        await _dispatch.updateBlockType(id: blockId, blockType: newType.name);
+        return;
+      } catch (e) {
+        AppLogger.w('BlockRepository', 'FFI updateBlockType failed, falling back to sqflite', error: e);
+      }
     }
+    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for updateBlockType');
     final db = await _dbHelper.database;
     final now = DateTime.now().toIso8601String();
     await db.update(
@@ -259,8 +260,16 @@ class SqliteBlockRepository implements BlockRepository {
     required String blockId,
     required int newPosition,
   }) async {
-    // moveBlock 涉及复杂的位置重排，Rust 端无对应 API
-    // 当前统一走 sqflite 事务保证原子性
+    if (_useFFI) {
+      try {
+        // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 move_block
+        await _dispatch.moveBlock(id: blockId, newPosition: newPosition);
+        return;
+      } catch (e) {
+        AppLogger.w('BlockRepository', 'FFI moveBlock failed, falling back to sqflite', error: e);
+      }
+    }
+    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for moveBlock');
     final db = await _dbHelper.database;
     final rows = await db.query(
       'blocks',
@@ -301,8 +310,16 @@ class SqliteBlockRepository implements BlockRepository {
 
   @override
   Future<void> replaceBlocks(String noteId, List<BlockModel> blocks) async {
-    // replaceBlocks 涉及批量操作，Rust 端无批量 API
-    // 当前统一走 sqflite 事务保证原子性
+    if (_useFFI) {
+      try {
+        // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 replace_blocks
+        await _dispatch.replaceBlocks(noteId: noteId, blocks: blocks);
+        return;
+      } catch (e) {
+        AppLogger.w('BlockRepository', 'FFI replaceBlocks failed, falling back to sqflite', error: e);
+      }
+    }
+    AppLogger.d('BlockRepository', 'FFI not available, using sqflite for replaceBlocks');
     final db = await _dbHelper.database;
     final now = DateTime.now().toIso8601String();
     await db.transaction((txn) async {
@@ -311,25 +328,6 @@ class SqliteBlockRepository implements BlockRepository {
         await txn.insert('blocks', _blockToRow(block, createdAt: now, updatedAt: now));
       }
     });
-  }
-
-  // ── FFI 辅助方法 ──────────────────────────────────────────
-
-  /// 查找 block 所属的 noteId（FFI 路径用）
-  ///
-  /// 由于 Rust 端无 get_block 单查询，需要从 sqflite 查找 noteId。
-  /// 这是 FFI 路径的已知限制，TODO: Rust 端添加 get_block(id) 单查询。
-  Future<String?> _findNoteIdForBlock(String blockId) async {
-    final db = await _dbHelper.database;
-    final rows = await db.query(
-      'blocks',
-      columns: ['note_id'],
-      where: 'id = ?',
-      whereArgs: [blockId],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    return rows.first['note_id'] as String?;
   }
 
   // ── 序列化辅助方法 ──────────────────────────────────────────

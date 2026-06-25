@@ -149,6 +149,34 @@ class Dispatch {
     return list.map((map) => BlockModel.fromJson(map)).toList();
   }
 
+  /// P1 架构修复 (3.3): 补齐 FFI block API
+  Future<BlockModel?> getBlock(String id) async {
+    final map = await _bridge.getBlock(id);
+    return map != null ? BlockModel.fromJson(map) : null;
+  }
+
+  /// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
+  Future<void> moveBlock({required String id, required int newPosition}) =>
+      _bridge.moveBlock(id: id, newPosition: newPosition);
+
+  Future<void> updateBlockType({required String id, required String blockType}) =>
+      _bridge.updateBlockType(id: id, blockType: blockType);
+
+  Future<List<BlockModel>> replaceBlocks({
+    required String noteId,
+    required List<BlockModel> blocks,
+  }) async {
+    final blockMaps = blocks.map((b) => {
+      'id': b.id,
+      'note_id': b.noteId,
+      'block_type': b.blockType,
+      'content': b.content,
+      'position': b.position,
+    }).toList();
+    final result = await _bridge.replaceBlocks(noteId: noteId, blocks: blockMaps);
+    return result.map((map) => BlockModel.fromJson(map)).toList();
+  }
+
   // ============================================================
   // 搜索操作 —— 替代原 SearchEvent.* 事件路由
   // ============================================================
