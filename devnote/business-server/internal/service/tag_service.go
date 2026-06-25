@@ -150,6 +150,10 @@ func (s *TagService) List(userID string, page, pageSize int, search string) (*mo
 		}
 		items = append(items, t)
 	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tag rows: %w", err)
+	}
 
 	totalPages := (total + pageSize - 1) / pageSize
 	return &model.PaginatedResponse{
@@ -176,6 +180,10 @@ func (s *TagService) GetChildren(userID, parentID string) ([]model.TagMeta, erro
 			return nil, fmt.Errorf("scan child: %w", err)
 		}
 		children = append(children, t)
+	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate child rows: %w", err)
 	}
 	return children, nil
 }
@@ -327,6 +335,10 @@ func (s *TagService) GetNotesByTag(userID, tagID string, page, pageSize int) (*m
 		}
 		items = append(items, NoteRef{ID: nID, Title: t})
 	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate notes-by-tag rows: %w", err)
+	}
 
 	totalPages := (total + pageSize - 1) / pageSize
 	return &model.PaginatedResponse{
@@ -368,6 +380,10 @@ func (s *TagService) GetTagsByNote(userID, noteID string) ([]model.TagMeta, erro
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
 		tags = append(tags, t)
+	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tags-by-note rows: %w", err)
 	}
 	return tags, nil
 }
@@ -585,6 +601,10 @@ func (s *TagService) GetTopTags(userID string, limit int) ([]model.TagMeta, erro
 			return nil, fmt.Errorf("scan top tag: %w", err)
 		}
 		tags = append(tags, t)
+	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate top-tag rows: %w", err)
 	}
 	return tags, nil
 }

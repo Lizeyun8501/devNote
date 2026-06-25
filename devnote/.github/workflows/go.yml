@@ -91,8 +91,8 @@ jobs:
   vulncheck:
     name: 漏洞扫描 (govulncheck)
     runs-on: ubuntu-latest
-    # 漏洞扫描独立运行，不阻塞测试
-    continue-on-error: true
+    # P1 修复 (X2): 原设置 continue-on-error: true 导致 Go 漏洞不阻塞合并，
+    # 已知漏洞可能被合入主干。现移除该设置，安全扫描失败将阻断 PR 合并。
     strategy:
       matrix:
         server: [sync-server, business-server]

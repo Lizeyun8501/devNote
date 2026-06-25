@@ -10,7 +10,9 @@
 //! 借鉴内容: 附件文件加密存储、SHA-256 完整性校验、EncryptedFileStorage 文件加密层
 
 use devnote_core::models::{Attachment, Folder, Note, Tag, Permission, ResourceACL, Workspace, WorkspaceMember};
-use devnote_core::{Block, BlockType};
+// P1 修复 (R6): 直接从 devnote_editor 引入 Block/BlockType，
+// 不再依赖 devnote_core 的重导出（已移除以修复分层违反）。
+use devnote_editor::{Block, BlockType};
 use devnote_observe::{instrument, warn};
 use devnote_core::traits::NoteRepository;
 use devnote_crypto::{CryptoEngine, DefaultCryptoEngine, CryptoConfig};

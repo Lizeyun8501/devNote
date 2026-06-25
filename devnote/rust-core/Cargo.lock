@@ -1130,13 +1130,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "devnote-crdt",
- "devnote-crypto",
  "devnote-editor",
- "devnote-object",
  "devnote-observe",
- "devnote-search",
- "devnote-sync",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1167,8 +1162,10 @@ dependencies = [
  "devnote-observe",
  "rand_core 0.6.4",
  "serde",
+ "subtle",
  "thiserror 2.0.18",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1331,6 +1328,7 @@ dependencies = [
  "chrono",
  "devnote-core",
  "devnote-crypto",
+ "devnote-editor",
  "devnote-extensions",
  "devnote-observe",
  "refinery",

@@ -75,8 +75,11 @@ func (h *ClipperHandler) Clip(c *gin.Context) {
 	}
 
 	// 通过 SyncService.Push 创建笔记
+	// P1 修复 (G5): 原实现所有 web-clipper 用户共用 DeviceID="web-clipper"，
+	// 导致 SyncService.Push 中按 (user_id, device_id) 维度的设备同步状态相互覆盖。
+	// 现改为按用户隔离，确保每个 web-clipper 用户拥有独立的设备同步游标。
 	pushReq := &service.PushRequest{
-		DeviceID: "web-clipper",
+		DeviceID: "web-clipper-" + userID,
 		Records: []service.SyncRecordInput{
 			{
 				NoteID:  noteID,

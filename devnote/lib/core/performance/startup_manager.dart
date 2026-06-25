@@ -120,14 +120,25 @@ class StartupManager {
   }
 
   /// 执行单个任务并记录耗时
+  ///
+  /// P1 修复 (F5): 原实现直接 `await task.task()`，若任务抛异常则异常向上传播到
+  /// `runStartup`，导致后续所有任务（包括 lazy 任务）被跳过，启动流程部分中断。
+  /// 现用 try/catch 捕获异常并记录日志，确保单个任务失败不阻断整体启动流程。
   Future<void> _runTask(StartupTask task) async {
     final start = DateTime.now();
-    await task.task();
+    try {
+      await task.task();
+    } catch (e, stackTrace) {
+      AppLogger.e('StartupManager', '任务 [${task.name}] 执行失败', error: e, stackTrace: stackTrace);
+    }
     final duration = DateTime.now().difference(start);
     _taskDurations[task.name] = duration;
   }
 
   /// 顺序执行所有延迟任务（`unawaited` 调用，故失败不影响主流程）
+  ///
+  /// P1 修复 (F5): 原实现通过 `_runTask` 间接调用，虽 `_runTask` 现已捕获异常，
+  /// 但此处仍保持注释说明意图——延迟任务失败不应影响主流程。
   Future<void> _runLazyTasks() async {
     for (final task in _lazyTasks) {
       await _runTask(task);

@@ -472,6 +472,227 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  # P1 修复 (X1): 以下端点由客户端 devnote_api_client.dart 直接通过 http Client
+  # 调用，但此前未在 OpenAPI 规范中定义，构成契约漂移。现补充至规范以统一契约。
+  # 服务端尚未实现，作为计划中的增量同步（rsync 算法 + 断点续传）接口契约。
+
+  /api/v1/sync/conflicts/resolve:
+    post:
+      tags:
+        - sync
+      summary: Report conflict resolution result
+      operationId: reportConflictResolution
+      security:
+        - BearerAuth: []
+      description: |
+        上报冲突解决结果（best-effort）。
+        与 resolveConflict（/api/v1/sync/resolve-conflict）语义不同：
+        后者用于手动解决冲突并提供所选数据，本端点用于通知服务端已采取的解决策略。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - conflict_id
+                - resolution
+              properties:
+                conflict_id:
+                  type: string
+                resolution:
+                  type: string
+      responses:
+        '200':
+          description: Conflict resolution reported
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/signatures:
+    get:
+      tags:
+        - sync
+      summary: Fetch remote data signatures
+      operationId: fetchRemoteSignatures
+      security:
+        - BearerAuth: []
+      description: 获取远端数据签名（用于增量同步计算基准）。远端无数据时返回 204。
+      responses:
+        '200':
+          description: Signature data
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '204':
+          description: No remote data
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags:
+        - sync
+      summary: Update remote data signatures
+      operationId: updateRemoteSignatures
+      security:
+        - BearerAuth: []
+      description: 上传远端签名（供下次增量计算使用）。
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Signatures updated
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/delta:
+    post:
+      tags:
+        - sync
+      summary: Request remote delta computation
+      operationId: fetchRemoteDelta
+      security:
+        - BearerAuth: []
+      description: |
+        请求远端计算并返回 delta（基于客户端提供的本地签名）。
+        远端无新数据时返回 204。
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Delta data
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '204':
+          description: No new data
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/chunk:
+    post:
+      tags:
+        - sync
+      summary: Upload a single chunk
+      operationId: uploadChunk
+      security:
+        - BearerAuth: []
+      description: |
+        上传单个分块（借鉴 tus.io 协议的 Upload-Offset / Upload-Length 头部）。
+        通过 X-Session-Id / X-Chunk-Index / X-Total-Chunks 头部传递分块元数据。
+      parameters:
+        - name: X-Session-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Chunk-Index
+          in: header
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+        - name: X-Total-Chunks
+          in: header
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Chunk uploaded successfully
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/commit:
+    post:
+      tags:
+        - sync
+      summary: Commit a chunked upload session
+      operationId: commitSession
+      security:
+        - BearerAuth: []
+      description: 通知服务端合并所有分块并完成同步。
+      parameters:
+        - name: session
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session committed successfully
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sync/abort:
+    delete:
+      tags:
+        - sync
+      summary: Abort a chunked upload session
+      operationId: abortRemoteSession
+      security:
+        - BearerAuth: []
+      description: 通知服务端放弃会话。
+      parameters:
+        - name: session
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session aborted
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/v1/sync/notes/{noteId}/history:
     get:
       tags:

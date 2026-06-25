@@ -153,6 +153,11 @@ func (s *MetadataService) List(userID string, page, pageSize int, search string)
 		m.IsEncrypted = isEnc != 0
 		items = append(items, m)
 	}
+	// P1 修复 (G1): rows.Next() 循环结束后必须检查 rows.Err()，
+	// 否则迭代中途的连接错误/上下文取消会被静默忽略，部分数据被当作完整结果返回。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate note meta rows: %w", err)
+	}
 
 	totalPages := (total + pageSize - 1) / pageSize
 	return &model.PaginatedResponse{
@@ -269,6 +274,10 @@ func (s *MetadataService) Filter(userID string, filterMap map[string]string, pag
 		}
 		m.IsEncrypted = isEnc != 0
 		items = append(items, m)
+	}
+	// P1 修复 (G1): 检查迭代错误，避免部分结果被当作完整结果返回。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate filter rows: %w", err)
 	}
 
 	totalPages := (total + pageSize - 1) / pageSize

@@ -10,7 +10,11 @@ services:
     environment:
       - PORT=8081
       - DB_PATH=/app/data/business.db
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      # P1 修复 (G4): business-server 使用 BUSINESS_JWT_SECRET（config.go 已支持该优先级）。
+      # 当前架构下 business-server 需验证 sync-server 签发的 JWT（HS256 对称签名），
+      # 因此两服务密钥必须相同。此处显式使用 BUSINESS_JWT_SECRET 以便未来迁移至
+      # RS256 非对称签名时可独立更换 business-server 的验签公钥，无需再改 compose。
+      - BUSINESS_JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - MAX_TAG_DEPTH=5
       - MAX_FOLDER_DEPTH=10
@@ -32,8 +36,9 @@ services:
       - DB_PATH=/app/data/sync.db
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - S3_ENDPOINT=minio:9000
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      # P1 修复: 移除 minioadmin 默认凭证，强制显式设置，避免生产环境裸奔。
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
       - S3_BUCKET=devnote-sync
       - S3_USE_SSL=false
       - RATE_LIMIT=100
@@ -49,8 +54,9 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=${S3_ACCESS_KEY:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY:-minioadmin}
+      # P1 修复: 移除 minioadmin 默认凭证，强制显式设置。
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"

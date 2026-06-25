@@ -253,8 +253,13 @@ func (s *ValidationService) ValidateTag(userID, tagID string) (*model.Validation
 	}
 
 	// Rule: duplicate check (scoped to the user).
+	// P1 修复 (G2): 原实现 err == nil && cnt > 0 在 DB 故障时（err != nil）静默走 else 分支，
+	// 将"查询失败"误判为"无重复"。改为显式返回错误，避免校验报告不可信。
 	var cnt int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tag_meta WHERE name=? AND id!=? AND user_id=?`, tag.Name, tag.ID, userID).Scan(&cnt); err == nil && cnt > 0 {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tag_meta WHERE name=? AND id!=? AND user_id=?`, tag.Name, tag.ID, userID).Scan(&cnt); err != nil {
+		return nil, fmt.Errorf("check duplicate tag name: %w", err)
+	}
+	if cnt > 0 {
 		results = append(results, model.ValidationResult{
 			RuleID: "tag-name-unique", RuleName: "Unique Name",
 			Passed: false, Message: fmt.Sprintf("duplicate tag name: %s", tag.Name), Severity: "warning",
@@ -350,8 +355,12 @@ func (s *ValidationService) ValidateKnowledgeRelation(userID, relID string) (*mo
 	}
 
 	// Rule: source note exists (scoped to the user).
+	// P1 修复 (G2): 原实现完全忽略 Scan 错误，DB 故障时 srcCnt 保持零值，
+	// 将"查询失败"误判为"源笔记不存在"。改为显式返回错误。
 	var srcCnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, rel.SourceNoteID, userID).Scan(&srcCnt)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, rel.SourceNoteID, userID).Scan(&srcCnt); err != nil {
+		return nil, fmt.Errorf("check source note existence: %w", err)
+	}
 	if srcCnt == 0 {
 		results = append(results, model.ValidationResult{
 			RuleID: "knowledge-valid-source", RuleName: "Valid Source",
@@ -365,8 +374,11 @@ func (s *ValidationService) ValidateKnowledgeRelation(userID, relID string) (*mo
 	}
 
 	// Rule: target note exists (scoped to the user).
+	// P1 修复 (G2): 同源笔记校验，原实现忽略 Scan 错误，改为显式返回。
 	var tgtCnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, rel.TargetNoteID, userID).Scan(&tgtCnt)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, rel.TargetNoteID, userID).Scan(&tgtCnt); err != nil {
+		return nil, fmt.Errorf("check target note existence: %w", err)
+	}
 	if tgtCnt == 0 {
 		results = append(results, model.ValidationResult{
 			RuleID: "knowledge-valid-target", RuleName: "Valid Target",

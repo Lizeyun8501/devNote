@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:devnote/core/observability/app_logger.dart';
@@ -24,14 +25,18 @@ class SyncBloc extends Bloc<SyncEvent, SyncState> {
   StreamSubscription<SyncServiceState>? _serviceStateSubscription;
 
   SyncBloc(this._syncService, this._settingsService) : super(const SyncIdle()) {
-    on<StartSync>(_onStartSync);
-    on<StopSync>(_onStopSync);
-    on<PushChanges>(_onPushChanges);
-    on<PullChanges>(_onPullChanges);
-    on<SyncStatusChanged>(_onStatusChanged);
-    on<ResolveConflict>(_onResolveConflict);
-    on<AutoSyncToggled>(_onAutoSyncToggled);
-    on<SyncIntervalChanged>(_onSyncIntervalChanged);
+    // P1 修复 (F2): 原实现无事件转换器，异步处理器（_onStartSync/_onPushChanges/
+    // _onPullChanges）的 emit 调用会在并发事件（自动同步定时器 + 手动触发）下交错，
+    // 导致状态不一致。现对所有事件应用 sequential() 转换器，确保事件逐个串行处理，
+    // 前一个处理器完成后才执行下一个，避免 emit 交错。
+    on<StartSync>(_onStartSync, transformer: sequential());
+    on<StopSync>(_onStopSync, transformer: sequential());
+    on<PushChanges>(_onPushChanges, transformer: sequential());
+    on<PullChanges>(_onPullChanges, transformer: sequential());
+    on<SyncStatusChanged>(_onStatusChanged, transformer: sequential());
+    on<ResolveConflict>(_onResolveConflict, transformer: sequential());
+    on<AutoSyncToggled>(_onAutoSyncToggled, transformer: sequential());
+    on<SyncIntervalChanged>(_onSyncIntervalChanged, transformer: sequential());
     // 修复：将构造函数中的直接 emit 改为通过事件驱动
     // BLoC 规范要求 emit 只在事件处理器中使用，构造函数中直接调用
     // 违反状态管理约定，且在某些场景下可能丢失状态

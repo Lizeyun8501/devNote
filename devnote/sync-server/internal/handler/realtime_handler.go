@@ -65,7 +65,14 @@ const (
 // P1 修复 (SEC-04): 原实现 CheckOrigin 恒返回 true，允许任意 origin 建立
 // WebSocket 连接，存在 CSRF 风险。现改为校验 Origin 是否在白名单内。
 // allowedOrigins 通过 SetupCheckOrigin 注入。
-var allowedOrigins = []string{"*"}
+//
+// P1 修复 (G3): allowedOrigins 为包级变量，CheckOrigin 在 WebSocket 握手时
+// 并发读取，SetupCheckOrigin 写入，无锁保护构成数据竞争（go test -race 可检出）。
+// 现用 sync.RWMutex 保护读写。
+var (
+	allowedOrigins    = []string{"*"}
+	allowedOriginsMu  sync.RWMutex
+)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -76,7 +83,9 @@ var upgrader = websocket.Upgrader{
 		if origin == "" {
 			return true
 		}
-		// P1 修复: 校验 Origin 是否在白名单内
+		// P1 修复 (G3): 读锁保护并发读取 allowedOrigins。
+		allowedOriginsMu.RLock()
+		defer allowedOriginsMu.RUnlock()
 		for _, allowed := range allowedOrigins {
 			if allowed == "*" || allowed == origin {
 				return true
@@ -89,6 +98,9 @@ var upgrader = websocket.Upgrader{
 // SetupCheckOrigin 注入允许的 Origin 白名单
 // P1 修复 (SEC-04): 由 main.go 在启动时调用，注入 config.AllowedOrigins
 func SetupCheckOrigin(origins []string) {
+	// P1 修复 (G3): 写锁保护并发写入。
+	allowedOriginsMu.Lock()
+	defer allowedOriginsMu.Unlock()
 	allowedOrigins = origins
 }
 
