@@ -541,23 +541,17 @@ pub fn transform(op: Operation, existing_ops: &[Operation]) -> Result<Operation,
             new_content,
             vector_clock,
         } => {
+            // P1 修复 (R1): 原 if/else 两个分支返回完全相同的操作，transform 形同虚设。
+            // LWW（last-write-wins）语义：若存在更新的并发冲突（latest.id() > &id），
+            // 当前操作落败，应让步——将 new_content 回退为 old_content，使 apply 变为 no-op，
+            // 保留胜出方的内容，避免静默覆盖。
             let latest_conflict = conflicting.iter().max_by_key(|c| c.id());
-            if let Some(latest) = latest_conflict {
-                if latest.id() > &id {
-                    return Ok(Operation::Replace {
-                        id,
-                        block_id,
-                        old_content,
-                        new_content,
-                        vector_clock,
-                    });
-                }
-            }
+            let yielded = latest_conflict.map(|latest| latest.id() > &id).unwrap_or(false);
             Ok(Operation::Replace {
                 id,
                 block_id,
-                old_content,
-                new_content,
+                old_content: old_content.clone(),
+                new_content: if yielded { old_content } else { new_content },
                 vector_clock,
             })
         }
@@ -568,23 +562,15 @@ pub fn transform(op: Operation, existing_ops: &[Operation]) -> Result<Operation,
             to_position,
             vector_clock,
         } => {
+            // P1 修复 (R1): 同上，原 if/else 两分支返回相同操作。
+            // LWW 落败时令 to_position = from_position，使 move 变为 no-op。
             let latest_conflict = conflicting.iter().max_by_key(|c| c.id());
-            if let Some(latest) = latest_conflict {
-                if latest.id() > &id {
-                    return Ok(Operation::Move {
-                        id,
-                        block_id,
-                        from_position,
-                        to_position,
-                        vector_clock,
-                    });
-                }
-            }
+            let yielded = latest_conflict.map(|latest| latest.id() > &id).unwrap_or(false);
             Ok(Operation::Move {
                 id,
                 block_id,
                 from_position,
-                to_position,
+                to_position: if yielded { from_position } else { to_position },
                 vector_clock,
             })
         }

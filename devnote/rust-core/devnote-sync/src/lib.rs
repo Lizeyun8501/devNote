@@ -15,7 +15,7 @@ use devnote_crdt::{
 };
 use rusqlite::Connection;
 use std::sync::Mutex;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use sha2::{Sha256, Digest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -118,22 +118,60 @@ pub fn verify_content_hash(data: &[u8], expected_hash: &str) -> bool {
 }
 
 lazy_static::lazy_static! {
-    static ref PROCESSED_KEYS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    // P1 修复 (R2): 原实现满 10000 时 keys.clear() 全量清空，导致所有已处理键重新可处理，
+    // 幂等性失效。改为 FIFO 有界淘汰：超过容量时按插入顺序淘汰最旧的 20%，而非清空全部。
+    // 注：进程重启仍会丢失（in-memory），但同步引擎本身使用 open_in_memory 数据库，
+    // 重启后状态本就重置，此处保证运行期内幂等性即可。
+    static ref PROCESSED_KEYS: Mutex<IdempotencyCache> = Mutex::new(IdempotencyCache::new(10000));
+}
+
+/// 有界 FIFO 幂等缓存，淘汰最旧条目而非全量清空
+struct IdempotencyCache {
+    keys: HashSet<String>,
+    order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl IdempotencyCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            keys: HashSet::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    /// 若 key 已存在返回 false；否则插入，并在超容量时 FIFO 淘汰最旧的 20%。
+    fn insert(&mut self, key: String) -> bool {
+        if !self.keys.insert(key.clone()) {
+            return false;
+        }
+        self.order.push_back(key);
+        if self.keys.len() > self.capacity {
+            let evict = self.capacity / 5; // 淘汰 20%
+            for _ in 0..evict.max(1) {
+                if let Some(old) = self.order.pop_front() {
+                    self.keys.remove(&old);
+                }
+            }
+        }
+        true
+    }
+
+    fn contains(&self, key: &str) -> bool {
+        self.keys.contains(key)
+    }
 }
 
 /// 检查幂等键是否已处理，防止重复提交
 pub fn check_idempotency(key: &str) -> bool {
-    let mut keys = PROCESSED_KEYS
+    let mut cache = PROCESSED_KEYS
         .lock()
         .expect("PROCESSED_KEYS mutex poisoned");
-    if keys.contains(key) {
+    if cache.contains(key) {
         return false; // Already processed
     }
-    keys.insert(key.to_string());
-    // 限制缓存大小
-    if keys.len() > 10000 {
-        keys.clear();
-    }
+    cache.insert(key.to_string());
     true
 }
 
@@ -266,7 +304,8 @@ impl ClientSyncEngine {
     /// 修复(P1): 原实现返回 Ok(SyncInfo) 但无任何网络调用，导致上层误认为同步成功。
     /// 改为返回 Err(NotImplemented)，调用方可明确区分"同步成功"与"功能未接入"。
     /// TODO: 接入 devnote-grpc / devnote-websocket 实现真实同步逻辑后移除此 stub。
-    fn sync_inner(&mut self) -> Result<SyncInfo, SyncError> {
+    // P1 修复 (R3): 改为 &self 以便调用方持锁期间可调用，避免事务跨两次锁获取。
+    fn sync_inner(&self) -> Result<SyncInfo, SyncError> {
         info!("sync: stub called with {} pending changes (not implemented)", self.local_state.pending_operations.len());
         Err(SyncError::NotImplemented(
             "sync_inner: network transport not yet integrated".to_string(),
@@ -274,7 +313,7 @@ impl ClientSyncEngine {
     }
 
     /// 修复(P1): 同上，原 stub 返回 Ok 假成功，改为显式 NotImplemented。
-    fn push_changes_inner(&mut self) -> Result<SyncInfo, SyncError> {
+    fn push_changes_inner(&self) -> Result<SyncInfo, SyncError> {
         info!("push_changes: stub called with {} pending operations (not implemented)", self.local_state.pending_operations.len());
         Err(SyncError::NotImplemented(
             "push_changes_inner: network transport not yet integrated".to_string(),
@@ -282,7 +321,7 @@ impl ClientSyncEngine {
     }
 
     /// 修复(P1): 同上，原 stub 返回 Ok 假成功，改为显式 NotImplemented。
-    fn pull_changes_inner(&mut self) -> Result<SyncInfo, SyncError> {
+    fn pull_changes_inner(&self) -> Result<SyncInfo, SyncError> {
         info!("pull_changes: stub called, local_version={} (not implemented)", self.local_state.document.hlc.logical);
         Err(SyncError::NotImplemented(
             "pull_changes_inner: network transport not yet integrated".to_string(),
@@ -293,13 +332,11 @@ impl ClientSyncEngine {
 impl SyncEngine for ClientSyncEngine {
     #[instrument]
     fn sync(&mut self) -> Result<SyncInfo, SyncError> {
+        // P1 修复 (R3): 原 BEGIN/COMMIT 跨两次 lock()，drop(db) 与重新 lock 之间其他线程
+        // 可能交错操作同一连接，破坏事务隔离。改为单次持锁贯穿整个事务。
         let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
         db.execute("BEGIN TRANSACTION", [])?;
-        drop(db);
-
         let result = self.sync_inner();
-
-        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
         match result {
             Ok(info) => {
                 db.execute("COMMIT", [])?;
@@ -331,13 +368,10 @@ impl SyncEngine for ClientSyncEngine {
 
     #[instrument]
     fn push_changes(&mut self) -> Result<SyncInfo, SyncError> {
+        // P1 修复 (R3): 单次持锁贯穿事务，避免交错。
         let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
         db.execute("BEGIN TRANSACTION", [])?;
-        drop(db);
-
         let result = self.push_changes_inner();
-
-        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
         match result {
             Ok(info) => {
                 db.execute("COMMIT", [])?;
@@ -352,13 +386,10 @@ impl SyncEngine for ClientSyncEngine {
 
     #[instrument]
     fn pull_changes(&mut self) -> Result<SyncInfo, SyncError> {
+        // P1 修复 (R3): 单次持锁贯穿事务，避免交错。
         let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
         db.execute("BEGIN TRANSACTION", [])?;
-        drop(db);
-
         let result = self.pull_changes_inner();
-
-        let db = self.db.lock().map_err(|e| SyncError::DatabaseError(e.to_string()))?;
         match result {
             Ok(info) => {
                 db.execute("COMMIT", [])?;

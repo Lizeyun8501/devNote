@@ -582,6 +582,14 @@ impl DatabaseEngine for SqliteDatabaseEngine {
             return Err(DatabaseError::RowNotFound(*row_id));
         }
 
+        // P1 修复 (R7): 查询并保留原始 created_at，原实现返回 created_at: now 覆盖了真实创建时间。
+        let created_at_str: String = conn.query_row(
+            "SELECT created_at FROM database_rows WHERE id = ?1",
+            params![row_id_str],
+            |row| row.get(0),
+        )?;
+        let created_at = created_at_str.parse().unwrap_or_else(|_| now);
+
         // P1 修复 (P1-7): UPDATE row + INSERT OR REPLACE cells 包裹在事务中
         let tx = conn.transaction()?;
         tx.execute(
@@ -600,7 +608,7 @@ impl DatabaseEngine for SqliteDatabaseEngine {
         Ok(DatabaseRow {
             id: *row_id,
             cells,
-            created_at: now,
+            created_at,
             updated_at: now,
         })
     }

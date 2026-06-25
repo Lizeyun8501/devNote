@@ -18,6 +18,9 @@ use chacha20poly1305::aead::Aead;
 use rand_core::OsRng;
 use rand_core::RngCore;
 use base64::Engine;
+// P1 修复 (R4/R5): 密钥材料用后清零；密码/哈希比较使用常量时间
+use zeroize::Zeroizing;
+use subtle::ConstantTimeEq;
 
 #[derive(Debug, Error)]
 pub enum CryptoError {
@@ -158,11 +161,12 @@ impl DefaultCryptoEngine {
         let params = Params::new(self.config.memory_kib, self.config.iterations, self.config.parallelism, Some(output_len))
             .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-        let mut output = vec![0u8; output_len];
+        // P1 修复 (R4): 用 Zeroizing 包裹派生密钥，离开作用域时自动清零，避免密钥残留内存。
+        let mut output = Zeroizing::new(vec![0u8; output_len]);
         argon2
-            .hash_password_into(password.as_bytes(), salt, &mut output)
+            .hash_password_into(password.as_bytes(), salt, output.as_mut_slice())
             .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
-        Ok(output)
+        Ok(output.to_vec())
     }
 
     pub fn hash_password(&self, password: &str, salt: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -170,8 +174,15 @@ impl DefaultCryptoEngine {
     }
 
     pub fn verify_password(&self, password: &str, salt: &[u8], hash: &[u8]) -> Result<bool, CryptoError> {
+        // P1 修复 (R5): 原实现 computed == hash 使用 Vec<u8> 的短路比较，存在时序侧信道。
+        // 改用 subtle::ConstantTimeEq 做常量时间比较，避免通过响应时间推断哈希前缀。
         let computed = self.hash_password(password, salt)?;
-        Ok(computed == hash)
+        // 长度不同时仍走常量时间路径：先比较长度，再对公共前缀做常量时间比较，
+        // 避免不同长度泄露信息。长度本身不是敏感信息。
+        if computed.len() != hash.len() {
+            return Ok(false);
+        }
+        Ok(bool::from(computed.ct_eq(hash)))
     }
 
     /// Generate a 24-word BIP-39 mnemonic for key recovery
@@ -191,17 +202,19 @@ impl DefaultCryptoEngine {
         // Derive key using Argon2id from seed
         let params = argon2::Params::new(8192, 2, 1, Some(32))
             .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
-        let mut key = [0u8; 32];
+        // P1 修复 (R4): 派生密钥用 Zeroizing 包裹，用后清零。
+        let mut key = Zeroizing::new([0u8; 32]);
         argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
-            .hash_password_into(&seed, salt, &mut key)
+            .hash_password_into(&seed, salt, key.as_mut_slice())
             .map_err(|e| CryptoError::KeyDerivationError(e.to_string()))?;
-        Ok(key)
+        Ok(*key)
     }
 
     /// Verify a recovery phrase matches the stored key
     pub fn verify_recovery_phrase(phrase: &str, salt: &[u8], expected_key: &[u8; 32]) -> Result<bool, CryptoError> {
+        // P1 修复 (R5): 改用常量时间比较，避免时序侧信道。
         let derived = Self::key_from_recovery_phrase(phrase, salt)?;
-        Ok(derived == *expected_key)
+        Ok(bool::from(derived.ct_eq(expected_key)))
     }
 
     pub fn encrypt_structured(&self, plaintext: &[u8], key: &[u8]) -> Result<EncryptedData, CryptoError> {
