@@ -6,11 +6,23 @@ import 'package:devnote/features/sync/bloc/sync_event.dart';
 class OfflineOperation {
   final SyncEvent event;
   final DateTime timestamp;
+  /// P1 修复 (F1): 记录该操作已被重放的次数，用于限制重试。
+  /// 原实现通过统计 _pendingOperations 中与 op.event 相等的条目数推断
+  /// 重试次数，但 drainQueue 开头即清空队列，导致计数恒为 0，重试上限失效。
+  final int retryCount;
 
   const OfflineOperation({
     required this.event,
     required this.timestamp,
+    this.retryCount = 0,
   });
+
+  /// 返回重试计数 +1 的新实例（保持不可变性）
+  OfflineOperation withIncrementedRetry() => OfflineOperation(
+        event: event,
+        timestamp: timestamp,
+        retryCount: retryCount + 1,
+      );
 }
 
 class OfflineQueue {
@@ -46,13 +58,13 @@ class OfflineQueue {
       try {
         await replayFn(op.event);
       } catch (e) {
-        // 重放失败时重新入队，但增加重试计数
-        final retryCount = _pendingOperations
-            .where((o) => o.event == op.event)
-            .length;
-        AppLogger.w('OfflineQueue', 'Replay failed for ${op.event.runtimeType}, retryCount=$retryCount', error: e);
-        if (retryCount < _maxRetries) {
-          _pendingOperations.add(op);
+        // P1 修复 (F1): 原实现统计 _pendingOperations 中相等条目数推断重试次数，
+        // 但队列已在上方清空，计数恒为 0，重试上限形同虚设。
+        // 现改为基于 op 自身的 retryCount 字段判断，并在重新入队时递增。
+        final nextRetry = op.retryCount + 1;
+        AppLogger.w('OfflineQueue', 'Replay failed for ${op.event.runtimeType}, retryCount=${op.retryCount}', error: e);
+        if (nextRetry <= _maxRetries) {
+          _pendingOperations.add(op.withIncrementedRetry());
         }
         // 超过最大重试次数的操作被丢弃，避免无限重试
       }

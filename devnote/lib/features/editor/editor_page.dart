@@ -93,6 +93,11 @@ class _EditorViewState extends State<_EditorView> {
   /// 各 block 的 GlobalKey，用于点击时间轴标记时滚动定位到对应文本块
   final Map<String, GlobalKey> _blockKeys = {};
 
+  /// P1 修复 (F3): 各 block 的 FocusNode 缓存。
+  /// 原实现每次 rebuild 都在 _buildBlockWithKeyboard 中 new FocusNode()，
+  /// 旧 FocusNode 永不 dispose，造成内存泄漏。现按 blockId 复用，统一在 dispose 中释放。
+  final Map<String, FocusNode> _blockFocusNodes = {};
+
   @override
   void initState() {
     super.initState();
@@ -104,6 +109,11 @@ class _EditorViewState extends State<_EditorView> {
     _recordingTimer?.cancel();
     _titleController.dispose();
     _virtualScrollController.dispose();
+    // P1 修复 (F3): 释放所有缓存的 FocusNode，避免内存泄漏
+    for (final node in _blockFocusNodes.values) {
+      node.dispose();
+    }
+    _blockFocusNodes.clear();
     super.dispose();
   }
 
@@ -324,10 +334,12 @@ class _EditorViewState extends State<_EditorView> {
   Widget _buildBlockWithKeyboard(BuildContext context, BlockModel block, EditorLoaded state) {
     // 为每个 block 绑定 GlobalKey，用于点击时间轴标记时滚动定位
     final key = _blockKeys.putIfAbsent(block.id, () => GlobalKey());
+    // P1 修复 (F3): 按 blockId 复用 FocusNode，避免每次 rebuild 创建新实例导致泄漏
+    final focusNode = _blockFocusNodes.putIfAbsent(block.id, () => FocusNode());
     return KeyedSubtree(
       key: key,
       child: KeyboardListener(
-        focusNode: FocusNode(),
+        focusNode: focusNode,
         onKeyEvent: (event) {
           if (event is KeyDownEvent) {
             if (event.logicalKey == LogicalKeyboardKey.enter) {

@@ -180,6 +180,10 @@ func (s *FolderService) List(userID, parentID string) ([]model.FolderMeta, error
 		}
 		folders = append(folders, f)
 	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate folder rows: %w", err)
+	}
 	return folders, nil
 }
 
@@ -459,6 +463,10 @@ func (s *FolderService) getAllDescendantIDs(tx *sql.Tx, userID, folderID string)
 			return nil, err
 		}
 		ids = append(ids, children...)
+	}
+	// P1 修复 (G1): 检查迭代错误。
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate descendant rows: %w", err)
 	}
 	return ids, nil
 }

@@ -15,6 +15,7 @@ on:
     paths:
       - 'lib/**'
       - 'test/**'
+      - 'integration_test/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'analysis_options.yaml'
@@ -23,6 +24,7 @@ on:
     paths:
       - 'lib/**'
       - 'test/**'
+      - 'integration_test/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
       - 'analysis_options.yaml'
@@ -60,6 +62,12 @@ jobs:
 
       - name: 单元测试与 Widget 测试
         run: flutter test --coverage --reporter expanded
+
+      - name: 集成测试
+        # P1 修复 (X3): 原实现仅运行 flutter test（单元/Widget 测试），
+        # 未运行 integration_test/ 目录下的集成测试，导致端到端用例在 CI 中被跳过。
+        # 现补充集成测试步骤，使用 flutter test integration_test/ 在无模拟器环境下运行。
+        run: flutter test integration_test/ --reporter expanded
 
       - name: 上传覆盖率报告
         if: always()

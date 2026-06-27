@@ -10,8 +10,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	sharedmw "github.com/devnote/shared/pkg/middleware"
 	"github.com/devnote/shared/pkg/state"
@@ -42,9 +48,9 @@ func main() {
 		zap.String("db_path", cfg.DBPath),
 	)
 
-	// P0 修复（单实例状态）: 创建分布式状态存储
+	// P0 修复（R1.12）: 使用 cfg.RedisURL 配置创建分布式状态存储
 	// RedisURL 为空时使用 MemoryStore（单实例部署），非空时使用 RedisStore（多实例部署）
-	stateStore, err := state.NewStore("")
+	stateStore, err := state.NewStore(cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("failed to create state store: %v", err)
 	}
@@ -87,6 +93,8 @@ func main() {
 	r := gin.New()
 
 	// Middleware
+	// P1 架构修复 (3.6): Request ID 中间件，注入 X-Request-ID 便于跨服务链路追踪
+	r.Use(middleware.RequestIDMiddleware())
 	r.Use(sharedmw.SentryGin())
 	r.Use(middleware.Recovery(logger))
 	r.Use(middleware.LoggerMiddleware(logger))
@@ -196,10 +204,36 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	logger.Info("server listening", zap.String("addr", addr))
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+
+	// P0 修复 (R1.9): 使用 http.Server 包装 gin engine，支持优雅关闭
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		logger.Info("server listening", zap.String("addr", addr))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatal("server error", zap.Error(err))
+		}
+	}()
+
+	// Wait for shutdown signal
+	sig := <-quit
+	logger.Info("shutting down server", zap.String("signal", sig.String()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Fatal("server forced to shutdown", zap.Error(err))
+	}
+
+	logger.Info("server stopped gracefully")
 }
 
 func newLogger(level string) *zap.Logger {

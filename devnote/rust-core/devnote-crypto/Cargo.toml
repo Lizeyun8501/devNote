@@ -15,3 +15,6 @@ serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true }
 devnote-observe = { workspace = true }
 tracing = { workspace = true }
+# P1 修复 (R4/R5): 密钥材料用后清零，密码/哈希比较使用常量时间避免时序侧信道
+zeroize = { version = "1", features = ["alloc"] }
+subtle = "2"

@@ -57,8 +57,8 @@ jobs:
   audit:
     name: 安全漏洞扫描
     runs-on: ubuntu-latest
-    # audit 独立运行，不阻塞测试（漏洞可能需要时间修复）
-    continue-on-error: true
+    # P1 修复 (X2): 原设置 continue-on-error: true 导致安全漏洞不阻塞合并，
+    # 已知漏洞可能被合入主干。现移除该设置，安全扫描失败将阻断 PR 合并。
     steps:
       - uses: actions/checkout@v4
 

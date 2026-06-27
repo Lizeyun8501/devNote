@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache gcc musl-dev
 
@@ -15,11 +15,16 @@ FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
 
+# S9: 创建非 root 用户运行服务，减少容器逃逸攻击面
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 WORKDIR /app
 
 COPY --from=builder /sync-server /app/sync-server
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && chown -R appuser:appgroup /app
+
+USER appuser
 
 EXPOSE 8080
 

@@ -32,13 +32,10 @@ use devnote_crdt::{merge_documents, CRDTDocument, Operation};
 use devnote_database::DatabaseEngine;
 use devnote_database::formula::eval_formula;
 use parking_lot::Mutex;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
-use std::time::Duration;
 use uuid::Uuid;
 
 // ── EngineRegistry —— 统一引擎注册表（Phase 2-C） ─────────────────────
@@ -66,10 +63,6 @@ pub(crate) struct EngineRegistry {
     crdt_docs: HashMap<String, CRDTDocument>,
     /// 初始化警告 —— 记录初始化失败的辅助引擎，供 UI 提示"功能受限"
     init_warnings: Vec<String>,
-    /// Phase 2-D: 共享 SQLite 连接池
-    /// 所有需要 DB 访问的引擎在初始化时从同一 db_path 创建连接，
-    /// 连接池统一管理连接生命周期，避免多连接导致的锁竞争与数据视图不一致。
-    pool: Option<Pool<SqliteConnectionManager>>,
 }
 
 impl EngineRegistry {
@@ -88,7 +81,6 @@ impl EngineRegistry {
             flashcard_engine: None,
             crdt_docs: HashMap::new(),
             init_warnings: Vec::new(),
-            pool: None,
         }
     }
 
@@ -273,21 +265,10 @@ fn open_connection_with_pragmas(db_path: &str) -> rusqlite::Result<rusqlite::Con
 /// 到 init_warnings，通过 health_check() 暴露给 Dart 端，由 UI 提示用户
 /// "核心引擎未加载，功能受限"。
 ///
+/// P1 架构修复 (3.7): 移除死代码 pool 字段，连接池已创建但从未被读取使用。
 /// Phase 2-C: 所有引擎实例收敛到单一 EngineRegistry，消除全局可变状态散落。
-/// Phase 2-D: 创建共享 SQLite 连接池，所有引擎从同一 db_path 打开连接，
-///           连接池统一管理连接生命周期，避免多连接导致的锁竞争与数据视图不一致。
 pub fn init_engines(db_path: String) -> Result<(), String> {
     let mut warnings: Vec<String> = Vec::new();
-
-    // Phase 2-D: 创建共享 SQLite 连接池
-    // with_init 在每个新连接创建时执行 PRAGMA，确保 WAL 模式与外键约束全局生效
-    let manager = SqliteConnectionManager::file(&db_path)
-        .with_init(|c| c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"));
-    let pool = Pool::builder()
-        .max_size(8)
-        .connection_timeout(Duration::from_secs(5))
-        .build(manager)
-        .map_err(|e| format!("Failed to init connection pool: {}", e))?;
 
     // 核心引擎：持久化层失败是致命错误，直接返回 Err
     // 通过 new(conn) 注入共享 db_path 打开的连接（与连接池使用相同 db_path 与 PRAGMA）
@@ -375,7 +356,6 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
     reg.graph_engine = graph_engine;
     reg.flashcard_engine = flashcard_engine;
     reg.init_warnings = warnings;
-    reg.pool = Some(pool);
 
     Ok(())
 }
@@ -682,6 +662,77 @@ pub fn get_blocks(note_id: String) -> Result<Vec<BlockData>, String> {
     let editor = reg.block_editor_mut()?;
     let blocks = editor.list_blocks(&nid, None, None).map_err(|e| e.to_string())?;
     Ok(blocks.into_iter().map(|b| BlockData {
+        id: b.id.to_string(),
+        note_id: b.note_id.to_string(),
+        block_type: format!("{:?}", b.block_type),
+        content: b.content,
+        position: b.position as i32,
+        created_at: b.created_at.to_rfc3339(),
+        updated_at: b.updated_at.to_rfc3339(),
+    }).collect())
+}
+
+/// P1 架构修复 (3.3): 补齐 FFI block API
+/// 获取单个 block by ID
+pub fn get_block(id: String) -> Result<Option<BlockData>, String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let mut reg = REGISTRY.lock();
+    let editor = reg.block_editor_mut()?;
+    let block = editor.get_block(&uid).map_err(|e| e.to_string())?;
+    Ok(block.map(|b| BlockData {
+        id: b.id.to_string(),
+        note_id: b.note_id.to_string(),
+        block_type: format!("{:?}", b.block_type),
+        content: b.content,
+        position: b.position as i32,
+        created_at: b.created_at.to_rfc3339(),
+        updated_at: b.updated_at.to_rfc3339(),
+    }))
+}
+
+/// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
+/// 移动块到新位置，自动重排其他块的 position
+pub fn move_block(id: String, new_position: usize) -> Result<(), String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let mut reg = REGISTRY.lock();
+    let editor = reg.block_editor_mut()?;
+    editor.move_block(&uid, new_position).map_err(|e| e.to_string())
+}
+
+/// P1 架构修复 (3.3): 补齐 FFI block API
+/// 更新块类型
+pub fn update_block_type(id: String, block_type: String) -> Result<(), String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    let bt: BlockType = serde_json::from_value(serde_json::Value::String(block_type))
+        .map_err(|e| e.to_string())?;
+    let mut reg = REGISTRY.lock();
+    let editor = reg.block_editor_mut()?;
+    editor.update_block_type(&uid, bt).map_err(|e| e.to_string())
+}
+
+/// P1 架构修复 (3.3): 补齐 FFI block API
+/// 批量替换指定笔记的所有块（原子替换）
+pub fn replace_blocks(note_id: String, blocks: Vec<BlockData>) -> Result<Vec<BlockData>, String> {
+    let nid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
+    let new_blocks: Vec<devnote_editor::Block> = blocks.iter().enumerate().map(|(i, bd)| {
+        devnote_editor::Block {
+            id: Uuid::parse_str(&bd.id).unwrap_or_else(|_| Uuid::new_v4()),
+            note_id: nid,
+            block_type: serde_json::from_value(serde_json::Value::String(bd.block_type.clone()))
+                .unwrap_or(devnote_editor::BlockType::Paragraph),
+            content: bd.content.clone(),
+            position: i,
+            children: vec![],
+            created_at: chrono::DateTime::parse_from_rfc3339(&bd.created_at)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now()),
+            updated_at: chrono::Utc::now(),
+        }
+    }).collect();
+    let mut reg = REGISTRY.lock();
+    let editor = reg.block_editor_mut()?;
+    let result = editor.replace_blocks(nid, new_blocks).map_err(|e| e.to_string())?;
+    Ok(result.into_iter().map(|b| BlockData {
         id: b.id.to_string(),
         note_id: b.note_id.to_string(),
         block_type: format!("{:?}", b.block_type),

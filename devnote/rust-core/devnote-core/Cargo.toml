@@ -6,12 +6,10 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# P1 修复 (R6): 移除对 crypto/search/sync/crdt/object 的依赖。
+# 这些 crate 属于下层实现层，devnote-core 作为核心领域层不应传递依赖它们。
+# 仅保留 devnote-editor（models/note.rs 的 Block 类型需要）与 devnote-observe。
 devnote-editor = { workspace = true }
-devnote-crypto = { workspace = true }
-devnote-search = { workspace = true }
-devnote-sync = { workspace = true }
-devnote-crdt = { workspace = true }
-devnote-object = { workspace = true }
 devnote-observe = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

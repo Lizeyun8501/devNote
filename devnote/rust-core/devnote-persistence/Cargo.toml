@@ -7,6 +7,9 @@ license.workspace = true
 
 [dependencies]
 devnote-core = { workspace = true }
+# P1 修复 (R6): 直接依赖 devnote-editor 获取 Block/BlockType 类型，
+# 不再通过 devnote-core 的 pub use 重导出（该重导出已移除）。
+devnote-editor = { workspace = true }
 devnote-crypto = { workspace = true }
 devnote-observe = { workspace = true }
 tracing = { workspace = true }

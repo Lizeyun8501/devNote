@@ -21,9 +21,15 @@ class LazyModule {
   Future<void> load() async {
     if (_loaded || _loading) return;
     _loading = true;
-    await loader();
-    _loaded = true;
-    _loading = false;
+    // P1 修复 (F4): 原实现无 try/finally，若 loader() 抛异常则 _loading 永远为 true，
+    // 后续 load() 调用因 guard 直接 return，模块永久卡在"加载中"状态无法重试。
+    // 现用 try/finally 确保 _loading 总是被重置，允许失败后重试。
+    try {
+      await loader();
+      _loaded = true;
+    } finally {
+      _loading = false;
+    }
   }
 }
 
