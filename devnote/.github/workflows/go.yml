@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: sync-server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装 Go 工具链
         uses: actions/setup-go@v5
@@ -52,7 +52,7 @@ jobs:
 
       - name: 上传覆盖率报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sync-server-coverage
           path: sync-server/coverage.out
@@ -64,7 +64,7 @@ jobs:
       run:
         working-directory: business-server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装 Go 工具链
         uses: actions/setup-go@v5
@@ -83,7 +83,7 @@ jobs:
 
       - name: 上传覆盖率报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: business-server-coverage
           path: business-server/coverage.out
@@ -97,7 +97,7 @@ jobs:
       matrix:
         server: [sync-server, business-server]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装 Go 工具链
         uses: actions/setup-go@v5
