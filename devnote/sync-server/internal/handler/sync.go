@@ -29,16 +29,39 @@ func (h *SyncHandler) Push(c *gin.Context) {
 		return
 	}
 
+	// P0 修复 (P1): 幂等键去重 —— 检查 Idempotency-Key 请求头，防止重复推送
+	// 客户端应在每次推送请求中携带唯一的幂等键（UUID），服务端缓存最近 1000 个键，
+	// 若检测到重复，直接返回 200 OK 而不重复处理数据。
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+	if idempotencyKey != "" {
+		if h.syncService.IsIdempotentDuplicate(idempotencyKey) {
+			c.JSON(http.StatusOK, gin.H{"status": "ok", "deduplicated": true})
+			return
+		}
+	}
+
 	var req service.PushRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	resp, err := h.syncService.Push(userID, &req)
+	// P0 修复 (P1): 分页支持 —— 限制单次推送的变更数量
+	// 客户端可传 limit 参数控制单次推送的变更数上限，默认 100，最大 1000
+	limit := 100
+	if req.Limit > 0 && req.Limit <= 1000 {
+		limit = req.Limit
+	}
+
+	resp, err := h.syncService.Push(userID, &req, limit)
 	if err != nil {
 		respondInternalError(c, h.logger, "internal server error", err)
 		return
+	}
+
+	// 记录幂等键（推送成功后）
+	if idempotencyKey != "" {
+		h.syncService.RecordIdempotentKey(idempotencyKey)
 	}
 
 	c.JSON(http.StatusOK, resp)

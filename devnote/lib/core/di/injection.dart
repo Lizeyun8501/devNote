@@ -39,7 +39,10 @@ Future<void> setupDependencies() async {
   getIt.registerSingleton<StartupManager>(StartupManager());
 
   // Database
-  getIt.registerLazySingleton<DatabaseHelper>(() => DatabaseHelper());
+  // P2 修复: DatabaseHelper 接受 useFFI 参数，FFI 模式下跳过 sqflite 初始化
+  // 避免在 Rust 持久化已就绪时重复打开 sqflite 数据库
+  final bridge = getIt<FFIBridge>();
+  getIt.registerLazySingleton<DatabaseHelper>(() => DatabaseHelper(useFFI: bridge.isAvailable));
 
   // 统一日志模块
   getIt.registerSingleton<AppLogger>(AppLogger.instance);
