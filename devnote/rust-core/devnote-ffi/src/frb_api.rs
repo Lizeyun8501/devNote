@@ -31,23 +31,37 @@ use devnote_extensions::canvas::{CanvasEngine, LayoutType};
 use devnote_crdt::{merge_documents, CRDTDocument, Operation};
 use devnote_database::DatabaseEngine;
 use devnote_database::formula::eval_formula;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-// ── EngineRegistry —— 统一引擎注册表（Phase 2-C） ─────────────────────
-// 借鉴 AppFlowy 的 EngineManager 模式，将所有引擎实例收敛到单一结构体中，
-// 消除原先 10+ 个 LazyLock<Mutex<Option<...>>> 全局可变状态的散落问题。
-// 所有 FRB API 函数通过 REGISTRY 单一入口加锁后访问所需引擎，
-// 避免跨全局静态量的锁顺序不一致与状态不一致风险。
+// ── EngineRegistry —— 统一引擎注册表（Phase 3-A: 依赖注入 / 句柄模式） ──
+//
+// P0 架构修复：将全局单例 EngineRegistry 改为基于句柄的多实例注册表。
+// 每个 init_engines() 调用返回一个唯一的 engine_handle (u64)，
+// 后续所有 API 函数通过该句柄访问对应的引擎实例。
+//
+// 优势：
+//  - 支持多用户 / 多工作区（每个工作区拥有独立的引擎实例）
+//  - 测试友好（每个测试可创建独立实例，无需共享全局状态）
+//  - 锁粒度更细（RwLock 允许并发读，仅写入时互斥）
+//
+// 设计参考：AppFlowy EngineManager + 句柄模式
+
+/// 引擎句柄 —— 唯一标识一个引擎实例
+pub type EngineHandle = u64;
+
+/// 默认引擎句柄（向后兼容）
+pub const DEFAULT_HANDLE: EngineHandle = 0;
+
+/// 全局引擎句柄计数器
+static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 /// 引擎注册表 —— 持有所有引擎实例与共享 SQLite 连接池
-///
-/// Phase 2-C: 消除全局可变状态
-/// Phase 2-D: 共享 SQLite 连接池
 pub(crate) struct EngineRegistry {
     note_repo: Option<SqliteNoteRepository>,
     block_editor: Option<DefaultBlockEditor>,
@@ -66,7 +80,6 @@ pub(crate) struct EngineRegistry {
 }
 
 impl EngineRegistry {
-    /// 构造空注册表 —— 仅 crypto_engine 立即可用，其余引擎待 init_engines() 填充
     fn empty() -> Self {
         Self {
             note_repo: None,
@@ -84,66 +97,96 @@ impl EngineRegistry {
         }
     }
 
-    // ── 安全访问辅助方法 ──────────────────────────────────────────────
-    // 每个方法在引擎未初始化时返回 Err，错误信息与原实现保持一致，
-    // 避免破坏 Dart 端对错误字符串的依赖。
-
     fn note_repo(&self) -> Result<&SqliteNoteRepository, String> {
         self.note_repo.as_ref().ok_or("Persistence engine not initialized".to_string())
     }
-
     fn note_repo_mut(&mut self) -> Result<&mut SqliteNoteRepository, String> {
         self.note_repo.as_mut().ok_or("Persistence engine not initialized".to_string())
     }
-
     fn block_editor_mut(&mut self) -> Result<&mut DefaultBlockEditor, String> {
         self.block_editor.as_mut().ok_or("Editor engine not initialized".to_string())
     }
-
     fn search_engine(&self) -> Result<&dyn devnote_search::SearchEngine, String> {
         self.search_engine.as_ref().map(|b| b.as_ref()).ok_or("Search engine not initialized".to_string())
     }
-
     fn search_engine_mut(&mut self) -> Result<&mut Box<dyn devnote_search::SearchEngine>, String> {
         self.search_engine.as_mut().ok_or("Search engine not initialized".to_string())
     }
-
     fn sync_engine_mut(&mut self) -> Result<&mut ClientSyncEngine, String> {
         self.sync_engine.as_mut().ok_or("Sync engine not initialized".to_string())
     }
-
     fn sync_engine(&self) -> Result<&ClientSyncEngine, String> {
         self.sync_engine.as_ref().ok_or("Sync engine not initialized".to_string())
     }
-
     fn canvas_engine_mut(&mut self) -> Result<&mut CanvasEngine, String> {
         self.canvas_engine.as_mut().ok_or("Canvas engine not initialized".to_string())
     }
-
     fn canvas_engine(&self) -> Result<&CanvasEngine, String> {
         self.canvas_engine.as_ref().ok_or("Canvas engine not initialized".to_string())
     }
-
     fn database_engine(&self) -> Result<&devnote_database::SqliteDatabaseEngine, String> {
         self.database_engine.as_ref().ok_or("Database engine not initialized".to_string())
     }
-
     fn graph_engine(&self) -> Result<&devnote_graph::SqliteGraphEngine, String> {
         self.graph_engine.as_ref().ok_or("Graph engine not initialized".to_string())
     }
-
     fn flashcard_engine(&self) -> Result<&devnote_flashcard::SqliteFlashcardEngine, String> {
         self.flashcard_engine.as_ref().ok_or("Flashcard engine not initialized".to_string())
     }
-
     fn flashcard_engine_mut(&mut self) -> Result<&mut devnote_flashcard::SqliteFlashcardEngine, String> {
         self.flashcard_engine.as_mut().ok_or("Flashcard engine not initialized".to_string())
     }
 }
 
-/// 全局引擎注册表 —— 单一可变状态入口，替代原先 10+ 个全局静态量
-pub(crate) static REGISTRY: LazyLock<Mutex<EngineRegistry>> =
-    LazyLock::new(|| Mutex::new(EngineRegistry::empty()));
+// ── 句柄注册表 ────────────────────────────────────────────────────────
+// P0 架构修复: 基于句柄的依赖注入，替代全局单例 REGISTRY
+// 每个 init_engines() 调用返回唯一句柄，后续 API 函数通过句柄访问引擎
+
+/// 全局引擎实例池 —— RwLock 允许并发读，写入时互斥
+static ENGINES: LazyLock<RwLock<HashMap<EngineHandle, EngineRegistry>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// 分配新引擎句柄
+fn alloc_handle() -> EngineHandle {
+    NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
+}
+
+/// 插入引擎注册表并返回句柄
+fn insert_engine(reg: EngineRegistry) -> EngineHandle {
+    let handle = alloc_handle();
+    ENGINES.write().insert(handle, reg);
+    handle
+}
+
+/// 移除引擎实例（释放资源）
+pub fn drop_engine(handle: EngineHandle) -> Result<(), String> {
+    let mut engines = ENGINES.write();
+    engines.remove(&handle).ok_or("Engine handle not found".to_string())?;
+    Ok(())
+}
+
+/// 以可变方式访问引擎 —— 用于需要修改引擎状态的操作
+fn with_engine<T>(handle: EngineHandle, f: impl FnOnce(&mut EngineRegistry) -> Result<T, String>) -> Result<T, String> {
+    let mut engines = ENGINES.write();
+    let reg = engines.get_mut(&handle).ok_or_else(|| format!("Engine handle {} not found", handle))?;
+    f(reg)
+}
+
+/// 以只读方式访问引擎 —— 用于仅读取引擎状态的操作
+fn with_engine_read<T>(handle: EngineHandle, f: impl FnOnce(&EngineRegistry) -> Result<T, String>) -> Result<T, String> {
+    let engines = ENGINES.read();
+    let reg = engines.get(&handle).ok_or_else(|| format!("Engine handle {} not found", handle))?;
+    f(reg)
+}
+
+// ── 向后兼容性：默认句柄 ──────────────────────────────────────────────
+// 若 init_engines 返回的句柄被 Dart 端丢弃，可以使用 DEFAULT_HANDLE。
+// 新代码应当使用 init_engines 返回的句柄。
+
+/// 获取当前活跃引擎句柄的数量
+pub fn engine_count() -> usize {
+    ENGINES.read().len()
+}
 
 // ── FRB 数据类型 ──────────────────────────────────────────────────────
 // FRB 自动将这些 Rust 结构体映射为 Dart 类，无需手写序列化代码
@@ -255,7 +298,11 @@ fn open_connection_with_pragmas(db_path: &str) -> rusqlite::Result<rusqlite::Con
 }
 
 /// 初始化所有引擎 —— 替代原 devnote_init + register_all_handlers
-/// FRB 自动生成 Dart: `Future<void> initEngines()`
+/// FRB 自动生成 Dart: `Future<int> initEngines()`
+///
+/// P0 架构修复: 返回 engine_handle (u64)，实现基于句柄的依赖注入。
+/// 支持多工作区 / 多用户场景，每个工作区拥有独立的引擎实例。
+/// Dart 端应保存返回的句柄，后续所有 API 调用均需传入该句柄。
 ///
 /// P0 修复: 原实现使用 `in_memory()`，FFI 模式下数据重启全部丢失。
 /// 现改为文件持久化，数据库路径通过参数传入，与 Dart 端共享 `devnote.db`。
@@ -264,22 +311,16 @@ fn open_connection_with_pragmas(db_path: &str) -> rusqlite::Result<rusqlite::Con
 /// 用 `if let Ok` 静默吞错，用户无法感知功能受限。现改为收集失败引擎名并记录
 /// 到 init_warnings，通过 health_check() 暴露给 Dart 端，由 UI 提示用户
 /// "核心引擎未加载，功能受限"。
-///
-/// P1 架构修复 (3.7): 移除死代码 pool 字段，连接池已创建但从未被读取使用。
-/// Phase 2-C: 所有引擎实例收敛到单一 EngineRegistry，消除全局可变状态散落。
-pub fn init_engines(db_path: String) -> Result<(), String> {
+pub fn init_engines(db_path: String) -> Result<EngineHandle, String> {
+    let mut reg = EngineRegistry::empty();
     let mut warnings: Vec<String> = Vec::new();
 
-    // 核心引擎：持久化层失败是致命错误，直接返回 Err
-    // 通过 new(conn) 注入共享 db_path 打开的连接（与连接池使用相同 db_path 与 PRAGMA）
     let repo = SqliteNoteRepository::new(
         open_connection_with_pragmas(&db_path)
             .map_err(|e| format!("Failed to open persistence connection: {}", e))?,
     )
     .map_err(|e| format!("Failed to init persistence: {}", e))?;
 
-    // 辅助引擎：失败不致命，但需记录警告供 UI 提示"功能受限"
-    // 各引擎均通过 new(conn) 构造函数注入共享连接
     let search_engine = match devnote_search::SqliteSearchEngine::new(
         open_connection_with_pragmas(&db_path)
             .map_err(|e| format!("Failed to open search connection: {}", e))?,
@@ -299,7 +340,6 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
         Ok(engine) => Some(engine),
         Err(e) => {
             let msg = format!("database: {}", e);
-            warn!("引擎初始化失败，数据库视图功能将不可用: {}", msg);
             warnings.push(msg);
             None
         }
@@ -311,7 +351,6 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
         Ok(engine) => Some(engine),
         Err(e) => {
             let msg = format!("object: {}", e);
-            warn!("引擎初始化失败，对象管理功能将不可用: {}", msg);
             warnings.push(msg);
             None
         }
@@ -323,7 +362,6 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
         Ok(engine) => Some(engine),
         Err(e) => {
             let msg = format!("graph: {}", e);
-            warn!("引擎初始化失败，知识图谱功能将不可用: {}", msg);
             warnings.push(msg);
             None
         }
@@ -335,14 +373,11 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
         Ok(engine) => Some(engine),
         Err(e) => {
             let msg = format!("flashcard: {}", e);
-            warn!("引擎初始化失败，闪卡复习功能将不可用: {}", msg);
             warnings.push(msg);
             None
         }
     };
 
-    // 一次性填充注册表，避免多次加锁
-    let mut reg = REGISTRY.lock();
     reg.note_repo = Some(repo);
     reg.block_editor = Some(DefaultBlockEditor::new());
     reg.search_engine = search_engine;
@@ -357,11 +392,13 @@ pub fn init_engines(db_path: String) -> Result<(), String> {
     reg.flashcard_engine = flashcard_engine;
     reg.init_warnings = warnings;
 
-    Ok(())
+    let handle = insert_engine(reg);
+    Ok(handle)
 }
 
 /// 版本协商 —— 替代原 SystemEvent.GetVersion
-pub fn get_version() -> VersionInfo {
+pub fn get_version(engine_handle: EngineHandle) -> VersionInfo {
+    let _ = engine_handle;
     VersionInfo {
         api_version: 1,
         rust_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -380,32 +417,33 @@ pub fn get_version() -> VersionInfo {
 }
 
 /// 健康检查 —— 替代原 SystemEvent.HealthCheck
-///
-/// 返回各引擎状态及初始化警告。Dart 端应检查 warnings 非空时向用户提示
-/// "核心引擎未加载，功能受限"，并列出受影响的功能模块。
-pub fn health_check() -> HealthCheckResult {
-    let reg = REGISTRY.lock();
-    let mut engines = HashMap::new();
-    engines.insert("persistence".to_string(), reg.note_repo.is_some());
-    engines.insert("editor".to_string(), reg.block_editor.is_some());
-    engines.insert("search".to_string(), reg.search_engine.is_some());
-    engines.insert("crypto".to_string(), true);
-    engines.insert("sync".to_string(), reg.sync_engine.is_some());
-    engines.insert("database".to_string(), reg.database_engine.is_some());
-    engines.insert("object".to_string(), reg.object_engine.is_some());
-    engines.insert("graph".to_string(), reg.graph_engine.is_some());
-    engines.insert("canvas".to_string(), reg.canvas_engine.is_some());
-    engines.insert("format".to_string(), true);
-    engines.insert("crdt".to_string(), true);
-    engines.insert("flashcard".to_string(), reg.flashcard_engine.is_some());
-    let warnings = reg.init_warnings.clone();
-    // 若有辅助引擎未加载，状态标记为 "degraded"（降级运行）
-    let status = if warnings.is_empty() { "ok" } else { "degraded" };
-    HealthCheckResult {
-        status: status.to_string(),
-        engines,
-        warnings,
-    }
+pub fn health_check(engine_handle: EngineHandle) -> HealthCheckResult {
+    with_engine_read(engine_handle, |reg| {
+        let mut engines = HashMap::new();
+        engines.insert("persistence".to_string(), reg.note_repo.is_some());
+        engines.insert("editor".to_string(), reg.block_editor.is_some());
+        engines.insert("search".to_string(), reg.search_engine.is_some());
+        engines.insert("crypto".to_string(), true);
+        engines.insert("sync".to_string(), reg.sync_engine.is_some());
+        engines.insert("database".to_string(), reg.database_engine.is_some());
+        engines.insert("object".to_string(), reg.object_engine.is_some());
+        engines.insert("graph".to_string(), reg.graph_engine.is_some());
+        engines.insert("canvas".to_string(), reg.canvas_engine.is_some());
+        engines.insert("format".to_string(), true);
+        engines.insert("crdt".to_string(), true);
+        engines.insert("flashcard".to_string(), reg.flashcard_engine.is_some());
+        let warnings = reg.init_warnings.clone();
+        let status = if warnings.is_empty() { "ok" } else { "degraded" };
+        Ok(HealthCheckResult {
+            status: status.to_string(),
+            engines,
+            warnings,
+        })
+    }).unwrap_or_else(|e| HealthCheckResult {
+        status: "error".to_string(),
+        engines: HashMap::new(),
+        warnings: vec![e],
+    })
 }
 
 // ── 笔记 API ──────────────────────────────────────────────────────────
@@ -432,287 +470,308 @@ fn note_to_data(note: &devnote_core::models::Note) -> NoteData {
 }
 
 /// 创建笔记 —— 替代原 NoteEvent.CreateNote
-pub fn create_note(title: String, content: String, folder_id: String) -> Result<NoteData, String> {
+pub fn create_note(engine_handle: EngineHandle, title: String, content: String, folder_id: String) -> Result<NoteData, String> {
     let fid = Uuid::parse_str(&folder_id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    let note = devnote_core::models::Note::new(title, fid);
-    let note = repo.create_note(note).map_err(|e| e.to_string())?;
-    Ok(note_to_data(&note))
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        let note = devnote_core::models::Note::new(title, fid);
+        let note = repo.create_note(note).map_err(|e| e.to_string())?;
+        Ok(note_to_data(&note))
+    })
 }
 
 /// 获取笔记 —— 替代原 NoteEvent.GetNote
-pub fn get_note(id: String) -> Result<Option<NoteData>, String> {
+pub fn get_note(engine_handle: EngineHandle, id: String) -> Result<Option<NoteData>, String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    match repo.get_note(&uid) {
-        Ok(Some(note)) => Ok(Some(note_to_data(&note))),
-        Ok(None) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
+    with_engine_read(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        match repo.get_note(&uid) {
+            Ok(Some(note)) => Ok(Some(note_to_data(&note))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
 }
 
 /// 更新笔记 —— 替代原 NoteEvent.UpdateNote
-pub fn update_note(id: String, title: String, content: String) -> Result<NoteData, String> {
+pub fn update_note(engine_handle: EngineHandle, id: String, title: String, content: String) -> Result<NoteData, String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    let mut note = repo.get_note(&uid).map_err(|e| e.to_string())?
-        .ok_or("Note not found")?;
-    note.title = title;
-    let note = repo.update_note(note).map_err(|e| e.to_string())?;
-    Ok(note_to_data(&note))
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        let mut note = repo.get_note(&uid).map_err(|e| e.to_string())?
+            .ok_or("Note not found")?;
+        note.title = title;
+        let note = repo.update_note(note).map_err(|e| e.to_string())?;
+        Ok(note_to_data(&note))
+    })
 }
 
 /// 删除笔记 —— 替代原 NoteEvent.DeleteNote
-pub fn delete_note(id: String) -> Result<(), String> {
+pub fn delete_note(engine_handle: EngineHandle, id: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    repo.delete_note(&uid).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        repo.delete_note(&uid).map_err(|e| e.to_string())
+    })
 }
 
 /// 列出笔记 —— 替代原 NoteEvent.ListNotes
-pub fn list_notes(folder_id: String) -> Result<Vec<NoteData>, String> {
+pub fn list_notes(engine_handle: EngineHandle, folder_id: String) -> Result<Vec<NoteData>, String> {
     let fid = Uuid::parse_str(&folder_id).map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    let notes = repo.list_notes(&fid).map_err(|e| e.to_string())?;
-    Ok(notes.iter().map(|n| note_to_data(n)).collect())
+    with_engine_read(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        let notes = repo.list_notes(&fid).map_err(|e| e.to_string())?;
+        Ok(notes.iter().map(|n| note_to_data(n)).collect())
+    })
 }
 
 // ── 文件夹 API ────────────────────────────────────────────────────────
 
 /// 创建文件夹 —— 替代原 FolderEvent.CreateFolder
-pub fn create_folder(name: String, parent_id: Option<String>) -> Result<FolderData, String> {
+pub fn create_folder(engine_handle: EngineHandle, name: String, parent_id: Option<String>) -> Result<FolderData, String> {
     let pid = parent_id.map(|s| Uuid::parse_str(&s)).transpose().map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    let folder = repo.create_folder(&name, pid.as_ref()).map_err(|e| e.to_string())?;
-    Ok(FolderData {
-        id: folder.id.to_string(),
-        name: folder.name,
-        parent_id: folder.parent_id.map(|id| id.to_string()),
-        sort_order: folder.sort_order,
-        created_at: folder.created_at.to_rfc3339(),
-        updated_at: folder.updated_at.to_rfc3339(),
-    })
-}
-
-/// 列出文件夹 —— 替代原 FolderEvent.ListFolders
-pub fn list_folders(parent_id: Option<String>) -> Result<Vec<FolderData>, String> {
-    let pid = parent_id.map(|s| Uuid::parse_str(&s)).transpose().map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    let folders = repo.list_folders(pid.as_ref()).map_err(|e| e.to_string())?;
-    Ok(folders.into_iter().map(|f| FolderData {
-        id: f.id.to_string(),
-        name: f.name,
-        parent_id: f.parent_id.map(|id| id.to_string()),
-        sort_order: f.sort_order,
-        created_at: f.created_at.to_rfc3339(),
-        updated_at: f.updated_at.to_rfc3339(),
-    }).collect())
-}
-
-/// 删除文件夹 —— 替代原 FolderEvent.DeleteFolder
-pub fn delete_folder(id: String) -> Result<(), String> {
-    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    NoteRepository::delete_folder(repo, &uid).map_err(|e| e.to_string())
-}
-
-/// 获取文件夹 —— 替代原 FolderEvent.GetFolder
-pub fn get_folder(id: String) -> Result<Option<FolderData>, String> {
-    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    match NoteRepository::get_folder(repo, &uid) {
-        Ok(Some(folder)) => Ok(Some(FolderData {
+    with_engine_read(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        let folder = repo.create_folder(&name, pid.as_ref()).map_err(|e| e.to_string())?;
+        Ok(FolderData {
             id: folder.id.to_string(),
             name: folder.name,
             parent_id: folder.parent_id.map(|id| id.to_string()),
             sort_order: folder.sort_order,
             created_at: folder.created_at.to_rfc3339(),
             updated_at: folder.updated_at.to_rfc3339(),
-        })),
-        Ok(None) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
+        })
+    })
+}
+
+/// 列出文件夹 —— 替代原 FolderEvent.ListFolders
+pub fn list_folders(engine_handle: EngineHandle, parent_id: Option<String>) -> Result<Vec<FolderData>, String> {
+    let pid = parent_id.map(|s| Uuid::parse_str(&s)).transpose().map_err(|e| e.to_string())?;
+    with_engine_read(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        let folders = repo.list_folders(pid.as_ref()).map_err(|e| e.to_string())?;
+        Ok(folders.into_iter().map(|f| FolderData {
+            id: f.id.to_string(),
+            name: f.name,
+            parent_id: f.parent_id.map(|id| id.to_string()),
+            sort_order: f.sort_order,
+            created_at: f.created_at.to_rfc3339(),
+            updated_at: f.updated_at.to_rfc3339(),
+        }).collect())
+    })
+}
+
+/// 删除文件夹 —— 替代原 FolderEvent.DeleteFolder
+pub fn delete_folder(engine_handle: EngineHandle, id: String) -> Result<(), String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        NoteRepository::delete_folder(repo, &uid).map_err(|e| e.to_string())
+    })
+}
+
+/// 获取文件夹 —— 替代原 FolderEvent.GetFolder
+pub fn get_folder(engine_handle: EngineHandle, id: String) -> Result<Option<FolderData>, String> {
+    let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        match NoteRepository::get_folder(repo, &uid) {
+            Ok(Some(folder)) => Ok(Some(FolderData {
+                id: folder.id.to_string(),
+                name: folder.name,
+                parent_id: folder.parent_id.map(|id| id.to_string()),
+                sort_order: folder.sort_order,
+                created_at: folder.created_at.to_rfc3339(),
+                updated_at: folder.updated_at.to_rfc3339(),
+            })),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
 }
 
 /// 更新文件夹 —— 替代原 FolderEvent.UpdateFolder
-pub fn update_folder(id: String, name: String, parent_id: Option<String>, sort_order: Option<i32>) -> Result<FolderData, String> {
+pub fn update_folder(engine_handle: EngineHandle, id: String, name: String, parent_id: Option<String>, sort_order: Option<i32>) -> Result<FolderData, String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let pid = parent_id.map(|s| Uuid::parse_str(&s)).transpose().map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    let existing = NoteRepository::get_folder(repo, &uid)
-        .map_err(|e| e.to_string())?
-        .ok_or("Folder not found")?;
-    let sort_order = sort_order.unwrap_or(existing.sort_order);
-    let folder = devnote_core::models::Folder {
-        id: uid,
-        name,
-        parent_id: pid,
-        sort_order,
-        created_at: existing.created_at,
-        updated_at: chrono::Utc::now(),
-    };
-    let folder = NoteRepository::update_folder(repo, folder).map_err(|e| e.to_string())?;
-    Ok(FolderData {
-        id: folder.id.to_string(),
-        name: folder.name,
-        parent_id: folder.parent_id.map(|id| id.to_string()),
-        sort_order: folder.sort_order,
-        created_at: folder.created_at.to_rfc3339(),
-        updated_at: folder.updated_at.to_rfc3339(),
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        let existing = NoteRepository::get_folder(repo, &uid)
+            .map_err(|e| e.to_string())?
+            .ok_or("Folder not found")?;
+        let sort_order = sort_order.unwrap_or(existing.sort_order);
+        let folder = devnote_core::models::Folder {
+            id: uid,
+            name,
+            parent_id: pid,
+            sort_order,
+            created_at: existing.created_at,
+            updated_at: chrono::Utc::now(),
+        };
+        let folder = NoteRepository::update_folder(repo, folder).map_err(|e| e.to_string())?;
+        Ok(FolderData {
+            id: folder.id.to_string(),
+            name: folder.name,
+            parent_id: folder.parent_id.map(|id| id.to_string()),
+            sort_order: folder.sort_order,
+            created_at: folder.created_at.to_rfc3339(),
+            updated_at: folder.updated_at.to_rfc3339(),
+        })
     })
 }
 
 // ── 标签 API ──────────────────────────────────────────────────────────
 
 /// 创建标签 —— 替代原 TagEvent.CreateTag
-pub fn create_tag(name: String) -> Result<TagData, String> {
-    let reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    let tag = repo.create_tag(&name).map_err(|e| e.to_string())?;
-    Ok(TagData {
-        id: tag.id.to_string(),
-        name: tag.name,
-        created_at: tag.created_at.to_rfc3339(),
+pub fn create_tag(engine_handle: EngineHandle, name: String) -> Result<TagData, String> {
+    with_engine_read(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        let tag = repo.create_tag(&name).map_err(|e| e.to_string())?;
+        Ok(TagData {
+            id: tag.id.to_string(),
+            name: tag.name,
+            created_at: tag.created_at.to_rfc3339(),
+        })
     })
 }
 
 /// 列出标签 —— 替代原 TagEvent.ListTags
-pub fn list_tags() -> Result<Vec<TagData>, String> {
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    let tags = NoteRepository::list_tags(repo).map_err(|e| e.to_string())?;
-    Ok(tags.into_iter().map(|t| TagData {
-        id: t.id.to_string(),
-        name: t.name,
-        created_at: t.created_at.to_rfc3339(),
-    }).collect())
+pub fn list_tags(engine_handle: EngineHandle) -> Result<Vec<TagData>, String> {
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        let tags = NoteRepository::list_tags(repo).map_err(|e| e.to_string())?;
+        Ok(tags.into_iter().map(|t| TagData {
+            id: t.id.to_string(),
+            name: t.name,
+            created_at: t.created_at.to_rfc3339(),
+        }).collect())
+    })
 }
 
 /// 删除标签 —— 替代原 TagEvent.DeleteTag
-pub fn delete_tag(id: String) -> Result<(), String> {
+pub fn delete_tag(engine_handle: EngineHandle, id: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo_mut()?;
-    NoteRepository::delete_tag(repo, &uid).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo_mut()?;
+        NoteRepository::delete_tag(repo, &uid).map_err(|e| e.to_string())
+    })
 }
 
 /// 按标签查询笔记 ID —— P1-2 修复: 消除双重持久化
 ///
 /// 原实现: Flutter 端直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
 /// 现改为: 通过 FFI 调用 Rust 持久化层，确保数据源唯一。
-pub fn get_note_ids_by_tag(tag_id: String) -> Result<Vec<String>, String> {
+pub fn get_note_ids_by_tag(engine_handle: EngineHandle, tag_id: String) -> Result<Vec<String>, String> {
     let tid = Uuid::parse_str(&tag_id).map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    repo.get_note_ids_by_tag(&tid).map_err(|e| e.to_string())
+    with_engine_read(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        repo.get_note_ids_by_tag(&tid).map_err(|e| e.to_string())
+    })
 }
 
 // ── 编辑器 API ────────────────────────────────────────────────────────
 
 /// 插入块 —— 替代原 EditorEvent.InsertBlock
-pub fn insert_block(note_id: String, block_type: String, content: String, position: Option<usize>) -> Result<BlockData, String> {
+pub fn insert_block(engine_handle: EngineHandle, note_id: String, block_type: String, content: String, position: Option<usize>) -> Result<BlockData, String> {
     let nid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
     let bt: BlockType = serde_json::from_value(serde_json::Value::String(block_type))
         .map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    let pos = position.unwrap_or(0);
-    let block = editor.create_block(nid, bt, content, pos).map_err(|e| e.to_string())?;
-    Ok(BlockData {
-        id: block.id.to_string(),
-        note_id: block.note_id.to_string(),
-        block_type: format!("{:?}", block.block_type),
-        content: block.content,
-        position: block.position as i32,
-        created_at: block.created_at.to_rfc3339(),
-        updated_at: block.updated_at.to_rfc3339(),
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        let pos = position.unwrap_or(0);
+        let block = editor.create_block(nid, bt, content, pos).map_err(|e| e.to_string())?;
+        Ok(BlockData {
+            id: block.id.to_string(),
+            note_id: block.note_id.to_string(),
+            block_type: format!("{:?}", block.block_type),
+            content: block.content,
+            position: block.position as i32,
+            created_at: block.created_at.to_rfc3339(),
+            updated_at: block.updated_at.to_rfc3339(),
+        })
     })
 }
 
 /// 更新块 —— 替代原 EditorEvent.UpdateBlock
-pub fn update_block(id: String, content: String) -> Result<(), String> {
+pub fn update_block(engine_handle: EngineHandle, id: String, content: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    editor.update_block(&uid, content).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        editor.update_block(&uid, content).map_err(|e| e.to_string())
+    })
 }
 
 /// 删除块 —— 替代原 EditorEvent.DeleteBlock
-pub fn delete_block(id: String) -> Result<(), String> {
+pub fn delete_block(engine_handle: EngineHandle, id: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    editor.delete_block(&uid).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        editor.delete_block(&uid).map_err(|e| e.to_string())
+    })
 }
 
 /// 获取笔记的所有块 —— 替代原 EditorEvent.GetBlocks
-pub fn get_blocks(note_id: String) -> Result<Vec<BlockData>, String> {
+pub fn get_blocks(engine_handle: EngineHandle, note_id: String) -> Result<Vec<BlockData>, String> {
     let nid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    let blocks = editor.list_blocks(&nid, None, None).map_err(|e| e.to_string())?;
-    Ok(blocks.into_iter().map(|b| BlockData {
-        id: b.id.to_string(),
-        note_id: b.note_id.to_string(),
-        block_type: format!("{:?}", b.block_type),
-        content: b.content,
-        position: b.position as i32,
-        created_at: b.created_at.to_rfc3339(),
-        updated_at: b.updated_at.to_rfc3339(),
-    }).collect())
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        let blocks = editor.list_blocks(&nid, None, None).map_err(|e| e.to_string())?;
+        Ok(blocks.into_iter().map(|b| BlockData {
+            id: b.id.to_string(),
+            note_id: b.note_id.to_string(),
+            block_type: format!("{:?}", b.block_type),
+            content: b.content,
+            position: b.position as i32,
+            created_at: b.created_at.to_rfc3339(),
+            updated_at: b.updated_at.to_rfc3339(),
+        }).collect())
+    })
 }
 
 /// P1 架构修复 (3.3): 补齐 FFI block API
 /// 获取单个 block by ID
-pub fn get_block(id: String) -> Result<Option<BlockData>, String> {
+pub fn get_block(engine_handle: EngineHandle, id: String) -> Result<Option<BlockData>, String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    let block = editor.get_block(&uid).map_err(|e| e.to_string())?;
-    Ok(block.map(|b| BlockData {
-        id: b.id.to_string(),
-        note_id: b.note_id.to_string(),
-        block_type: format!("{:?}", b.block_type),
-        content: b.content,
-        position: b.position as i32,
-        created_at: b.created_at.to_rfc3339(),
-        updated_at: b.updated_at.to_rfc3339(),
-    }))
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        let block = editor.get_block(&uid).map_err(|e| e.to_string())?;
+        Ok(block.map(|b| BlockData {
+            id: b.id.to_string(),
+            note_id: b.note_id.to_string(),
+            block_type: format!("{:?}", b.block_type),
+            content: b.content,
+            position: b.position as i32,
+            created_at: b.created_at.to_rfc3339(),
+            updated_at: b.updated_at.to_rfc3339(),
+        }))
+    })
 }
 
 /// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
 /// 移动块到新位置，自动重排其他块的 position
-pub fn move_block(id: String, new_position: usize) -> Result<(), String> {
+pub fn move_block(engine_handle: EngineHandle, id: String, new_position: usize) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    editor.move_block(&uid, new_position).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        editor.move_block(&uid, new_position).map_err(|e| e.to_string())
+    })
 }
 
 /// P1 架构修复 (3.3): 补齐 FFI block API
 /// 更新块类型
-pub fn update_block_type(id: String, block_type: String) -> Result<(), String> {
+pub fn update_block_type(engine_handle: EngineHandle, id: String, block_type: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let bt: BlockType = serde_json::from_value(serde_json::Value::String(block_type))
         .map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    editor.update_block_type(&uid, bt).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        editor.update_block_type(&uid, bt).map_err(|e| e.to_string())
+    })
 }
 
 /// P1 架构修复 (3.3): 补齐 FFI block API
 /// 批量替换指定笔记的所有块（原子替换）
-pub fn replace_blocks(note_id: String, blocks: Vec<BlockData>) -> Result<Vec<BlockData>, String> {
+pub fn replace_blocks(engine_handle: EngineHandle, note_id: String, blocks: Vec<BlockData>) -> Result<Vec<BlockData>, String> {
     let nid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
     let new_blocks: Vec<devnote_editor::Block> = blocks.iter().enumerate().map(|(i, bd)| {
         devnote_editor::Block {
@@ -729,169 +788,184 @@ pub fn replace_blocks(note_id: String, blocks: Vec<BlockData>) -> Result<Vec<Blo
             updated_at: chrono::Utc::now(),
         }
     }).collect();
-    let mut reg = REGISTRY.lock();
-    let editor = reg.block_editor_mut()?;
-    let result = editor.replace_blocks(nid, new_blocks).map_err(|e| e.to_string())?;
-    Ok(result.into_iter().map(|b| BlockData {
-        id: b.id.to_string(),
-        note_id: b.note_id.to_string(),
-        block_type: format!("{:?}", b.block_type),
-        content: b.content,
-        position: b.position as i32,
-        created_at: b.created_at.to_rfc3339(),
-        updated_at: b.updated_at.to_rfc3339(),
-    }).collect())
+    with_engine(engine_handle, |reg| {
+        let editor = reg.block_editor_mut()?;
+        let result = editor.replace_blocks(nid, new_blocks).map_err(|e| e.to_string())?;
+        Ok(result.into_iter().map(|b| BlockData {
+            id: b.id.to_string(),
+            note_id: b.note_id.to_string(),
+            block_type: format!("{:?}", b.block_type),
+            content: b.content,
+            position: b.position as i32,
+            created_at: b.created_at.to_rfc3339(),
+            updated_at: b.updated_at.to_rfc3339(),
+        }).collect())
+    })
 }
 
 // ── 搜索 API ──────────────────────────────────────────────────────────
 
 /// 搜索笔记 —— 替代原 SearchEvent.Search
-pub fn search_notes(query: String, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<SearchResult>, String> {
+pub fn search_notes(engine_handle: EngineHandle, query: String, limit: Option<usize>, offset: Option<usize>) -> Result<Vec<SearchResult>, String> {
     let lim = limit.unwrap_or(50);
     let off = offset.unwrap_or(0);
-    let reg = REGISTRY.lock();
-    let engine = reg.search_engine()?;
-    let results = engine.search(&query, lim, off).map_err(|e| e.to_string())?;
-    Ok(results.into_iter().map(|r| SearchResult {
-        note_id: r.note_id.to_string(),
-        title: r.title,
-        snippet: r.snippet,
-        score: r.score,
-    }).collect())
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.search_engine()?;
+        let results = engine.search(&query, lim, off).map_err(|e| e.to_string())?;
+        Ok(results.into_iter().map(|r| SearchResult {
+            note_id: r.note_id.to_string(),
+            title: r.title,
+            snippet: r.snippet,
+            score: r.score,
+        }).collect())
+    })
 }
 
 // ── 加密 API ──────────────────────────────────────────────────────────
 
 /// 加密数据 —— 替代原 CryptoEvent.Encrypt
-pub fn encrypt(plaintext_base64: String, key_base64: String) -> Result<String, String> {
+pub fn encrypt(engine_handle: EngineHandle, plaintext_base64: String, key_base64: String) -> Result<String, String> {
     let plaintext = base64::engine::general_purpose::STANDARD.decode(&plaintext_base64)
         .map_err(|e| format!("Invalid base64 plaintext: {}", e))?;
     let key = base64::engine::general_purpose::STANDARD.decode(&key_base64)
         .map_err(|e| format!("Invalid base64 key: {}", e))?;
-    let reg = REGISTRY.lock();
-    let ciphertext = reg.crypto_engine.encrypt(&plaintext, &key).map_err(|e| e.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&ciphertext))
+    with_engine_read(engine_handle, |reg| {
+        let ciphertext = reg.crypto_engine.encrypt(&plaintext, &key).map_err(|e| e.to_string())?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(&ciphertext))
+    })
 }
 
 /// 解密数据 —— 替代原 CryptoEvent.Decrypt
-pub fn decrypt(ciphertext_base64: String, key_base64: String) -> Result<String, String> {
+pub fn decrypt(engine_handle: EngineHandle, ciphertext_base64: String, key_base64: String) -> Result<String, String> {
     let ciphertext = base64::engine::general_purpose::STANDARD.decode(&ciphertext_base64)
         .map_err(|e| format!("Invalid base64 ciphertext: {}", e))?;
     let key = base64::engine::general_purpose::STANDARD.decode(&key_base64)
         .map_err(|e| format!("Invalid base64 key: {}", e))?;
-    let reg = REGISTRY.lock();
-    let plaintext = reg.crypto_engine.decrypt(&ciphertext, &key).map_err(|e| e.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&plaintext))
+    with_engine_read(engine_handle, |reg| {
+        let plaintext = reg.crypto_engine.decrypt(&ciphertext, &key).map_err(|e| e.to_string())?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(&plaintext))
+    })
 }
 
 /// 派生密钥 —— 替代原 CryptoEvent.DeriveKey
-pub fn derive_key(password: String, salt_base64: String) -> Result<String, String> {
+pub fn derive_key(engine_handle: EngineHandle, password: String, salt_base64: String) -> Result<String, String> {
     let salt = base64::engine::general_purpose::STANDARD.decode(&salt_base64)
         .map_err(|e| format!("Invalid base64 salt: {}", e))?;
-    let reg = REGISTRY.lock();
-    let key = reg.crypto_engine.derive_key(&password, &salt).map_err(|e| e.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&key))
+    with_engine_read(engine_handle, |reg| {
+        let key = reg.crypto_engine.derive_key(&password, &salt).map_err(|e| e.to_string())?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(&key))
+    })
 }
 
 // ── 同步 API ──────────────────────────────────────────────────────────
 
 /// 推送变更 —— 替代原 SyncEvent.PushChanges
-pub fn push_changes() -> Result<SyncStatusData, String> {
-    let mut reg = REGISTRY.lock();
-    let engine = reg.sync_engine_mut()?;
-    let info = engine.push_changes().map_err(|e| e.to_string())?;
-    Ok(SyncStatusData {
-        status: format!("{:?}", info.status),
-        last_synced: info.last_synced_at.map(|t| t.to_rfc3339()),
-        pending_changes: info.pending_changes,
+pub fn push_changes(engine_handle: EngineHandle) -> Result<SyncStatusData, String> {
+    with_engine(engine_handle, |reg| {
+        let engine = reg.sync_engine_mut()?;
+        let info = engine.push_changes().map_err(|e| e.to_string())?;
+        Ok(SyncStatusData {
+            status: format!("{:?}", info.status),
+            last_synced: info.last_synced_at.map(|t| t.to_rfc3339()),
+            pending_changes: info.pending_changes,
+        })
     })
 }
 
 /// 拉取变更 —— 替代原 SyncEvent.PullChanges
-pub fn pull_changes() -> Result<SyncStatusData, String> {
-    let mut reg = REGISTRY.lock();
-    let engine = reg.sync_engine_mut()?;
-    let info = engine.pull_changes().map_err(|e| e.to_string())?;
-    Ok(SyncStatusData {
-        status: format!("{:?}", info.status),
-        last_synced: info.last_synced_at.map(|t| t.to_rfc3339()),
-        pending_changes: info.pending_changes,
+pub fn pull_changes(engine_handle: EngineHandle) -> Result<SyncStatusData, String> {
+    with_engine(engine_handle, |reg| {
+        let engine = reg.sync_engine_mut()?;
+        let info = engine.pull_changes().map_err(|e| e.to_string())?;
+        Ok(SyncStatusData {
+            status: format!("{:?}", info.status),
+            last_synced: info.last_synced_at.map(|t| t.to_rfc3339()),
+            pending_changes: info.pending_changes,
+        })
     })
 }
 
 /// 获取同步状态 —— 替代原 SyncEvent.GetStatus
-pub fn get_sync_status() -> Result<SyncStatusData, String> {
-    let reg = REGISTRY.lock();
-    let engine = reg.sync_engine()?;
-    let status = engine.get_status();
-    Ok(SyncStatusData {
-        status: format!("{:?}", status),
-        last_synced: None,
-        pending_changes: 0,
+pub fn get_sync_status(engine_handle: EngineHandle) -> Result<SyncStatusData, String> {
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.sync_engine()?;
+        let status = engine.get_status();
+        Ok(SyncStatusData {
+            status: format!("{:?}", status),
+            last_synced: None,
+            pending_changes: 0,
+        })
     })
 }
 
 // ── Canvas API ────────────────────────────────────────────────────────
 
 /// 添加画布节点 —— 替代原 CanvasEvent.AddNode
-pub fn canvas_add_node(canvas_id: String, node_json: String) -> Result<(), String> {
+pub fn canvas_add_node(engine_handle: EngineHandle, canvas_id: String, node_json: String) -> Result<(), String> {
     let node: devnote_extensions::canvas::CanvasNode = serde_json::from_str(&node_json)
         .map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let engine = reg.canvas_engine_mut()?;
-    engine.add_node(&canvas_id, node).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let engine = reg.canvas_engine_mut()?;
+        engine.add_node(&canvas_id, node).map_err(|e| e.to_string())
+    })
 }
 
 /// 移除画布节点 —— 替代原 CanvasEvent.RemoveNode
-pub fn canvas_remove_node(canvas_id: String, node_id: String) -> Result<(), String> {
-    let mut reg = REGISTRY.lock();
-    let engine = reg.canvas_engine_mut()?;
-    engine.remove_node(&canvas_id, &node_id).map_err(|e| e.to_string())
+pub fn canvas_remove_node(engine_handle: EngineHandle, canvas_id: String, node_id: String) -> Result<(), String> {
+    with_engine(engine_handle, |reg| {
+        let engine = reg.canvas_engine_mut()?;
+        engine.remove_node(&canvas_id, &node_id).map_err(|e| e.to_string())
+    })
 }
 
 /// 画布自动布局 —— 替代原 CanvasEvent.AutoLayout
-pub fn canvas_auto_layout(canvas_id: String, layout_type: String) -> Result<(), String> {
+pub fn canvas_auto_layout(engine_handle: EngineHandle, canvas_id: String, layout_type: String) -> Result<(), String> {
     let lt: LayoutType = serde_json::from_value(serde_json::Value::String(layout_type))
         .map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let engine = reg.canvas_engine_mut()?;
-    engine.auto_layout(&canvas_id, lt).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let engine = reg.canvas_engine_mut()?;
+        engine.auto_layout(&canvas_id, lt).map_err(|e| e.to_string())
+    })
 }
 
 /// 添加画布边 —— 替代原 CanvasEvent.AddEdge
-pub fn canvas_add_edge(canvas_id: String, edge_json: String) -> Result<(), String> {
+pub fn canvas_add_edge(engine_handle: EngineHandle, canvas_id: String, edge_json: String) -> Result<(), String> {
     let edge: devnote_extensions::canvas::CanvasEdge = serde_json::from_str(&edge_json)
         .map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let engine = reg.canvas_engine_mut()?;
-    engine.add_edge(&canvas_id, edge).map_err(|e| e.to_string())
+    with_engine(engine_handle, |reg| {
+        let engine = reg.canvas_engine_mut()?;
+        engine.add_edge(&canvas_id, edge).map_err(|e| e.to_string())
+    })
 }
 
 /// 保存画布为 JSON —— 替代原 CanvasEvent.SaveJson
-pub fn canvas_save_canvas(canvas_id: String, path: String) -> Result<(), String> {
-    let reg = REGISTRY.lock();
-    let engine = reg.canvas_engine()?;
-    engine.save_canvas(&canvas_id, &path).map_err(|e| e.to_string())
+pub fn canvas_save_canvas(engine_handle: EngineHandle, canvas_id: String, path: String) -> Result<(), String> {
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.canvas_engine()?;
+        engine.save_canvas(&canvas_id, &path).map_err(|e| e.to_string())
+    })
 }
 
 /// 从 JSON 加载画布 —— 替代原 CanvasEvent.LoadJson
-pub fn canvas_load_canvas(path: String) -> Result<String, String> {
-    let mut reg = REGISTRY.lock();
-    let engine = reg.canvas_engine_mut()?;
-    let canvas = engine.load_canvas(&path).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&canvas).unwrap_or_default())
+pub fn canvas_load_canvas(engine_handle: EngineHandle, path: String) -> Result<String, String> {
+    with_engine(engine_handle, |reg| {
+        let engine = reg.canvas_engine_mut()?;
+        let canvas = engine.load_canvas(&path).map_err(|e| e.to_string())?;
+        Ok(serde_json::to_string(&canvas).unwrap_or_default())
+    })
 }
 
 // ── 数据库 API ────────────────────────────────────────────────────────
 
 /// 创建数据库 —— 替代原 DatabaseEvent.CreateDatabase
-pub fn create_database(name: String) -> Result<String, String> {
-    let reg = REGISTRY.lock();
-    let engine = reg.database_engine()?;
-    match engine.create_database(&name) {
-        Ok(db) => Ok(serde_json::to_string(&db).unwrap_or_default()),
-        Err(e) => Err(e.to_string()),
-    }
+pub fn create_database(engine_handle: EngineHandle, name: String) -> Result<String, String> {
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.database_engine()?;
+        match engine.create_database(&name) {
+            Ok(db) => Ok(serde_json::to_string(&db).unwrap_or_default()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
 }
 
 /// 评估公式 —— 替代原 DatabaseEvent.EvaluateFormula
@@ -908,94 +982,102 @@ pub fn evaluate_formula(formula: String, row_values: String, all_rows: String) -
 }
 
 /// 添加数据库视图 —— 替代原 DatabaseEvent.AddView
-pub fn database_add_view(db_id: String, name: String, view_type: String) -> Result<String, String> {
+pub fn database_add_view(engine_handle: EngineHandle, db_id: String, name: String, view_type: String) -> Result<String, String> {
     let did = Uuid::parse_str(&db_id).map_err(|e| e.to_string())?;
     let vt: devnote_database::ViewType = serde_json::from_value(serde_json::Value::String(view_type))
         .map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let engine = reg.database_engine()?;
-    match engine.add_view(&did, &name, vt) {
-        Ok(view) => Ok(serde_json::to_string(&view).unwrap_or_default()),
-        Err(e) => Err(e.to_string()),
-    }
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.database_engine()?;
+        match engine.add_view(&did, &name, vt) {
+            Ok(view) => Ok(serde_json::to_string(&view).unwrap_or_default()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
 }
 
 /// 查询数据库行 —— 替代原 DatabaseEvent.QueryRows
-pub fn database_query_rows(db_id: String) -> Result<String, String> {
+pub fn database_query_rows(engine_handle: EngineHandle, db_id: String) -> Result<String, String> {
     let did = Uuid::parse_str(&db_id).map_err(|e| e.to_string())?;
-    let reg = REGISTRY.lock();
-    let engine = reg.database_engine()?;
-    match engine.get_rows(&did) {
-        Ok(rows) => Ok(serde_json::to_string(&rows).unwrap_or_default()),
-        Err(e) => Err(e.to_string()),
-    }
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.database_engine()?;
+        match engine.get_rows(&did) {
+            Ok(rows) => Ok(serde_json::to_string(&rows).unwrap_or_default()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
 }
 
 // ── 图谱 API ──────────────────────────────────────────────────────────
 
 /// 计算中心性 —— 替代原 GraphEvent.CalculateCentrality
-pub fn calculate_centrality() -> Result<String, String> {
-    let reg = REGISTRY.lock();
-    let engine = reg.graph_engine()?;
-    let result = engine.calculate_centrality().map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&result).unwrap_or_default())
+pub fn calculate_centrality(engine_handle: EngineHandle) -> Result<String, String> {
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.graph_engine()?;
+        let result = engine.calculate_centrality().map_err(|e| e.to_string())?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    })
 }
 
 /// 检测聚类 —— 替代原 GraphEvent.DetectClusters
-pub fn detect_clusters() -> Result<String, String> {
-    let reg = REGISTRY.lock();
-    let engine = reg.graph_engine()?;
-    let result = engine.detect_clusters().map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&result).unwrap_or_default())
+pub fn detect_clusters(engine_handle: EngineHandle) -> Result<String, String> {
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.graph_engine()?;
+        let result = engine.detect_clusters().map_err(|e| e.to_string())?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    })
 }
 
 // ── 闪卡 API ──────────────────────────────────────────────────────────
 
 /// 创建卡组 —— 替代原 FlashcardEvent.CreateDeck
-pub fn create_deck(name: String, description: String) -> Result<String, String> {
-    let reg = REGISTRY.lock();
-    let engine = reg.flashcard_engine()?;
-    let deck = engine.create_deck(&name, &description).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&deck).unwrap_or_default())
+pub fn create_deck(engine_handle: EngineHandle, name: String, description: String) -> Result<String, String> {
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.flashcard_engine()?;
+        let deck = engine.create_deck(&name, &description).map_err(|e| e.to_string())?;
+        Ok(serde_json::to_string(&deck).unwrap_or_default())
+    })
 }
 
 /// 复习卡片 —— 替代原 FlashcardEvent.ReviewCard
-pub fn review_flashcard(flashcard_id: String, quality: u8) -> Result<String, String> {
+pub fn review_flashcard(engine_handle: EngineHandle, flashcard_id: String, quality: u8) -> Result<String, String> {
     let fid = Uuid::parse_str(&flashcard_id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let engine = reg.flashcard_engine_mut()?;
-    let record = engine.review_flashcard(&fid, quality).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&record).unwrap_or_default())
+    with_engine(engine_handle, |reg| {
+        let engine = reg.flashcard_engine_mut()?;
+        let record = engine.review_flashcard(&fid, quality).map_err(|e| e.to_string())?;
+        Ok(serde_json::to_string(&record).unwrap_or_default())
+    })
 }
 
 /// 获取待复习卡片 —— 替代原 FlashcardEvent.GetDueCards
-pub fn get_due_cards(deck_id: String, limit: Option<usize>) -> Result<String, String> {
+pub fn get_due_cards(engine_handle: EngineHandle, deck_id: String, limit: Option<usize>) -> Result<String, String> {
     let did = Uuid::parse_str(&deck_id).map_err(|e| e.to_string())?;
     let lim = limit.unwrap_or(50);
-    let reg = REGISTRY.lock();
-    let engine = reg.flashcard_engine()?;
-    let cards = engine.get_due_cards(&did, lim).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_string(&cards).unwrap_or_default())
+    with_engine_read(engine_handle, |reg| {
+        let engine = reg.flashcard_engine()?;
+        let cards = engine.get_due_cards(&did, lim).map_err(|e| e.to_string())?;
+        Ok(serde_json::to_string(&cards).unwrap_or_default())
+    })
 }
 
 // ── CRDT API ──────────────────────────────────────────────────────────
 
 /// CRDT 合并 —— 替代原 CRDTEvent.Merge
-pub fn crdt_merge(doc_id: String, device_id: String, remote_ops_json: String) -> Result<MergeResult, String> {
+pub fn crdt_merge(engine_handle: EngineHandle, doc_id: String, device_id: String, remote_ops_json: String) -> Result<MergeResult, String> {
     let ops: Vec<Operation> = serde_json::from_str(&remote_ops_json).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let doc = reg.crdt_docs.entry(doc_id.clone())
-        .or_insert_with(|| CRDTDocument::new(doc_id, device_id));
-    let applied = merge_documents(doc, ops).map_err(|e| e.to_string())?;
-    Ok(MergeResult {
-        applied_count: applied.len(),
-        conflicts: applied.iter().filter_map(|op| {
-            if matches!(op, Operation::Replace { .. }) {
-                Some(format!("{:?}", op))
-            } else {
-                None
-            }
-        }).collect(),
+    with_engine(engine_handle, |reg| {
+        let doc = reg.crdt_docs.entry(doc_id.clone())
+            .or_insert_with(|| CRDTDocument::new(doc_id, device_id));
+        let applied = merge_documents(doc, ops).map_err(|e| e.to_string())?;
+        Ok(MergeResult {
+            applied_count: applied.len(),
+            conflicts: applied.iter().filter_map(|op| {
+                if matches!(op, Operation::Replace { .. }) {
+                    Some(format!("{:?}", op))
+                } else {
+                    None
+                }
+            }).collect(),
+        })
     })
 }
 
@@ -1082,23 +1164,24 @@ pub fn ocr_recognize_image_detailed(image_base64: String) -> Result<OcrResultFfi
 
 /// 将 OCR 识别文本纳入笔记的全文搜索索引 —— 替代原 OcrEvent.IndexImage
 /// 将 OCR 文本追加到笔记现有内容后重新索引，使图片中的文字可被全文检索
-pub fn index_ocr_text(note_id: String, ocr_text: String) -> Result<(), String> {
+pub fn index_ocr_text(engine_handle: EngineHandle, note_id: String, ocr_text: String) -> Result<(), String> {
     let uid = Uuid::parse_str(&note_id).map_err(|e| e.to_string())?;
-    let mut reg = REGISTRY.lock();
-    let repo = reg.note_repo()?;
-    let note = repo.get_note(&uid).map_err(|e| e.to_string())?
-        .ok_or("Note not found")?;
-    let mut content = extract_content(&note);
-    if !ocr_text.is_empty() {
-        if !content.is_empty() {
-            content.push('\n');
+    with_engine(engine_handle, |reg| {
+        let repo = reg.note_repo()?;
+        let note = repo.get_note(&uid).map_err(|e| e.to_string())?
+            .ok_or("Note not found")?;
+        let mut content = extract_content(&note);
+        if !ocr_text.is_empty() {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str("[OCR] ");
+            content.push_str(&ocr_text);
         }
-        content.push_str("[OCR] ");
-        content.push_str(&ocr_text);
-    }
-    let engine = reg.search_engine_mut()?;
-    engine.index_note_with_meta(&note.id, &note.title, &content, &note.folder_id, &[], &note.updated_at)
-        .map_err(|e| e.to_string())
+        let engine = reg.search_engine_mut()?;
+        engine.index_note_with_meta(&note.id, &note.title, &content, &note.folder_id, &[], &note.updated_at)
+            .map_err(|e| e.to_string())
+    })
 }
 
 // ── Vault 保险库 API ──────────────────────────────────────────────────

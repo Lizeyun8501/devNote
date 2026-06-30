@@ -8,9 +8,12 @@ class DatabaseHelper {
   static const _databaseName = 'devnote.db';
   static const _databaseVersion = 7;
 
-  // 修复(P2-14): 移除 static 单例字段。DatabaseHelper 本身已通过
-  // getIt.registerLazySingleton 注册为单例，static 字段会造成"双重单例"，
-  // 导致测试中无法通过 reset/dispose 真正重置数据库连接。
+  // P2 修复: FFI 模式下跳过 sqflite 初始化，避免重复打开数据库
+  // 当 FFI 可用时，所有持久化操作由 Rust 端完成，sqflite 仅作为降级方案
+  final bool _useFFI;
+
+  DatabaseHelper({bool useFFI = false}) : _useFFI = useFFI;
+
   Database? _database;
 
   Future<Database> get database async {
@@ -20,6 +23,14 @@ class DatabaseHelper {
   }
 
   Future<Database> _initDatabase() async {
+    // P2 修复: FFI 模式下跳过 sqflite 初始化，Rust 端负责所有持久化
+    // 返回一个内存数据库避免 getter 返回 null 导致调用方崩溃
+    if (_useFFI) {
+      return openDatabase(
+        inMemoryDatabasePath,
+        version: _databaseVersion,
+      );
+    }
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, _databaseName);
     return openDatabase(

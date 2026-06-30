@@ -95,6 +95,11 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService, logger)
 	srpAuthHandler := handler.NewSRPAuthHandler(authService, logger)
 	syncHandler := handler.NewSyncHandler(syncService, logger)
+
+	// P0 架构修复 (P3): WebSocket CRDT 实时协同编辑
+	// CRDTHub 管理所有文档的实时协作房间，支持多用户同时编辑同一笔记
+	crdtHub := handler.NewCRDTHub(logger)
+	r.GET("/api/v1/ws/crdt/:doc_id", handler.HandleCRDTWebSocket(crdtHub))
 	healthHandler := handler.NewHealthHandler()
 	realtimeHandler := handler.NewRealtimeHandler(authService, stateStore, logger)
 	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader

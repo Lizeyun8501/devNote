@@ -15,15 +15,23 @@ import (
 type SyncService struct {
 	db    *sqlx.DB
 	s3    *storage.S3Storage
+	// P0 修复 (P1): 幂等键去重 —— 缓存最近 1000 个幂等键，防止重复推送
+	idempotentKeys map[string]time.Time
 }
 
 func NewSyncService(db *sqlx.DB, s3 *storage.S3Storage) *SyncService {
-	return &SyncService{db: db, s3: s3}
+	return &SyncService{
+		db:             db,
+		s3:             s3,
+		idempotentKeys: make(map[string]time.Time, 1000),
+	}
 }
 
 type PushRequest struct {
 	DeviceID  string             `json:"device_id" binding:"required"`
 	Records   []SyncRecordInput  `json:"records" binding:"required"`
+	// P0 修复 (P1): 分页支持 —— 单次推送的变更数上限，默认 100，最大 1000
+	Limit     int                `json:"limit,omitempty"`
 }
 
 type SyncRecordInput struct {
@@ -58,9 +66,15 @@ type SyncStatus struct {
 	Pending     int64     `json:"pending_count"`
 }
 
-func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, error) {
+func (s *SyncService) Push(userID string, req *PushRequest, limit int) (*PushResponse, error) {
 	var conflicts []Conflict
 	processed := 0
+
+	// P0 修复 (P1): 分页支持 —— 限制单次推送的记录数
+	records := req.Records
+	if len(records) > limit {
+		records = records[:limit]
+	}
 
 	tx, err := s.db.Beginx()
 	if err != nil {
@@ -77,7 +91,7 @@ func (s *SyncService) Push(userID string, req *PushRequest) (*PushResponse, erro
 		return nil, fmt.Errorf("query global max version: %w", err)
 	}
 
-	for _, input := range req.Records {
+	for _, input := range records {
 		var latest model.NoteSnapshot
 		err := tx.Get(&latest,
 			`SELECT * FROM note_snapshots WHERE note_id = ? AND user_id = ? ORDER BY version DESC LIMIT 1`,
@@ -281,6 +295,34 @@ func (s *SyncService) GetNoteVersion(userID string, noteID string, version int64
 		return nil, fmt.Errorf("query note version: %w", err)
 	}
 	return &snapshot, nil
+}
+
+// ── P0 修复 (P1): 幂等键去重 ──────────────────────────────────────────
+
+// IsIdempotentDuplicate 检查幂等键是否已被处理。
+// 客户端应在每次推送请求中携带唯一的幂等键（UUID），服务端缓存最近 1000 个键，
+// 若检测到重复，直接返回 200 OK 而不重复处理数据。
+func (s *SyncService) IsIdempotentDuplicate(key string) bool {
+	_, exists := s.idempotentKeys[key]
+	return exists
+}
+
+// RecordIdempotentKey 记录已处理的幂等键。
+// 超过 1000 个键时自动清理最旧的键（LRU 策略）。
+func (s *SyncService) RecordIdempotentKey(key string) {
+	if len(s.idempotentKeys) >= 1000 {
+		// 清理最旧的键（基于时间排序）
+		var oldestKey string
+		var oldestTime time.Time
+		for k, t := range s.idempotentKeys {
+			if oldestKey == "" || t.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = t
+			}
+		}
+		delete(s.idempotentKeys, oldestKey)
+	}
+	s.idempotentKeys[key] = time.Now()
 }
 
 func (s *SyncService) ResolveConflict(userID string, resolution *ConflictResolution) error {
