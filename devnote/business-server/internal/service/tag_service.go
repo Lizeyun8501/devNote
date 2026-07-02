@@ -480,24 +480,68 @@ func (s *TagService) SplitTag(userID, sourceTagID, newTagName string, noteIDs []
 		return nil, fmt.Errorf("insert new tag: %w", err)
 	}
 
-	for _, noteID := range noteIDs {
-		// Verify note ownership before moving association.
-		var noteCnt int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM note_meta WHERE id=? AND user_id=?`, noteID, userID).Scan(&noteCnt); err != nil {
-			return nil, fmt.Errorf("check note ownership %s: %w", noteID, err)
+	// P0 修复: 批量执行归属校验 + 删除 + 插入，消除 N+1。
+	// 原实现: 循环内对每个 noteID 执行 3 条 SQL（COUNT/DELETE/INSERT），N 条笔记触发 3N 次查询。
+	// 现实现: 归属校验 1 次 IN 查询、批量 DELETE 1 次、批量 INSERT 1 次，共 3 次查询。
+	if len(noteIDs) > 0 {
+		// 批量归属校验
+		placeholders := make([]string, len(noteIDs))
+		ownerArgs := make([]interface{}, 0, len(noteIDs)+1)
+		for i, id := range noteIDs {
+			placeholders[i] = "?"
+			ownerArgs = append(ownerArgs, id)
 		}
-		if noteCnt == 0 {
-			return nil, fmt.Errorf("note not found: %s", noteID)
+		ownerArgs = append(ownerArgs, userID)
+		ownerRows, err := tx.Query(
+			fmt.Sprintf(`SELECT id FROM note_meta WHERE id IN (%s) AND user_id=?`, strings.Join(placeholders, ",")),
+			ownerArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("batch check note ownership: %w", err)
 		}
-		// Move association from source to new tag
-		if _, err := tx.Exec(`DELETE FROM tag_relation WHERE tag_id=? AND note_id=?`, sourceTagID, noteID); err != nil {
-			return nil, fmt.Errorf("unlink note %s: %w", noteID, err)
+		ownedSet := make(map[string]bool, len(noteIDs))
+		for ownerRows.Next() {
+			var id string
+			if err := ownerRows.Scan(&id); err != nil {
+				ownerRows.Close()
+				return nil, fmt.Errorf("scan owned note id: %w", err)
+			}
+			ownedSet[id] = true
 		}
-		relID := uuid.New().String()
+		ownerRows.Close()
+		if err := ownerRows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate owned note ids: %w", err)
+		}
+		for _, noteID := range noteIDs {
+			if !ownedSet[noteID] {
+				return nil, fmt.Errorf("note not found: %s", noteID)
+			}
+		}
+
+		// 批量删除原标签关联
+		delArgs := make([]interface{}, 0, len(noteIDs)+1)
+		delArgs = append(delArgs, sourceTagID)
+		for _, id := range noteIDs {
+			delArgs = append(delArgs, id)
+		}
+		if _, err := tx.Exec(
+			fmt.Sprintf(`DELETE FROM tag_relation WHERE tag_id=? AND note_id IN (%s)`, strings.Join(placeholders, ",")),
+			delArgs...); err != nil {
+			return nil, fmt.Errorf("batch unlink notes: %w", err)
+		}
+
+		// 批量插入新标签关联
 		now := time.Now().UTC()
-		if _, err := tx.Exec(`INSERT INTO tag_relation (id, tag_id, note_id, linked_at) VALUES (?, ?, ?, ?)`,
-			relID, newTag.ID, noteID, now); err != nil {
-			return nil, fmt.Errorf("link note %s to new tag: %w", noteID, err)
+		valueParts := make([]string, len(noteIDs))
+		insertArgs := make([]interface{}, 0, len(noteIDs)*4)
+		for i, noteID := range noteIDs {
+			valueParts[i] = "(?, ?, ?, ?)"
+			insertArgs = append(insertArgs, uuid.New().String(), newTag.ID, noteID, now)
+		}
+		if _, err := tx.Exec(
+			fmt.Sprintf(`INSERT INTO tag_relation (id, tag_id, note_id, linked_at) VALUES %s`,
+				strings.Join(valueParts, ",")),
+			insertArgs...); err != nil {
+			return nil, fmt.Errorf("batch link notes to new tag: %w", err)
 		}
 	}
 

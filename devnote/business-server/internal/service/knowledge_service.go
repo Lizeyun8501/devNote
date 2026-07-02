@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/devnote/business-server/internal/model"
@@ -609,12 +610,23 @@ func (s *KnowledgeService) SuggestRelatedNotes(userID, noteID string, limit int)
 		pairs = pairs[:limit]
 	}
 
+	// P0 修复: 批量查询笔记标题，消除 N+1。
+	// 原实现: 循环内逐个调用 getNoteTitle，N 条推荐触发 N 次 SQL。
+	// 现实现: 一次 IN (?) 查询全部标题，构建 id→title 映射后在内存中组装。
+	noteIDs := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		noteIDs = append(noteIDs, p.id)
+	}
+	titleMap, err := s.batchGetNoteTitles(userID, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("batch get note titles: %w", err)
+	}
+
 	var suggestions []SuggestedNote
 	for _, p := range pairs {
-		title, _ := s.getNoteTitle(userID, p.id)
 		suggestions = append(suggestions, SuggestedNote{
 			NoteID: p.id,
-			Title:  title,
+			Title:  titleMap[p.id],
 			Score:  p.score,
 		})
 	}
@@ -628,10 +640,38 @@ type SuggestedNote struct {
 	Score  float64 `json:"score"`
 }
 
-func (s *KnowledgeService) getNoteTitle(userID, noteID string) (string, error) {
-	var title string
-	err := s.db.QueryRow(`SELECT title FROM note_meta WHERE id=? AND user_id=?`, noteID, userID).Scan(&title)
-	return title, err
+// batchGetNoteTitles 一次查询返回多个笔记的标题映射。
+// P0 修复: 消除 SuggestNotes 中按笔记逐条查询标题的 N+1 问题。
+func (s *KnowledgeService) batchGetNoteTitles(userID string, noteIDs []string) (map[string]string, error) {
+	titleMap := make(map[string]string, len(noteIDs))
+	if len(noteIDs) == 0 {
+		return titleMap, nil
+	}
+	placeholders := make([]string, len(noteIDs))
+	args := make([]interface{}, 0, len(noteIDs)+1)
+	for i, id := range noteIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, userID)
+	query := fmt.Sprintf(`SELECT id, title FROM note_meta WHERE id IN (%s) AND user_id=?`,
+		strings.Join(placeholders, ","))
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query note titles: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, title string
+		if err := rows.Scan(&id, &title); err != nil {
+			return nil, fmt.Errorf("scan note title: %w", err)
+		}
+		titleMap[id] = title
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate note titles: %w", err)
+	}
+	return titleMap, nil
 }
 
 // ----------------------------------------------------------------

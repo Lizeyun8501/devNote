@@ -17,5 +17,6 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 devnote-crdt = { workspace = true }
 sha2 = "0.10"
+subtle = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 lazy_static = "1"

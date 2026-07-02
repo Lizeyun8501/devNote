@@ -17,6 +17,7 @@ use rusqlite::Connection;
 use std::sync::Mutex;
 use std::collections::{HashSet, VecDeque};
 use sha2::{Sha256, Digest};
+use subtle::ConstantTimeEq;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SyncStatus {
@@ -112,9 +113,15 @@ pub fn compute_content_hash(data: &[u8]) -> String {
 }
 
 /// 内容寻址：验证哈希
+/// P1 修复: 改用常量时间比较，避免通过响应时间推断哈希前缀的时序侧信道。
+/// 与 devnote-crypto 中的密码/哈希验证保持一致（使用 subtle::ConstantTimeEq）。
 pub fn verify_content_hash(data: &[u8], expected_hash: &str) -> bool {
     let computed = compute_content_hash(data);
-    computed == expected_hash
+    // 长度不同时仍走常量时间路径：先比较长度，再对公共前缀做常量时间比较
+    if computed.len() != expected_hash.len() {
+        return false;
+    }
+    bool::from(computed.as_bytes().ct_eq(expected_hash.as_bytes()))
 }
 
 lazy_static::lazy_static! {

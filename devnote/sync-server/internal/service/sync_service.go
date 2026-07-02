@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devnote/sync-server/internal/model"
@@ -91,16 +92,17 @@ func (s *SyncService) Push(userID string, req *PushRequest, limit int) (*PushRes
 		return nil, fmt.Errorf("query global max version: %w", err)
 	}
 
-	for _, input := range records {
-		var latest model.NoteSnapshot
-		err := tx.Get(&latest,
-			`SELECT * FROM note_snapshots WHERE note_id = ? AND user_id = ? ORDER BY version DESC LIMIT 1`,
-			input.NoteID, userID)
+	// P0 修复: 批量预加载所有涉及笔记的最新快照，消除 N+1。
+	// 原实现: 循环内对每条 record 执行 tx.Get 查询最新快照，N 条记录触发 N 次查询。
+	// 现实现: 一次 IN (?) 查询全部快照，在内存中按 note_id 保留最高版本。
+	latestSnapshots, err := s.preloadLatestSnapshots(tx, userID, records)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("preload latest snapshots: %w", err)
+	}
 
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			tx.Rollback()
-			return nil, fmt.Errorf("query latest snapshot: %w", err)
-		}
+	for _, input := range records {
+		latest := latestSnapshots[input.NoteID]
 
 		if latest.ID != "" && latest.Version > input.Version {
 			conflict := DetectConflict(input.Version, latest.Version, input.Payload, latest.Content)
@@ -179,6 +181,50 @@ func (s *SyncService) Push(userID string, req *PushRequest, limit int) (*PushRes
 		Processed: processed,
 		Conflicts: conflicts,
 	}, nil
+}
+
+// preloadLatestSnapshots 批量查询 records 涉及的所有笔记的最新快照。
+// P0 修复: 消除 Push 循环内逐条查询最新快照的 N+1 问题。
+// 通过 ORDER BY version DESC 保证遍历时先遇到最高版本，仅保留首个即可。
+func (s *SyncService) preloadLatestSnapshots(tx *sqlx.Tx, userID string, records []SyncRecordInput) (map[string]model.NoteSnapshot, error) {
+	snapshotMap := make(map[string]model.NoteSnapshot)
+	if len(records) == 0 {
+		return snapshotMap, nil
+	}
+	// 收集去重 noteID
+	noteIDSet := make(map[string]bool)
+	for _, r := range records {
+		noteIDSet[r.NoteID] = true
+	}
+	noteIDs := make([]string, 0, len(noteIDSet))
+	for id := range noteIDSet {
+		noteIDs = append(noteIDs, id)
+	}
+
+	placeholders := make([]string, len(noteIDs))
+	args := make([]interface{}, 0, len(noteIDs)+1)
+	for i, id := range noteIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, userID)
+
+	query := fmt.Sprintf(
+		`SELECT * FROM note_snapshots WHERE note_id IN (%s) AND user_id=? ORDER BY version DESC`,
+		strings.Join(placeholders, ","))
+
+	var snapshots []model.NoteSnapshot
+	if err := tx.Select(&snapshots, query, args...); err != nil {
+		return nil, fmt.Errorf("query latest snapshots: %w", err)
+	}
+
+	for _, snap := range snapshots {
+		// ORDER BY version DESC 保证先遍历到最高版本，仅保留首个
+		if _, exists := snapshotMap[snap.NoteID]; !exists {
+			snapshotMap[snap.NoteID] = snap
+		}
+	}
+	return snapshotMap, nil
 }
 
 func (s *SyncService) Pull(userID string, req *PullRequest, limit int) (*PullResponse, error) {
