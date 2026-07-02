@@ -247,7 +247,7 @@ impl CRDTDocument {
     }
 
     #[instrument]
-    pub fn insert_block(&mut self, block_id: String, position: usize, content: String) -> Operation {
+    pub fn insert_block(&mut self, block_id: String, position: usize, content: String) -> Result<Operation, CRDTError> {
         let id = self.next_operation_id();
         let op = Operation::Insert {
             id: id.clone(),
@@ -256,26 +256,27 @@ impl CRDTDocument {
             content: content.clone(),
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone())
-            .expect("apply_operation for Insert always succeeds");
-        op
+        // P2 修复: 原实现用 expect 在 block 不存在时 panic 整个进程，
+        // 现改为传播错误，调用方可优雅处理非法 block_id（如客户端传入已删除 block）。
+        self.apply_operation(op.clone())?;
+        Ok(op)
     }
 
     #[instrument]
-    pub fn delete_block(&mut self, block_id: String) -> Operation {
+    pub fn delete_block(&mut self, block_id: String) -> Result<Operation, CRDTError> {
         let id = self.next_operation_id();
         let op = Operation::Delete {
             id: id.clone(),
             block_id,
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone())
-            .expect("apply_operation for local Delete: block must exist and not be tombstoned");
-        op
+        // P2 修复: 传播 TombstoneDeleted / InvalidOperation 错误而非 panic
+        self.apply_operation(op.clone())?;
+        Ok(op)
     }
 
     #[instrument]
-    pub fn replace_block(&mut self, block_id: String, old_content: String, new_content: String) -> Operation {
+    pub fn replace_block(&mut self, block_id: String, old_content: String, new_content: String) -> Result<Operation, CRDTError> {
         let id = self.next_operation_id();
         let op = Operation::Replace {
             id: id.clone(),
@@ -284,12 +285,12 @@ impl CRDTDocument {
             new_content,
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone())
-            .expect("apply_operation for local Replace: block must exist and not be tombstoned");
-        op
+        // P2 修复: 传播错误而非 panic
+        self.apply_operation(op.clone())?;
+        Ok(op)
     }
 
-    pub fn move_block(&mut self, block_id: String, from_position: usize, to_position: usize) -> Operation {
+    pub fn move_block(&mut self, block_id: String, from_position: usize, to_position: usize) -> Result<Operation, CRDTError> {
         let id = self.next_operation_id();
         let op = Operation::Move {
             id: id.clone(),
@@ -298,9 +299,9 @@ impl CRDTDocument {
             to_position,
             vector_clock: self.version.clone(),
         };
-        self.apply_operation(op.clone())
-            .expect("apply_operation for local Move: block must exist and not be tombstoned");
-        op
+        // P2 修复: 传播错误而非 panic
+        self.apply_operation(op.clone())?;
+        Ok(op)
     }
 
     #[instrument]
@@ -962,17 +963,17 @@ mod tests {
     #[test]
     fn test_document_insert_and_delete() {
         let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
-        doc.insert_block("block1".to_string(), 0, "Hello".to_string());
+        doc.insert_block("block1".to_string(), 0, "Hello".to_string()).unwrap();
         assert_eq!(doc.active_blocks().len(), 1);
-        doc.delete_block("block1".to_string());
+        doc.delete_block("block1".to_string()).unwrap();
         assert_eq!(doc.active_blocks().len(), 0);
     }
 
     #[test]
     fn test_document_replace() {
         let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
-        doc.insert_block("block1".to_string(), 0, "Hello".to_string());
-        doc.replace_block("block1".to_string(), "Hello".to_string(), "World".to_string());
+        doc.insert_block("block1".to_string(), 0, "Hello".to_string()).unwrap();
+        doc.replace_block("block1".to_string(), "Hello".to_string(), "World".to_string()).unwrap();
         let blocks = doc.active_blocks();
         assert_eq!(blocks[0].content, "World");
     }
@@ -980,9 +981,9 @@ mod tests {
     #[test]
     fn test_document_move() {
         let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
-        doc.insert_block("block1".to_string(), 0, "First".to_string());
-        doc.insert_block("block2".to_string(), 1, "Second".to_string());
-        doc.move_block("block1".to_string(), 0, 1);
+        doc.insert_block("block1".to_string(), 0, "First".to_string()).unwrap();
+        doc.insert_block("block2".to_string(), 1, "Second".to_string()).unwrap();
+        doc.move_block("block1".to_string(), 0, 1).unwrap();
         let blocks = doc.active_blocks();
         assert_eq!(blocks[0].content, "Second");
         assert_eq!(blocks[1].content, "First");
@@ -1011,10 +1012,10 @@ mod tests {
     #[test]
     fn test_merge_documents() {
         let mut doc1 = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
-        doc1.insert_block("block1".to_string(), 0, "Hello".to_string());
+        doc1.insert_block("block1".to_string(), 0, "Hello".to_string()).unwrap();
 
         let mut doc2 = CRDTDocument::new("doc1".to_string(), "device_b".to_string());
-        let op = doc2.insert_block("block2".to_string(), 0, "World".to_string());
+        let op = doc2.insert_block("block2".to_string(), 0, "World".to_string()).unwrap();
 
         let result = doc1.merge(vec![op]);
         assert!(result.is_ok());
@@ -1024,8 +1025,8 @@ mod tests {
     #[test]
     fn test_tombstone_delete() {
         let mut doc = CRDTDocument::new("doc1".to_string(), "device_a".to_string());
-        doc.insert_block("block1".to_string(), 0, "Hello".to_string());
-        doc.delete_block("block1".to_string());
+        doc.insert_block("block1".to_string(), 0, "Hello".to_string()).unwrap();
+        doc.delete_block("block1".to_string()).unwrap();
         let block = doc.blocks.iter().find(|b| b.id == "block1").unwrap();
         assert!(block.tombstone);
         assert_eq!(doc.active_blocks().len(), 0);

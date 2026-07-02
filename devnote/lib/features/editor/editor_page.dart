@@ -300,6 +300,16 @@ class _EditorViewState extends State<_EditorView> {
   }
 
   Widget _buildSimpleEditor(BuildContext context, EditorLoaded state) {
+    // P2 修复: 清理已删除 block 对应的 GlobalKey 与 FocusNode 缓存，
+    // 否则 _blockKeys / _blockFocusNodes 会随编辑过程无限增长（每个被删除/重建的 block 残留一条）。
+    final currentBlockIds = state.blocks.map((b) => b.id).toSet();
+    _blockKeys.removeWhere((id, _) => !currentBlockIds.contains(id));
+    final staleFocusIds = _blockFocusNodes.keys
+        .where((id) => !currentBlockIds.contains(id))
+        .toList();
+    for (final id in staleFocusIds) {
+      _blockFocusNodes.remove(id)?.dispose();
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
       child: Column(
@@ -602,59 +612,72 @@ class _EditorViewState extends State<_EditorView> {
 
   Future<void> _insertLink() async {
     final controller = TextEditingController();
-    final url = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('插入链接'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(hintText: 'https://example.com'),
-          autofocus: true,
+    try {
+      final url = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('插入链接'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(hintText: 'https://example.com'),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('插入')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('插入')),
-        ],
-      ),
-    );
-    if (url != null && url.isNotEmpty) {
-      final bloc = context.read<EditorBloc>();
-      final state = bloc.state;
-      if (state is EditorLoaded && state.activeBlockId != null) {
-        final block = state.blocks.firstWhere((b) => b.id == state.activeBlockId);
-        final text = block.content.isEmpty ? '链接' : block.content;
-        final link = '[$text]($url)';
-        bloc.add(UpdateBlock(blockId: block.id, content: link));
+      );
+      // P2 修复: await 后 widget 可能已卸载，使用 context 前必须检查 mounted
+      if (!mounted) return;
+      if (url != null && url.isNotEmpty) {
+        final bloc = context.read<EditorBloc>();
+        final state = bloc.state;
+        if (state is EditorLoaded && state.activeBlockId != null) {
+          final block = state.blocks.firstWhere((b) => b.id == state.activeBlockId);
+          final text = block.content.isEmpty ? '链接' : block.content;
+          final link = '[$text]($url)';
+          bloc.add(UpdateBlock(blockId: block.id, content: link));
+        }
       }
+    } finally {
+      // P2 修复: 方法内创建的 TextEditingController 必须释放，避免监听器/通知链泄漏
+      controller.dispose();
     }
   }
 
   Future<void> _searchInNote() async {
     final controller = TextEditingController();
-    final keyword = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('在笔记中搜索'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(hintText: '输入关键词'),
-          autofocus: true,
+    try {
+      final keyword = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('在笔记中搜索'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(hintText: '输入关键词'),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('搜索')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('搜索')),
-        ],
-      ),
-    );
-    if (keyword != null && keyword.isNotEmpty) {
-      final bloc = context.read<EditorBloc>();
-      final state = bloc.state;
-      if (state is EditorLoaded) {
-        final match = state.blocks.indexWhere((b) => b.content.contains(keyword));
-        if (match >= 0) {
-          bloc.add(SelectBlock(state.blocks[match].id));
+      );
+      // P2 修复: await 后 widget 可能已卸载
+      if (!mounted) return;
+      if (keyword != null && keyword.isNotEmpty) {
+        final bloc = context.read<EditorBloc>();
+        final state = bloc.state;
+        if (state is EditorLoaded) {
+          final match = state.blocks.indexWhere((b) => b.content.contains(keyword));
+          if (match >= 0) {
+            bloc.add(SelectBlock(state.blocks[match].id));
+          }
         }
       }
+    } finally {
+      controller.dispose();
     }
   }
 
@@ -763,17 +786,17 @@ class _EditorViewState extends State<_EditorView> {
         ],
       ),
     );
+    // P2 修复: await 后 widget 可能已卸载，统一在操作 context 前检查 mounted
+    if (!mounted) return;
     if (confirmed == true) {
       // Delete all blocks in the note through the bloc
       for (final block in state.blocks) {
         context.read<EditorBloc>().add(DeleteBlock(block.id));
       }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('笔记已删除')),
-        );
-        Navigator.of(context).pop();
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('笔记已删除')),
+      );
+      Navigator.of(context).pop();
     }
   }
 }

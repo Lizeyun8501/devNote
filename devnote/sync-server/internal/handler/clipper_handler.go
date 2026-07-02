@@ -90,7 +90,9 @@ func (h *ClipperHandler) Clip(c *gin.Context) {
 		},
 	}
 
-	if _, err := h.syncService.Push(userID, pushReq); err != nil {
+	// 修复: Push 在 P1 分页改造后新增 limit 参数（默认 100，最大 1000），
+	// 剪藏仅推送单条记录，传默认 100 不会截断。
+	if _, err := h.syncService.Push(userID, pushReq, 100); err != nil {
 		respondInternalError(c, h.logger, "internal server error", err)
 		return
 	}

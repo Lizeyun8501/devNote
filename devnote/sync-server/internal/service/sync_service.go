@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devnote/sync-server/internal/model"
@@ -14,10 +15,12 @@ import (
 )
 
 type SyncService struct {
-	db    *sqlx.DB
-	s3    *storage.S3Storage
+	db *sqlx.DB
+	s3 *storage.S3Storage
 	// P0 修复 (P1): 幂等键去重 —— 缓存最近 1000 个幂等键，防止重复推送
+	// P2 修复: 加 mutex 保护 map，防止并发 HTTP 请求触发 concurrent map read/write panic
 	idempotentKeys map[string]time.Time
+	idempotentMu   sync.Mutex
 }
 
 func NewSyncService(db *sqlx.DB, s3 *storage.S3Storage) *SyncService {
@@ -29,17 +32,17 @@ func NewSyncService(db *sqlx.DB, s3 *storage.S3Storage) *SyncService {
 }
 
 type PushRequest struct {
-	DeviceID  string             `json:"device_id" binding:"required"`
-	Records   []SyncRecordInput  `json:"records" binding:"required"`
+	DeviceID string            `json:"device_id" binding:"required"`
+	Records  []SyncRecordInput `json:"records" binding:"required"`
 	// P0 修复 (P1): 分页支持 —— 单次推送的变更数上限，默认 100，最大 1000
-	Limit     int                `json:"limit,omitempty"`
+	Limit int `json:"limit,omitempty"`
 }
 
 type SyncRecordInput struct {
-	NoteID    string `json:"note_id" binding:"required"`
-	Action    string `json:"action" binding:"required"`
-	Version   int64  `json:"version"`
-	Payload   string `json:"payload"`
+	NoteID  string `json:"note_id" binding:"required"`
+	Action  string `json:"action" binding:"required"`
+	Version int64  `json:"version"`
+	Payload string `json:"payload"`
 }
 
 type PushResponse struct {
@@ -48,15 +51,15 @@ type PushResponse struct {
 }
 
 type PullRequest struct {
-	DeviceID  string `json:"device_id" binding:"required"`
-	SinceVer  int64  `json:"since_version"`
+	DeviceID string `json:"device_id" binding:"required"`
+	SinceVer int64  `json:"since_version"`
 }
 
 type PullResponse struct {
-	Records     []model.SyncRecord `json:"records"`
-	LatestVer   int64              `json:"latest_version"`
-	HasMore     bool               `json:"has_more"`
-	Limit       int                `json:"limit"`
+	Records   []model.SyncRecord `json:"records"`
+	LatestVer int64              `json:"latest_version"`
+	HasMore   bool               `json:"has_more"`
+	Limit     int                `json:"limit"`
 }
 
 type SyncStatus struct {
@@ -348,14 +351,20 @@ func (s *SyncService) GetNoteVersion(userID string, noteID string, version int64
 // IsIdempotentDuplicate 检查幂等键是否已被处理。
 // 客户端应在每次推送请求中携带唯一的幂等键（UUID），服务端缓存最近 1000 个键，
 // 若检测到重复，直接返回 200 OK 而不重复处理数据。
+// P2 修复: 加锁保护，防止并发请求触发 concurrent map read and map write panic。
 func (s *SyncService) IsIdempotentDuplicate(key string) bool {
+	s.idempotentMu.Lock()
+	defer s.idempotentMu.Unlock()
 	_, exists := s.idempotentKeys[key]
 	return exists
 }
 
 // RecordIdempotentKey 记录已处理的幂等键。
 // 超过 1000 个键时自动清理最旧的键（LRU 策略）。
+// P2 修复: 加锁保护，与 IsIdempotentDuplicate 共用同一把锁确保读写互斥。
 func (s *SyncService) RecordIdempotentKey(key string) {
+	s.idempotentMu.Lock()
+	defer s.idempotentMu.Unlock()
 	if len(s.idempotentKeys) >= 1000 {
 		// 清理最旧的键（基于时间排序）
 		var oldestKey string

@@ -48,17 +48,17 @@ class _AddTodoDialogState extends State<AddTodoDialog> {
       firstDate: DateTime.now(),
       lastDate: DateTime(2100),
     );
-    if (date != null) {
-      final time = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay.fromDateTime(_dueDate ?? DateTime.now()),
-      );
-      if (time != null) {
-        setState(() {
-          _dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-        });
-      }
-    }
+    // P2 修复: 两次 await（showDatePicker / showTimePicker）之间及之后，
+    // widget 可能已卸载，使用 context 与 setState 前必须检查 mounted。
+    if (!mounted || date == null) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_dueDate ?? DateTime.now()),
+    );
+    if (!mounted || time == null) return;
+    setState(() {
+      _dueDate = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    });
   }
 
   @override

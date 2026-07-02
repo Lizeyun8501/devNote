@@ -20,10 +20,10 @@ use anyhow::{Context, Result};
 use crate::{SearchEngine, SearchResult, SearchFilter};
 
 use tantivy::schema::{
-    IndexRecordOption, FAST, STORED, STRING, TEXT, Value, Schema, INDEXED,
+    IndexRecordOption, STORED, STRING, TEXT, Value, Schema, Field, INDEXED,
 };
 use tantivy::{
-    DocAddress, Index, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument,
+    Index, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument,
     DateTime as TantivyDateTime,
 };
 use tantivy::directory::MmapDirectory;
@@ -57,6 +57,19 @@ impl Default for TantivyConfig {
     }
 }
 
+/// 缓存的 schema 字段集合。
+///
+/// P3 修复: 原实现每个方法内都执行 `self.schema.get_field("xxx").expect(...)`，
+/// 既是潜在 panic 点又重复字符串查找。现于构造时一次性解析并缓存为具名字段。
+struct CachedFields {
+    note_id: Field,
+    title: Field,
+    content: Field,
+    folder_id: Field,
+    tags: Field,
+    updated_at: Field,
+}
+
 /// Tantivy 全文搜索引擎
 ///
 /// ## 借鉴的开源项目
@@ -72,6 +85,8 @@ impl Default for TantivyConfig {
 pub struct TantivySearchEngine {
     index: Arc<Mutex<Index>>,
     schema: Schema,
+    /// P3 修复: 缓存的字段句柄，避免每次调用重复字符串查找
+    fields: CachedFields,
     writer: Arc<Mutex<IndexWriter>>,
     config: TantivyConfig,
 }
@@ -87,10 +102,21 @@ impl TantivySearchEngine {
             .writer(config.writer_memory_bytes)
             .context("Failed to create index writer")?;
 
+        // P3 修复: 构造时一次性解析字段，后续直接引用缓存句柄
+        let fields = CachedFields {
+            note_id: schema.get_field("note_id").context("schema field 'note_id' missing")?,
+            title: schema.get_field("title").context("schema field 'title' missing")?,
+            content: schema.get_field("content").context("schema field 'content' missing")?,
+            folder_id: schema.get_field("folder_id").context("schema field 'folder_id' missing")?,
+            tags: schema.get_field("tags").context("schema field 'tags' missing")?,
+            updated_at: schema.get_field("updated_at").context("schema field 'updated_at' missing")?,
+        };
+
         let config_path = config.index_path.clone();
         let engine = Self {
             index: Arc::new(Mutex::new(index)),
             schema,
+            fields,
             writer: Arc::new(Mutex::new(writer)),
             config,
         };
@@ -168,14 +194,16 @@ impl TantivySearchEngine {
         tags: &[String],
         updated_at: &DateTime<Utc>,
     ) -> Result<()> {
-        let mut writer = self.writer.lock().expect("index writer mutex poisoned");
+        // P2 修复: 锁中毒改返回错误而非 panic，避免单次 panic 导致整个搜索子系统永久不可用
+        let mut writer = self.writer.lock().map_err(|e| anyhow::anyhow!("index writer mutex poisoned: {}", e))?;
 
-        let note_id_field = self.schema.get_field("note_id").expect("schema field 'note_id' must exist (built in build_schema)");
-        let title_field = self.schema.get_field("title").expect("schema field 'title' must exist (built in build_schema)");
-        let content_field = self.schema.get_field("content").expect("schema field 'content' must exist (built in build_schema)");
-        let folder_id_field = self.schema.get_field("folder_id").expect("schema field 'folder_id' must exist (built in build_schema)");
-        let tags_field = self.schema.get_field("tags").expect("schema field 'tags' must exist (built in build_schema)");
-        let updated_at_field = self.schema.get_field("updated_at").expect("schema field 'updated_at' must exist (built in build_schema)");
+        // P3 修复: 使用构造时缓存的字段句柄，消除重复字符串查找与 expect panic 点
+        let note_id_field = self.fields.note_id;
+        let title_field = self.fields.title;
+        let content_field = self.fields.content;
+        let folder_id_field = self.fields.folder_id;
+        let tags_field = self.fields.tags;
+        let updated_at_field = self.fields.updated_at;
 
         // 先删除旧文档（如果存在）
         let delete_term = tantivy::Term::from_field_text(
@@ -211,9 +239,10 @@ impl TantivySearchEngine {
 
     /// 删除笔记索引
     pub fn remove_note(&self, note_id: &Uuid) -> Result<()> {
-        let mut writer = self.writer.lock().expect("index writer mutex poisoned");
+        // P2 修复: 锁中毒改返回错误而非 panic
+        let mut writer = self.writer.lock().map_err(|e| anyhow::anyhow!("index writer mutex poisoned: {}", e))?;
 
-        let note_id_field = self.schema.get_field("note_id").expect("schema field 'note_id' must exist (built in build_schema)");
+        let note_id_field = self.fields.note_id;
         let delete_term = tantivy::Term::from_field_text(
             note_id_field,
             &note_id.to_string(),
@@ -237,15 +266,16 @@ impl TantivySearchEngine {
             return Ok(Vec::new());
         }
 
-        let index = self.index.lock().expect("index mutex poisoned");
+        // P2 修复: 锁中毒改返回错误而非 panic
+        let index = self.index.lock().map_err(|e| anyhow::anyhow!("index mutex poisoned: {}", e))?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
         let searcher = reader.searcher();
 
-        let title_field = self.schema.get_field("title").expect("schema field 'title' must exist (built in build_schema)");
-        let content_field = self.schema.get_field("content").expect("schema field 'content' must exist (built in build_schema)");
+        let title_field = self.fields.title;
+        let content_field = self.fields.content;
 
         // 使用 QueryParser 解析查询（借鉴 Tantivy 的默认解析器）
         let query_parser = QueryParser::for_index(
@@ -258,9 +288,9 @@ impl TantivySearchEngine {
         let top_docs = TopDocs::with_limit(limit);
         let results = searcher.search(&parsed_query, &top_docs)?;
 
-        let note_id_field = self.schema.get_field("note_id").expect("schema field 'note_id' must exist (built in build_schema)");
-        let title_field = self.schema.get_field("title").expect("schema field 'title' must exist (built in build_schema)");
-        let content_field = self.schema.get_field("content").expect("schema field 'content' must exist (built in build_schema)");
+        let note_id_field = self.fields.note_id;
+        let title_field = self.fields.title;
+        let content_field = self.fields.content;
 
         let mut search_results = Vec::new();
         for (_score, doc_address) in results {
@@ -317,7 +347,7 @@ impl TantivySearchEngine {
             return Ok(Vec::new());
         }
 
-        let index = self.index.lock().expect("index mutex poisoned");
+        let index = self.index.lock().map_err(|e| anyhow::anyhow!("index mutex poisoned: {}", e))?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -328,8 +358,8 @@ impl TantivySearchEngine {
 
         // 全文查询子句
         if !query.trim().is_empty() {
-            let title_field = self.schema.get_field("title").expect("schema field 'title' must exist (built in build_schema)");
-            let content_field = self.schema.get_field("content").expect("schema field 'content' must exist (built in build_schema)");
+            let title_field = self.fields.title;
+            let content_field = self.fields.content;
             let query_parser = QueryParser::for_index(
                 &index,
                 vec![title_field, content_field],
@@ -340,7 +370,7 @@ impl TantivySearchEngine {
 
         // 文件夹过滤（借鉴 Tantivy 的 TermQuery 精确匹配）
         if let Some(fid) = folder_id {
-            let folder_id_field = self.schema.get_field("folder_id").expect("schema field 'folder_id' must exist (built in build_schema)");
+            let folder_id_field = self.fields.folder_id;
             let term_query = TermQuery::new(
                 tantivy::Term::from_field_text(folder_id_field, &fid.to_string()),
                 IndexRecordOption::Basic,
@@ -350,7 +380,7 @@ impl TantivySearchEngine {
 
         // 标签过滤
         for tag in tags {
-            let tags_field = self.schema.get_field("tags").expect("schema field 'tags' must exist (built in build_schema)");
+            let tags_field = self.fields.tags;
             let term_query = TermQuery::new(
                 tantivy::Term::from_field_text(tags_field, tag),
                 IndexRecordOption::Basic,
@@ -362,9 +392,9 @@ impl TantivySearchEngine {
         let top_docs = TopDocs::with_limit(limit);
         let results = searcher.search(&boolean_query, &top_docs)?;
 
-        let note_id_field = self.schema.get_field("note_id").expect("schema field 'note_id' must exist (built in build_schema)");
-        let title_field = self.schema.get_field("title").expect("schema field 'title' must exist (built in build_schema)");
-        let content_field = self.schema.get_field("content").expect("schema field 'content' must exist (built in build_schema)");
+        let note_id_field = self.fields.note_id;
+        let title_field = self.fields.title;
+        let content_field = self.fields.content;
 
         let mut search_results = Vec::new();
         for (_score, doc_address) in results {
@@ -422,11 +452,11 @@ impl TantivySearchEngine {
 
         // 替换现有的 index 和 writer
         {
-            let mut index_guard = self.index.lock().expect("index mutex poisoned during rebuild");
+            let mut index_guard = self.index.lock().map_err(|e| anyhow::anyhow!("index mutex poisoned during rebuild: {}", e))?;
             *index_guard = new_index;
         }
         {
-            let mut writer_guard = self.writer.lock().expect("writer mutex poisoned during rebuild");
+            let mut writer_guard = self.writer.lock().map_err(|e| anyhow::anyhow!("writer mutex poisoned during rebuild: {}", e))?;
             *writer_guard = new_writer;
         }
 
@@ -436,7 +466,7 @@ impl TantivySearchEngine {
 
     /// 获取索引中的文档数量
     pub fn num_docs(&self) -> Result<u64> {
-        let index = self.index.lock().expect("index mutex poisoned in num_docs");
+        let index = self.index.lock().map_err(|e| anyhow::anyhow!("index mutex poisoned in num_docs: {}", e))?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)

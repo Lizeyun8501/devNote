@@ -298,7 +298,7 @@ impl ClientSyncEngine {
             block_id.to_string(),
             conflict.local_content.clone(),
             content,
-        );
+        ).map_err(|e| SyncError::LocalError(format!("failed to apply conflict resolution: {}", e)))?;
 
         self.conflicts.retain(|c| c.block_id != block_id);
         if self.conflicts.is_empty() {

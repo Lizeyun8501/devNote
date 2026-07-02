@@ -96,8 +96,11 @@ class SqliteNoteRepository implements NoteRepository {
       // 转换为 NoteModel（snippet 作为 content 的近似）
       return results
           .map((r) => NoteModel(
-                id: r['note_id'] as String,
-                title: r['title'] as String,
+                // P2 修复: FFI 返回的 Map<String,dynamic> 字段可能为 null 或类型不符，
+                // 直接 `as String` 会抛 TypeError 导致整批搜索结果被丢弃并回退到内存过滤。
+                // 改为防御性转换，单条异常字段降级为空串而非拖垮整批结果。
+                id: r['note_id'] as String? ?? '',
+                title: r['title'] as String? ?? '',
                 content: r['snippet'] as String? ?? '',
                 folderId: '', // 搜索结果不包含 folder_id
                 createdAt: DateTime.now(),

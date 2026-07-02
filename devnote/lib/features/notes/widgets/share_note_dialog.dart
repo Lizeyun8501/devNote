@@ -43,11 +43,15 @@ class _ShareNoteDialogState extends State<ShareNoteDialog> {
         password: _usePassword ? _passwordController.text : null,
         expiresIn: _expiryDays > 0 ? Duration(days: _expiryDays) : null,
       );
+      // P2 修复: await 后 widget 可能已卸载（用户在网络请求期间关闭了对话框），
+      // 此时 setState 会抛 "setState() called after dispose" 异常。
+      if (!mounted) return;
       setState(() {
         _result = result;
         _creating = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _creating = false;
