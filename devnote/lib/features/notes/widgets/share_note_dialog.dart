@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get_it/get_it.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/core/config/app_config.dart';
 import '../services/share_service.dart';
 

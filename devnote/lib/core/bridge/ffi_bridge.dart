@@ -129,6 +129,12 @@ class FFIBridge
   bool _isAvailable = false;
   bool get isAvailable => _isAvailable;
 
+  /// P0 架构修复: 引擎句柄 —— initEngines() 返回，后续所有 API 调用均需传入
+  BigInt _engineHandle = BigInt.zero;
+
+  /// Mixin 宿主接口：暴露引擎句柄给 CanvasMixin / GraphMixin / FlashcardMixin
+  BigInt get engineHandle => _engineHandle;
+
   /// 初始化 FRB 桥接：加载动态库 + 初始化 FRB 运行时 + 初始化 Rust 引擎
   Future<void> init() async {
     try {
@@ -139,7 +145,7 @@ class FFIBridge
       // 初始化 Rust 核心引擎（持久化/搜索/同步等）
       // 使用应用文档目录下的 devnote.db，确保数据持久化
       final dbPath = await _getDbPath();
-      await rust.initEngines(dbPath: dbPath);
+      _engineHandle = await rust.initEngines(dbPath: dbPath);
 
       _isAvailable = true;
       log('FFIBridge initialized successfully (FRB v2)', name: 'FFIBridge');
@@ -178,7 +184,7 @@ class FFIBridge
   Future<FfiVersionInfo?> negotiateVersion() async {
     if (!_isAvailable) return null;
     try {
-      final version = await rust.getVersion();
+      final version = await rust.getVersion(engineHandle: _engineHandle);
       return FfiVersionInfo.fromRust(version);
     } catch (e) {
       log('FFI negotiateVersion failed: $e', name: 'FFIBridge');
@@ -189,7 +195,7 @@ class FFIBridge
   Future<Map<String, bool>?> healthCheck() async {
     if (!_isAvailable) return null;
     try {
-      final result = await rust.healthCheck();
+      final result = await rust.healthCheck(engineHandle: _engineHandle);
       return result.engines;
     } catch (e) {
       log('FFI healthCheck failed: $e', name: 'FFIBridge');
@@ -208,6 +214,7 @@ class FFIBridge
   }) async {
     _checkAvailable();
     final note = await rust.createNote(
+      engineHandle: _engineHandle,
       title: title,
       content: content,
       folderId: folderId,
@@ -217,7 +224,7 @@ class FFIBridge
 
   Future<Map<String, dynamic>?> getNote(String id) async {
     _checkAvailable();
-    final note = await rust.getNote(id: id);
+    final note = await rust.getNote(engineHandle: _engineHandle, id: id);
     return note != null ? _noteToMap(note) : null;
   }
 
@@ -227,18 +234,18 @@ class FFIBridge
     required String content,
   }) async {
     _checkAvailable();
-    final note = await rust.updateNote(id: id, title: title, content: content);
+    final note = await rust.updateNote(engineHandle: _engineHandle, id: id, title: title, content: content);
     return _noteToMap(note);
   }
 
   Future<void> deleteNote(String id) async {
     _checkAvailable();
-    await rust.deleteNote(id: id);
+    await rust.deleteNote(engineHandle: _engineHandle, id: id);
   }
 
   Future<List<Map<String, dynamic>>> listNotes(String folderId) async {
     _checkAvailable();
-    final notes = await rust.listNotes(folderId: folderId);
+    final notes = await rust.listNotes(engineHandle: _engineHandle, folderId: folderId);
     return notes.map(_noteToMap).toList();
   }
 
@@ -251,25 +258,32 @@ class FFIBridge
     String? parentId,
   }) async {
     _checkAvailable();
-    final folder = await rust.createFolder(name: name, parentId: parentId);
+    final folder = await rust.createFolder(
+      engineHandle: _engineHandle,
+      name: name,
+      parentId: parentId,
+    );
     return _folderToMap(folder);
   }
 
   Future<List<Map<String, dynamic>>> listFolders({String? parentId}) async {
     _checkAvailable();
-    final folders = await rust.listFolders(parentId: parentId);
+    final folders = await rust.listFolders(
+      engineHandle: _engineHandle,
+      parentId: parentId,
+    );
     return folders.map(_folderToMap).toList();
   }
 
   Future<Map<String, dynamic>?> getFolder(String id) async {
     _checkAvailable();
-    final folder = await rust.getFolder(id: id);
+    final folder = await rust.getFolder(engineHandle: _engineHandle, id: id);
     return folder != null ? _folderToMap(folder) : null;
   }
 
   Future<void> deleteFolder(String id) async {
     _checkAvailable();
-    await rust.deleteFolder(id: id);
+    await rust.deleteFolder(engineHandle: _engineHandle, id: id);
   }
 
   Future<Map<String, dynamic>> updateFolder({
@@ -279,6 +293,7 @@ class FFIBridge
   }) async {
     _checkAvailable();
     final folder = await rust.updateFolder(
+      engineHandle: _engineHandle,
       id: id,
       name: name,
       parentId: parentId,
@@ -292,25 +307,28 @@ class FFIBridge
 
   Future<Map<String, dynamic>> createTag(String name) async {
     _checkAvailable();
-    final tag = await rust.createTag(name: name);
+    final tag = await rust.createTag(engineHandle: _engineHandle, name: name);
     return _tagToMap(tag);
   }
 
   Future<List<Map<String, dynamic>>> listTags() async {
     _checkAvailable();
-    final tags = await rust.listTags();
+    final tags = await rust.listTags(engineHandle: _engineHandle);
     return tags.map(_tagToMap).toList();
   }
 
   Future<void> deleteTag(String id) async {
     _checkAvailable();
-    await rust.deleteTag(id: id);
+    await rust.deleteTag(engineHandle: _engineHandle, id: id);
   }
 
   /// P1-2 修复: 按标签查询笔记 ID —— 通过 FFI 调用 Rust 持久化层
   Future<List<String>> getNoteIdsByTag(String tagId) async {
     _checkAvailable();
-    return await rust.getNoteIdsByTag(tagId: tagId);
+    return await rust.getNoteIdsByTag(
+      engineHandle: _engineHandle,
+      tagId: tagId,
+    );
   }
 
   // ============================================================
@@ -326,6 +344,7 @@ class FFIBridge
     _checkAvailable();
     // FRB 生成的 insertBlock 期望 BigInt? 类型，需将 int? 转换
     final block = await rust.insertBlock(
+      engineHandle: _engineHandle,
       noteId: noteId,
       blockType: blockType,
       content: content,
@@ -336,37 +355,52 @@ class FFIBridge
 
   Future<void> updateBlock({required String id, required String content}) async {
     _checkAvailable();
-    await rust.updateBlock(id: id, content: content);
+    await rust.updateBlock(
+      engineHandle: _engineHandle,
+      id: id,
+      content: content,
+    );
   }
 
   Future<void> deleteBlock(String id) async {
     _checkAvailable();
-    await rust.deleteBlock(id: id);
+    await rust.deleteBlock(engineHandle: _engineHandle, id: id);
   }
 
   Future<List<Map<String, dynamic>>> getBlocks(String noteId) async {
     _checkAvailable();
-    final blocks = await rust.getBlocks(noteId: noteId);
+    final blocks = await rust.getBlocks(
+      engineHandle: _engineHandle,
+      noteId: noteId,
+    );
     return blocks.map(_blockToMap).toList();
   }
 
   /// P1 架构修复 (3.3): 补齐 FFI block API
   Future<Map<String, dynamic>?> getBlock(String id) async {
     _checkAvailable();
-    final block = await rust.getBlock(id: id);
+    final block = await rust.getBlock(engineHandle: _engineHandle, id: id);
     return block != null ? _blockToMap(block) : null;
   }
 
   /// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
   Future<void> moveBlock({required String id, required int newPosition}) async {
     _checkAvailable();
-    await rust.moveBlock(id: id, newPosition: BigInt.from(newPosition));
+    await rust.moveBlock(
+      engineHandle: _engineHandle,
+      id: id,
+      newPosition: BigInt.from(newPosition),
+    );
   }
 
   /// P1 架构修复 (3.3): 补齐 FFI block API
   Future<void> updateBlockType({required String id, required String blockType}) async {
     _checkAvailable();
-    await rust.updateBlockType(id: id, blockType: blockType);
+    await rust.updateBlockType(
+      engineHandle: _engineHandle,
+      id: id,
+      blockType: blockType,
+    );
   }
 
   /// P1 架构修复 (3.3): 补齐 FFI block API
@@ -376,7 +410,11 @@ class FFIBridge
   }) async {
     _checkAvailable();
     final blockDataList = blocks.map((b) => _mapToBlockData(b)).toList();
-    final result = await rust.replaceBlocks(noteId: noteId, blocks: blockDataList);
+    final result = await rust.replaceBlocks(
+      engineHandle: _engineHandle,
+      noteId: noteId,
+      blocks: blockDataList,
+    );
     return result.map(_blockToMap).toList();
   }
 
@@ -392,6 +430,7 @@ class FFIBridge
     _checkAvailable();
     // FRB 生成的 searchNotes 期望 BigInt? 类型，需将 int? 转换
     final results = await rust.searchNotes(
+      engineHandle: _engineHandle,
       query: query,
       limit: limit != null ? BigInt.from(limit) : null,
       offset: offset != null ? BigInt.from(offset) : null,
@@ -408,7 +447,11 @@ class FFIBridge
     required String keyBase64,
   }) async {
     _checkAvailable();
-    return rust.encrypt(plaintextBase64: plaintextBase64, keyBase64: keyBase64);
+    return rust.encrypt(
+      engineHandle: _engineHandle,
+      plaintextBase64: plaintextBase64,
+      keyBase64: keyBase64,
+    );
   }
 
   Future<String> decrypt({
@@ -416,7 +459,11 @@ class FFIBridge
     required String keyBase64,
   }) async {
     _checkAvailable();
-    return rust.decrypt(ciphertextBase64: ciphertextBase64, keyBase64: keyBase64);
+    return rust.decrypt(
+      engineHandle: _engineHandle,
+      ciphertextBase64: ciphertextBase64,
+      keyBase64: keyBase64,
+    );
   }
 
   Future<String> deriveKey({
@@ -424,7 +471,11 @@ class FFIBridge
     required String saltBase64,
   }) async {
     _checkAvailable();
-    return rust.deriveKey(password: password, saltBase64: saltBase64);
+    return rust.deriveKey(
+      engineHandle: _engineHandle,
+      password: password,
+      saltBase64: saltBase64,
+    );
   }
 
   // ============================================================
@@ -433,17 +484,17 @@ class FFIBridge
 
   Future<void> pushChanges() async {
     _checkAvailable();
-    await rust.pushChanges();
+    await rust.pushChanges(engineHandle: _engineHandle);
   }
 
   Future<void> pullChanges() async {
     _checkAvailable();
-    await rust.pullChanges();
+    await rust.pullChanges(engineHandle: _engineHandle);
   }
 
   Future<Map<String, dynamic>> getSyncStatus() async {
     _checkAvailable();
-    final status = await rust.getSyncStatus();
+    final status = await rust.getSyncStatus(engineHandle: _engineHandle);
     return _syncStatusToMap(status);
   }
 
@@ -453,7 +504,7 @@ class FFIBridge
 
   Future<String> createDatabase(String name) async {
     _checkAvailable();
-    return rust.createDatabase(name: name);
+    return rust.createDatabase(engineHandle: _engineHandle, name: name);
   }
 
   Future<String> evaluateFormula({
@@ -481,6 +532,7 @@ class FFIBridge
   }) async {
     _checkAvailable();
     final result = await rust.crdtMerge(
+      engineHandle: _engineHandle,
       docId: docId,
       deviceId: deviceId,
       remoteOpsJson: remoteOpsJson,
@@ -502,7 +554,10 @@ class FFIBridge
     required String path,
   }) async {
     _checkAvailable();
-    await rust.exportMarkdown(notesJson: notesJson, path: path);
+    await rust.exportMarkdown(
+      notesJson: notesJson,
+      path: path,
+    );
   }
 
   // ============================================================
@@ -520,14 +575,18 @@ class FFIBridge
 
   Future<String> ocrRecognizeImage({required String imageBase64}) async {
     _checkAvailable();
-    return rust.ocrRecognizeImage(imageBase64: imageBase64);
+    return rust.ocrRecognizeImage(
+      imageBase64: imageBase64,
+    );
   }
 
   Future<Map<String, dynamic>> ocrRecognizeImageDetailed({
     required String imageBase64,
   }) async {
     _checkAvailable();
-    final result = await rust.ocrRecognizeImageDetailed(imageBase64: imageBase64);
+    final result = await rust.ocrRecognizeImageDetailed(
+      imageBase64: imageBase64,
+    );
     return {
       'text': result.text,
       'lines': result.lines,
@@ -540,7 +599,11 @@ class FFIBridge
     required String ocrText,
   }) async {
     _checkAvailable();
-    await rust.indexOcrText(noteId: noteId, ocrText: ocrText);
+    await rust.indexOcrText(
+      engineHandle: _engineHandle,
+      noteId: noteId,
+      ocrText: ocrText,
+    );
   }
 
   // ============================================================

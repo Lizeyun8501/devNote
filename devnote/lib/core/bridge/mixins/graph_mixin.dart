@@ -17,16 +17,19 @@ mixin GraphMixin {
   /// 宿主类提供：检查 FFI 是否可用，不可用则抛 StateError
   void ffiCheckAvailable();
 
+  /// 宿主类提供：P0 架构修复 —— 引擎句柄，所有 FRB API 调用均需传入
+  BigInt get engineHandle;
+
   // ── 有 FRB 绑定的方法 ───────────────────────────────────
 
   Future<String> calculateCentrality() async {
     ffiCheckAvailable();
-    return rust.calculateCentrality();
+    return rust.calculateCentrality(engineHandle: engineHandle);
   }
 
   Future<String> detectClusters() async {
     ffiCheckAvailable();
-    return rust.detectClusters();
+    return rust.detectClusters(engineHandle: engineHandle);
   }
 
   // ── 无 FRB 绑定的 stub 方法（返回空 JSON）──────────

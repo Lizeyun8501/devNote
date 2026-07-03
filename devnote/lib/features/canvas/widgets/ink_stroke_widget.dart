@@ -32,14 +32,6 @@ class InkStrokeWidget extends StatelessWidget {
         streamline: 0.5, // 流线化
         simulatePressure: true,
         isComplete: true,
-        start: StrokeEndOptions(
-          cap: true,
-          taperEnabled: false,
-        ),
-        end: StrokeEndOptions(
-          cap: true,
-          taperEnabled: false,
-        ),
       ),
     );
 
@@ -57,7 +49,7 @@ class InkStrokeWidget extends StatelessWidget {
   }
 
   /// 将 perfect_freehand 输出的轮廓点构建为闭合填充路径
-  Path _buildPath(List<PointVector> points) {
+  Path _buildPath(List<Offset> points) {
     if (points.isEmpty) return Path();
 
     final path = Path();
@@ -96,14 +88,14 @@ class _InkPainter extends CustomPainter {
       final paint = Paint()
         ..blendMode = BlendMode.clear
         ..style = PaintingStyle.fill
-        ..antiAlias = true;
+        ..isAntiAlias = true;
       canvas.drawPath(path, paint);
       canvas.restore();
     } else {
       final paint = Paint()
         ..color = color
         ..style = PaintingStyle.fill
-        ..antiAlias = true;
+        ..isAntiAlias = true;
       canvas.drawPath(path, paint);
     }
   }

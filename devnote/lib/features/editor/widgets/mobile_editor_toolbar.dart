@@ -37,7 +37,7 @@ class MobileEditorToolbar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8),
         children: [
           _buildButton(
-            icon: Icons.format_text_fields,
+            icon: Icons.text_fields,
             label: '文本',
             onTap: () => onInsertBlock('paragraph'),
           ),

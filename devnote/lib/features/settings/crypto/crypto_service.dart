@@ -190,7 +190,7 @@ class CryptoService {
 
     final nonce = _generateNonce();
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(true, AEADParameters(KeyParameter(_currentKey!), 128, nonce, null));
+      ..init(true, AEADParameters(KeyParameter(_currentKey!), 128, nonce, Uint8List(0)));
     final ciphertextWithTag = cipher.process(plaintext);
 
     final result = BytesBuilder();
@@ -208,7 +208,7 @@ class CryptoService {
       final nonce = encryptedData.sublist(0, 12);
       final ciphertextWithTag = encryptedData.sublist(12);
       final cipher = GCMBlockCipher(AESEngine())
-        ..init(false, AEADParameters(KeyParameter(_currentKey!), 128, nonce, null));
+        ..init(false, AEADParameters(KeyParameter(_currentKey!), 128, nonce, Uint8List(0)));
       return cipher.process(ciphertextWithTag);
     } catch (_) {
       return null;

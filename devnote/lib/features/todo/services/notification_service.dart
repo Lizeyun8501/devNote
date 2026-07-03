@@ -31,7 +31,7 @@ class NotificationService {
     final android = _plugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     if (android != null) {
-      return await android.requestNotificationsPermission();
+      return await android.requestNotificationsPermission() ?? false;
     }
     return true;
   }

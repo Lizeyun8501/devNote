@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:get_it/get_it.dart';
+import 'package:devnote/core/di/injection.dart';
 import '../notes/services/daily_notes_service.dart';
 import '../templates/models/note_template.dart';
 import '../templates/services/template_service.dart';

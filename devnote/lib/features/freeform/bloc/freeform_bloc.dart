@@ -6,6 +6,9 @@ import '../widgets/freeform_toolbar.dart';
 import 'freeform_event.dart';
 import 'freeform_state.dart';
 
+export 'freeform_event.dart';
+export 'freeform_state.dart';
+
 class FreeformBloc extends Bloc<FreeformEvent, FreeformState> {
   final String pageId;
 

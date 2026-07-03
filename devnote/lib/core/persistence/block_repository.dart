@@ -16,6 +16,7 @@
 
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
+import 'package:devnote/core/persistence/models/block_model.dart' as core show BlockModel;
 import 'package:devnote/features/editor/models/block_model.dart';
 
 /// Block Repository 抽象接口
@@ -72,7 +73,8 @@ class SqliteBlockRepository implements BlockRepository {
 
   @override
   Future<List<BlockModel>> loadBlocks(String noteId) async {
-    return await _dispatch.getBlocks(noteId);
+    final coreBlocks = await _dispatch.getBlocks(noteId);
+    return coreBlocks.map(_toEditorBlock).toList();
   }
 
   @override
@@ -85,18 +87,20 @@ class SqliteBlockRepository implements BlockRepository {
   }) async {
     // FFI 路径：调用 Rust 端 insert_block
     // Rust 端会自动处理 position 后移逻辑
-    return await _dispatch.insertBlock(
+    final coreBlock = await _dispatch.insertBlock(
       noteId: noteId,
       blockType: blockType.name,
       content: content,
       position: position,
     );
+    return _toEditorBlock(coreBlock);
   }
 
   @override
   Future<BlockModel?> getBlock(String blockId) async {
     // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 get_block 单查询
-    return await _dispatch.getBlock(blockId);
+    final coreBlock = await _dispatch.getBlock(blockId);
+    return coreBlock == null ? null : _toEditorBlock(coreBlock);
   }
 
   @override
@@ -133,6 +137,37 @@ class SqliteBlockRepository implements BlockRepository {
   @override
   Future<void> replaceBlocks(String noteId, List<BlockModel> blocks) async {
     // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 replace_blocks
-    await _dispatch.replaceBlocks(noteId: noteId, blocks: blocks);
+    await _dispatch.replaceBlocks(
+      noteId: noteId,
+      blocks: blocks.map(_toCoreBlock).toList(),
+    );
+  }
+
+  /// 将 core.BlockModel (FFI 返回，String blockType) 转换为 editor.BlockModel (BlockType enum)
+  BlockModel _toEditorBlock(core.BlockModel block) {
+    return BlockModel(
+      id: block.id,
+      noteId: block.noteId,
+      blockType: _parseBlockType(block.blockType),
+      content: block.content,
+      position: block.position,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  /// 将 editor.BlockModel (BlockType enum) 转换为 core.BlockModel (FFI 输入，String blockType)
+  core.BlockModel _toCoreBlock(BlockModel block) {
+    return core.BlockModel(
+      id: block.id,
+      noteId: block.noteId,
+      blockType: block.blockType.name,
+      content: block.content,
+      position: block.position,
+    );
+  }
+
+  BlockType _parseBlockType(String value) {
+    return BlockType.values.asNameMap()[value] ?? BlockType.paragraph;
   }
 }

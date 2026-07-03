@@ -198,7 +198,7 @@ class _PdfViewerWidgetState extends State<PdfViewerWidget> {
     final maxPage = _totalPages > 0 ? _totalPages : 1;
     final target = page.clamp(1, maxPage);
     _pdfController.animateToPage(
-      target,
+      pageNumber: target,
       duration: const Duration(milliseconds: 200),
       curve: Curves.ease,
     );

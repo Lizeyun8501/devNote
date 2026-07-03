@@ -1,0 +1,12 @@
+# 构建工具链缓存与产物（沙箱环境产生，不应纳入版本控制）
+.cargo-home/
+.gradle-home/
+swapfile
+*.hprof
+
+# Gradle 本地缓存
+.gradle/
+
+# 临时文件
+*.tmp
+*.bak
