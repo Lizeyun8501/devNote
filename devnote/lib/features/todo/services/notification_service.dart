@@ -21,7 +21,7 @@ class NotificationService {
     );
     const settings = InitializationSettings(android: androidSettings, iOS: iosSettings);
 
-    await _plugin.initialize(settings);
+    await _plugin.initialize(settings: settings);
     _initialized = true;
   }
 
@@ -31,7 +31,7 @@ class NotificationService {
     final android = _plugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     if (android != null) {
-      return await android.requestNotificationsPermission();
+      return await android.requestNotificationsPermission() ?? false;
     }
     return true;
   }
@@ -59,20 +59,18 @@ class NotificationService {
     final notificationId = todo.id.hashCode;
 
     await _plugin.zonedSchedule(
-      notificationId,
-      '待办提醒',
-      todo.title,
-      scheduledDate,
-      details,
+      id: notificationId,
+      title: '待办提醒',
+      body: todo.title,
+      scheduledDate: scheduledDate,
+      notificationDetails: details,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
     );
   }
 
   /// 取消待办提醒
   Future<void> cancelTodoReminder(String todoId) async {
-    await _plugin.cancel(todoId.hashCode);
+    await _plugin.cancel(id: todoId.hashCode);
   }
 
   /// 取消所有提醒
@@ -97,6 +95,11 @@ class NotificationService {
     const iosDetails = DarwinNotificationDetails();
     const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
 
-    await _plugin.show(id, title, body, details);
+    await _plugin.show(
+      id: id,
+      title: title,
+      body: body,
+      notificationDetails: details,
+    );
   }
 }

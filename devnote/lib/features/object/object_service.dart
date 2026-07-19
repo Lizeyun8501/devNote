@@ -301,17 +301,35 @@ class ObjectService {
 
   Future<List<ObjectModel>> getRelatedObjects(String objectId, {String? relationId}) async {
     final db = await _dbHelper.database;
+    // 同时查询正向（objectId 作为 source）和反向（objectId 作为 target）关系，
+    // 保证双向关联的对象都能返回；使用 Set 自动去重，避免同一对象被双向关系重复返回
+    final whereClause = relationId != null
+        ? '(source_id = ? OR target_id = ?) AND relation_id = ?'
+        : '(source_id = ? OR target_id = ?)';
+    final whereArgs = relationId != null
+        ? [objectId, objectId, relationId]
+        : [objectId, objectId];
     final rows = await db.query(
       'object_relations',
-      columns: ['target_id'],
-      where: relationId != null
-          ? 'source_id = ? AND relation_id = ?'
-          : 'source_id = ?',
-      whereArgs: relationId != null ? [objectId, relationId] : [objectId],
+      columns: ['source_id', 'target_id'],
+      where: whereClause,
+      whereArgs: whereArgs,
     );
-    final targetIds = rows.map((r) => r['target_id'] as String).toList();
-    if (targetIds.isEmpty) return [];
-    final objRows = await db.query('objects', where: 'id IN (${List.filled(targetIds.length, '?').join(',')})', whereArgs: targetIds);
+    final relatedIds = <String>{};
+    for (final r in rows) {
+      final sourceId = r['source_id'] as String;
+      final targetId = r['target_id'] as String;
+      // 排除自身，仅收集对端对象 ID
+      if (sourceId != objectId) relatedIds.add(sourceId);
+      if (targetId != objectId) relatedIds.add(targetId);
+    }
+    if (relatedIds.isEmpty) return [];
+    final ids = relatedIds.toList();
+    final objRows = await db.query(
+      'objects',
+      where: 'id IN (${List.filled(ids.length, '?').join(',')})',
+      whereArgs: ids,
+    );
     return objRows.map(_hydrateObject).toList();
   }
 

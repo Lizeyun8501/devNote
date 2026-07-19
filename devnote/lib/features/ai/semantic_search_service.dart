@@ -347,10 +347,11 @@ class SemanticSearchService {
 
   /// BM25 rank 归一化：rank 越小越相关，转换为 0~1 的分数
   ///
-  /// FTS5 rank 通常为负值（越小越相关），这里使用 1/(1+|rank|) 归一化。
+  /// FTS5 rank 通常为负值（越小越相关），|rank| 越大越相关。
   double _normalizeBm25(double rank) {
+    // FTS5 rank 越小（更负）越相关，|rank| 越大越相关
     final abs = rank.abs();
-    return 1.0 / (1.0 + abs);
+    return abs / (1.0 + abs); // 0~1，越接近 1 越相关
   }
 
   /// 截取命中片段

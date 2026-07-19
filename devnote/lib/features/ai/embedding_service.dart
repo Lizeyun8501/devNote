@@ -11,6 +11,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:crypto/crypto.dart';
 import 'package:devnote/features/ai/ollama_client.dart';
 import 'package:devnote/core/observability/app_logger.dart';
 
@@ -103,6 +104,7 @@ class EmbeddingService {
   /// 任一向量为空或维度不一致时返回 0。
   static double cosineSimilarity(List<double> a, List<double> b) {
     if (a.isEmpty || b.isEmpty || a.length != b.length) return 0.0;
+    if (a.any((v) => v.isNaN) || b.any((v) => v.isNaN)) return 0.0;
     double dot = 0.0;
     double normA = 0.0;
     double normB = 0.0;
@@ -120,14 +122,14 @@ class EmbeddingService {
   /// 文本预处理：去除多余空白并截断
   String _normalize(String text) {
     final trimmed = text.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (trimmed.length <= _maxTextLength) return trimmed;
-    return trimmed.substring(0, _maxTextLength);
+    final runes = trimmed.runes.toList();
+    if (runes.length <= _maxTextLength) return trimmed;
+    return String.fromCharCodes(runes.sublist(0, _maxTextLength));
   }
 
-  /// 缓存键：使用简单哈希避免长文本作为 key
+  /// 缓存键：使用 SHA-256 避免哈希碰撞
   String _cacheKey(String text) {
-    final hashCode = text.hashCode;
-    return '$hashCode:${text.length}';
+    return sha256.convert(utf8.encode(text)).toString();
   }
 
   /// 写入缓存并执行 LRU 淘汰

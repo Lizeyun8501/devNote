@@ -24,6 +24,8 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
     on<DeleteView>(_onDeleteView);
     on<ApplyFilters>(_onApplyFilters);
     on<ApplySorts>(_onApplySorts);
+    on<ClearFilters>(_onClearFilters);
+    on<ClearSorts>(_onClearSorts);
   }
 
   /// 加载数据库列表
@@ -66,7 +68,10 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
     emit(const DatabaseLoading());
     try {
       final database = await _databaseService.getDatabase(event.databaseId);
-      emit(DatabaseDetailLoaded(database: database));
+      emit(DatabaseDetailLoaded(
+        database: database,
+        originalRows: database.rows,
+      ));
     } catch (e) {
       emit(DatabaseError(e.toString()));
     }
@@ -244,6 +249,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
 
   /// 应用过滤条件
   /// 验证每个过滤器的必填字段（fieldId, operator, value），再执行过滤和排序
+  /// 基于 originalRows 过滤，避免在已过滤数据上叠加导致结果错误
   Future<void> _onApplyFilters(ApplyFilters event, Emitter<DatabaseState> emit) async {
     final state = this.state;
     if (state is DatabaseDetailLoaded) {
@@ -257,7 +263,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
               ))
           .toList();
       final filteredRows = _applyFiltersAndSorts(
-        state.database.rows,
+        state.originalRows,
         filters,
         state.activeSorts,
       );
@@ -277,6 +283,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
 
   /// 应用排序条件
   /// 验证每个排序规则的必填字段（fieldId, direction），再执行过滤和排序
+  /// 基于 originalRows（叠加当前 filter）排序，避免在已排序数据上重排导致错误
   Future<void> _onApplySorts(ApplySorts event, Emitter<DatabaseState> emit) async {
     final state = this.state;
     if (state is DatabaseDetailLoaded) {
@@ -289,7 +296,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
               ))
           .toList();
       final filteredRows = _applyFiltersAndSorts(
-        state.database.rows,
+        state.originalRows,
         state.activeFilters,
         sorts,
       );
@@ -303,6 +310,54 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
       emit(state.copyWith(
         database: updatedDatabase,
         activeSorts: sorts,
+      ));
+    }
+  }
+
+  /// 清除过滤条件
+  /// 基于 originalRows 重新应用排序（保留 activeSorts），恢复未过滤视图
+  Future<void> _onClearFilters(ClearFilters event, Emitter<DatabaseState> emit) async {
+    final state = this.state;
+    if (state is DatabaseDetailLoaded) {
+      final filteredRows = _applyFiltersAndSorts(
+        state.originalRows,
+        const [],
+        state.activeSorts,
+      );
+      final updatedDatabase = DatabaseModel(
+        id: state.database.id,
+        name: state.database.name,
+        fields: state.database.fields,
+        rows: filteredRows,
+        views: state.database.views,
+      );
+      emit(state.copyWith(
+        database: updatedDatabase,
+        activeFilters: const [],
+      ));
+    }
+  }
+
+  /// 清除排序条件
+  /// 基于 originalRows 重新应用过滤（保留 activeFilters），恢复未排序视图
+  Future<void> _onClearSorts(ClearSorts event, Emitter<DatabaseState> emit) async {
+    final state = this.state;
+    if (state is DatabaseDetailLoaded) {
+      final filteredRows = _applyFiltersAndSorts(
+        state.originalRows,
+        state.activeFilters,
+        const [],
+      );
+      final updatedDatabase = DatabaseModel(
+        id: state.database.id,
+        name: state.database.name,
+        fields: state.database.fields,
+        rows: filteredRows,
+        views: state.database.views,
+      );
+      emit(state.copyWith(
+        database: updatedDatabase,
+        activeSorts: const [],
       ));
     }
   }
@@ -392,6 +447,7 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
   }
 
   /// 刷新数据库详情：获取最新数据后 emit，保留 DetailLoaded 状态中的 filters/sorts
+  /// 同时刷新 originalRows，确保后续 filter/sort 基于最新原始数据
   Future<void> _refreshDatabaseDetail(
     String databaseId,
     Emitter<DatabaseState> emit,
@@ -399,9 +455,9 @@ class DatabaseBloc extends Bloc<DatabaseEvent, DatabaseState> {
     final database = await _databaseService.getDatabase(databaseId);
     final state = this.state;
     if (state is DatabaseDetailLoaded) {
-      emit(state.copyWith(database: database));
+      emit(state.copyWith(database: database, originalRows: database.rows));
     } else {
-      emit(DatabaseDetailLoaded(database: database));
+      emit(DatabaseDetailLoaded(database: database, originalRows: database.rows));
     }
   }
 }

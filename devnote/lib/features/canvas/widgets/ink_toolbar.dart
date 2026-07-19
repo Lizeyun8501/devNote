@@ -63,12 +63,12 @@ class InkToolbar extends StatelessWidget {
         runSpacing: 4,
         children: [
           // 工具选择
-          _buildToolButton(InkTool.pen, Icons.edit, '笔'),
-          _buildToolButton(InkTool.marker, Icons.brush, '马克笔'),
-          _buildToolButton(InkTool.eraser, Icons.auto_fix_high, '橡皮擦'),
+          _buildToolButton(context, InkTool.pen, Icons.edit, '笔'),
+          _buildToolButton(context, InkTool.marker, Icons.brush, '马克笔'),
+          _buildToolButton(context, InkTool.eraser, Icons.auto_fix_high, '橡皮擦'),
           const _VerticalDividerSpacer(),
           // 颜色选择
-          for (final color in _colors) _buildColorButton(color),
+          for (final color in _colors) _buildColorButton(context, color),
           const _VerticalDividerSpacer(),
           // 笔触粗细
           SizedBox(
@@ -103,7 +103,7 @@ class InkToolbar extends StatelessWidget {
     );
   }
 
-  Widget _buildToolButton(InkTool tool, IconData icon, String label) {
+  Widget _buildToolButton(BuildContext context, InkTool tool, IconData icon, String label) {
     final isSelected = currentTool == tool;
     return Tooltip(
       message: label,
@@ -121,7 +121,7 @@ class InkToolbar extends StatelessWidget {
     );
   }
 
-  Widget _buildColorButton(Color color) {
+  Widget _buildColorButton(BuildContext context, Color color) {
     final isSelected = currentColor.toARGB32() == color.toARGB32();
     return GestureDetector(
       onTap: () => onColorChanged(color),

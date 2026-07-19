@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/features/notes/bidirectional_link/link_service.dart';
@@ -43,7 +44,9 @@ class LinkInlineSpan extends TextSpan {
             color: link.noteId != null ? const Color(0xFF1565C0) : const Color(0xFFE53935).withValues(alpha: 0.7),
             decoration: link.noteId != null ? TextDecoration.underline : TextDecoration.none,
           ),
-          recognizer: null,
+          recognizer: onTap != null
+              ? (TapGestureRecognizer()..onTap = onTap)
+              : null,
         );
 }
 

@@ -13,12 +13,20 @@
 // 与 NoteRepository 模式对齐。block 数据统一写入 Rust 的 devnote.db，
 // 消除双库数据分裂。FFI 不可用时回退到 sqflite 兜底。
 
+import 'dart:convert';
+
 import 'package:uuid/uuid.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
 import 'package:devnote/core/bridge/ffi_bridge.dart';
 import 'package:devnote/core/bridge/dispatch.dart';
 import 'package:devnote/core/observability/app_logger.dart';
+import 'package:devnote/core/di/injection.dart';
 import 'package:devnote/features/editor/models/block_model.dart';
+
+// Dispatch 返回的 BlockModel 来自 core/persistence/models/block_model.dart，
+// 与本文件使用的 features/editor/models/block_model.dart 字段不同，需通过别名导入做类型转换。
+import 'package:devnote/core/persistence/models/block_model.dart'
+    as persistence;
 
 /// Block Repository 抽象接口
 ///
@@ -83,7 +91,8 @@ class SqliteBlockRepository implements BlockRepository {
   Future<List<BlockModel>> loadBlocks(String noteId) async {
     if (_useFFI) {
       try {
-        return await _dispatch.getBlocks(noteId);
+        final persistenceBlocks = await _dispatch.getBlocks(noteId);
+        return persistenceBlocks.map(_persistenceToEditor).toList();
       } catch (e) {
         AppLogger.w('BlockRepository', 'FFI loadBlocks failed, falling back to sqflite', error: e);
       }
@@ -111,13 +120,13 @@ class SqliteBlockRepository implements BlockRepository {
       try {
         // FFI 路径：调用 Rust 端 insert_block
         // Rust 端会自动处理 position 后移逻辑
-        final block = await _dispatch.insertBlock(
+        final persistenceBlock = await _dispatch.insertBlock(
           noteId: noteId,
           blockType: blockType.name,
           content: content,
           position: position,
         );
-        return block;
+        return _persistenceToEditor(persistenceBlock);
       } catch (e) {
         AppLogger.w('BlockRepository', 'FFI createBlock failed, falling back to sqflite', error: e);
       }
@@ -154,7 +163,10 @@ class SqliteBlockRepository implements BlockRepository {
     if (_useFFI) {
       try {
         // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 get_block 单查询
-        return await _dispatch.getBlock(blockId);
+        final persistenceBlock = await _dispatch.getBlock(blockId);
+        return persistenceBlock != null
+            ? _persistenceToEditor(persistenceBlock)
+            : null;
       } catch (e) {
         AppLogger.w('BlockRepository', 'FFI getBlock failed, falling back to sqflite', error: e);
       }
@@ -313,7 +325,22 @@ class SqliteBlockRepository implements BlockRepository {
     if (_useFFI) {
       try {
         // P1 架构修复 (3.3): 通过 FFI 调用 Rust 端 replace_blocks
-        await _dispatch.replaceBlocks(noteId: noteId, blocks: blocks);
+        // 将 editor 层 BlockModel 转换为 persistence 层 BlockModel
+        // 补全 language/children/createdAt/updatedAt，避免双向转换字段丢失
+        final persistenceBlocks = blocks
+            .map((b) => persistence.BlockModel(
+                  id: b.id,
+                  noteId: b.noteId,
+                  blockType: b.blockType.name,
+                  content: b.content,
+                  position: b.position,
+                  language: b.language,
+                  children: List<String>.from(b.children),
+                  createdAt: b.createdAt,
+                  updatedAt: b.updatedAt,
+                ))
+            .toList();
+        await _dispatch.replaceBlocks(noteId: noteId, blocks: persistenceBlocks);
         return;
       } catch (e) {
         AppLogger.w('BlockRepository', 'FFI replaceBlocks failed, falling back to sqflite', error: e);
@@ -332,6 +359,26 @@ class SqliteBlockRepository implements BlockRepository {
 
   // ── 序列化辅助方法 ──────────────────────────────────────────
 
+  /// 将 persistence 层的 BlockModel 转换为 editor 层的 BlockModel
+  /// 保留 language/children/timestamps，避免双向转换字段丢失
+  BlockModel _persistenceToEditor(persistence.BlockModel p) {
+    final now = DateTime.now();
+    return BlockModel(
+      id: p.id,
+      noteId: p.noteId,
+      blockType: BlockType.values.firstWhere(
+        (e) => e.name == p.blockType,
+        orElse: () => BlockType.paragraph,
+      ),
+      content: p.content,
+      position: p.position,
+      language: p.language,
+      children: List<String>.from(p.children),
+      createdAt: p.createdAt ?? now,
+      updatedAt: p.updatedAt ?? now,
+    );
+  }
+
   Map<String, dynamic> _blockToRow(
     BlockModel block, {
     String? createdAt,
@@ -346,6 +393,9 @@ class SqliteBlockRepository implements BlockRepository {
       'content': block.content,
       'language': block.language,
       'position': block.position,
+      'children': block.children.isEmpty
+          ? null
+          : jsonEncode(block.children),
       'created_at': created,
       'updated_at': updated,
     };
@@ -353,6 +403,18 @@ class SqliteBlockRepository implements BlockRepository {
 
   BlockModel _rowToBlock(Map<String, dynamic> row) {
     final now = DateTime.now();
+    final childrenRaw = row['children'] as String?;
+    List<String> children = const <String>[];
+    if (childrenRaw != null && childrenRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(childrenRaw);
+        if (decoded is List) {
+          children = decoded.map((e) => e.toString()).toList();
+        }
+      } catch (_) {
+        // 损坏的 JSON 视作空 children 列表
+      }
+    }
     return BlockModel(
       id: row['id'] as String,
       noteId: row['note_id'] as String,
@@ -363,6 +425,7 @@ class SqliteBlockRepository implements BlockRepository {
       content: (row['content'] as String?) ?? '',
       position: (row['position'] as int?) ?? 0,
       language: row['language'] as String?,
+      children: children,
       createdAt: _parseDate(row['created_at']) ?? now,
       updatedAt: _parseDate(row['updated_at']) ?? now,
     );

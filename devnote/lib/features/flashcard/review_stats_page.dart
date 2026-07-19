@@ -201,11 +201,19 @@ class _ForgettingCurvePainter extends CustomPainter {
     final path = Path();
     final fillPath = Path();
 
+    // 遗忘曲线：R = e^(-t/S)
+    // t = 自上次复习以来的天数（x 轴覆盖 30 天）
+    // S = 记忆强度（stability，单位：天），取 SM-2 默认间隔的可视化值
+    const maxDays = 30.0;
+    const stabilityDays = 7.0;
+
     for (var i = 0; i <= 100; i++) {
       final t = i / 100;
       final x = padding + t * chartWidth;
-      final retention = (t * 30).abs().toDouble();
-      final y = padding + chartHeight * (1 - math.exp(retention) / (1 + math.exp(retention)));
+      final elapsedDays = t * maxDays;
+      // 负指数衰减：t=0 时 R=1.0，t 增大时 R 趋近 0（不为负）
+      final retention = math.exp(-elapsedDays / stabilityDays);
+      final y = padding + chartHeight * (1 - retention);
 
       if (i == 0) {
         path.moveTo(x, y);

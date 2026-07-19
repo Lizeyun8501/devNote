@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
 import 'package:devnote/features/search/bloc/search_bloc.dart';
+import 'package:devnote/features/search/bloc/search_event.dart';
 import 'package:devnote/features/search/bloc/search_state.dart';
 import 'package:devnote/features/search/search_service.dart';
 import '../helpers/test_helpers.dart';

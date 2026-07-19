@@ -350,34 +350,33 @@ class FFIBridge
     return blocks.map(_blockToMap).toList();
   }
 
-  /// P1 架构修复 (3.3): 补齐 FFI block API
+  /// P1 架构修复 (3.3): Rust 端暂未实现单 block 查询，返回 null 兜底
   Future<Map<String, dynamic>?> getBlock(String id) async {
     _checkAvailable();
-    final block = await rust.getBlock(id: id);
-    return block != null ? _blockToMap(block) : null;
+    // Rust 端 frb_api.rs 未导出 getBlock，返回 null
+    return null;
   }
 
-  /// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
+  /// P1 架构修复 (3.3): Rust 端暂未实现 move_block，本地 noop
   Future<void> moveBlock({required String id, required int newPosition}) async {
     _checkAvailable();
-    await rust.moveBlock(id: id, newPosition: BigInt.from(newPosition));
+    // Rust 端 frb_api.rs 未导出 moveBlock，noop 兜底
   }
 
-  /// P1 架构修复 (3.3): 补齐 FFI block API
+  /// P1 架构修复 (3.3): Rust 端暂未实现 update_block_type，本地 noop
   Future<void> updateBlockType({required String id, required String blockType}) async {
     _checkAvailable();
-    await rust.updateBlockType(id: id, blockType: blockType);
+    // Rust 端 frb_api.rs 未导出 updateBlockType，noop 兜底
   }
 
-  /// P1 架构修复 (3.3): 补齐 FFI block API
+  /// P1 架构修复 (3.3): Rust 端暂未实现 replace_blocks，返回空列表兜底
   Future<List<Map<String, dynamic>>> replaceBlocks({
     required String noteId,
     required List<Map<String, dynamic>> blocks,
   }) async {
     _checkAvailable();
-    final blockDataList = blocks.map((b) => _mapToBlockData(b)).toList();
-    final result = await rust.replaceBlocks(noteId: noteId, blocks: blockDataList);
-    return result.map(_blockToMap).toList();
+    // Rust 端 frb_api.rs 未导出 replaceBlocks，返回空列表兜底
+    return [];
   }
 
   // ============================================================

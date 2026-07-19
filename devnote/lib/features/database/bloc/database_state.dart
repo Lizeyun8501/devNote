@@ -152,22 +152,26 @@ final class DatabaseListLoaded extends DatabaseState {
 
 final class DatabaseDetailLoaded extends DatabaseState {
   final DatabaseModel database;
+  final List<DatabaseRowModel> originalRows;
   final List<FilterModel> activeFilters;
   final List<SortModel> activeSorts;
 
   const DatabaseDetailLoaded({
     required this.database,
+    this.originalRows = const [],
     this.activeFilters = const [],
     this.activeSorts = const [],
   });
 
   DatabaseDetailLoaded copyWith({
     DatabaseModel? database,
+    List<DatabaseRowModel>? originalRows,
     List<FilterModel>? activeFilters,
     List<SortModel>? activeSorts,
   }) {
     return DatabaseDetailLoaded(
       database: database ?? this.database,
+      originalRows: originalRows ?? this.originalRows,
       activeFilters: activeFilters ?? this.activeFilters,
       activeSorts: activeSorts ?? this.activeSorts,
     );

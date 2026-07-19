@@ -237,14 +237,8 @@ class _CommentPanelState extends State<CommentPanel> {
                     ),
                     const SizedBox(height: 4),
                     if (isEditing)
-                      TextField(
-                        controller: TextEditingController(text: comment.content),
-                        autofocus: true,
-                        maxLines: null,
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
+                      _InlineEditCommentField(
+                        initialContent: comment.content,
                         onSubmitted: (newContent) {
                           widget.onUpdateComment?.call(comment.id, newContent);
                           setState(() => _editingCommentId = null);
@@ -363,5 +357,63 @@ class _CommentPanelState extends State<CommentPanel> {
     if (diff.inDays < 1) return '${diff.inHours}小时前';
     if (diff.inDays < 7) return '${diff.inDays}天前';
     return '${dt.month}/${dt.day}';
+  }
+}
+
+/// 评论行内编辑输入框。
+///
+/// 单独抽出为 StatefulWidget 以便在 State 中持有并 dispose TextEditingController，
+/// 避免在父 build 方法内重复创建 controller 造成内存泄漏与输入焦点丢失。
+class _InlineEditCommentField extends StatefulWidget {
+  final String initialContent;
+  final ValueChanged<String> onSubmitted;
+
+  const _InlineEditCommentField({
+    required this.initialContent,
+    required this.onSubmitted,
+  });
+
+  @override
+  State<_InlineEditCommentField> createState() => _InlineEditCommentFieldState();
+}
+
+class _InlineEditCommentFieldState extends State<_InlineEditCommentField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialContent);
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineEditCommentField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 当外部传入的初始内容变化（且与当前 controller 文本不同）时同步，
+    // 防止父组件重建后丢失最新文本。
+    if (widget.initialContent != oldWidget.initialContent &&
+        _controller.text != widget.initialContent) {
+      _controller.text = widget.initialContent;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      autofocus: true,
+      maxLines: null,
+      decoration: const InputDecoration(
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      onSubmitted: widget.onSubmitted,
+    );
   }
 }

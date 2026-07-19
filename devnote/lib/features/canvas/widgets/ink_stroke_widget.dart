@@ -22,24 +22,16 @@ class InkStrokeWidget extends StatelessWidget {
     if (stroke.points.isEmpty) return const SizedBox.shrink();
 
     // 使用 perfect_freehand 渲染压感笔触
-    // perfect_freehand 2.x: getStroke(points, options: options)
+    // perfect_freehand 2.x: getStroke 返回 List<StrokePoint>
     final outlinePoints = getStroke(
       stroke.toPerfectFreehandPoints(),
       options: StrokeOptions(
         size: stroke.strokeWidth * 2 * scale,
-        thinning: 0.6, // 压感灵敏度
-        smoothing: 0.5, // 平滑度
-        streamline: 0.5, // 流线化
+        thinning: 0.6,
+        smoothing: 0.5,
+        streamline: 0.5,
         simulatePressure: true,
         isComplete: true,
-        start: StrokeEndOptions(
-          cap: true,
-          taperEnabled: false,
-        ),
-        end: StrokeEndOptions(
-          cap: true,
-          taperEnabled: false,
-        ),
       ),
     );
 
@@ -57,7 +49,7 @@ class InkStrokeWidget extends StatelessWidget {
   }
 
   /// 将 perfect_freehand 输出的轮廓点构建为闭合填充路径
-  Path _buildPath(List<PointVector> points) {
+  Path _buildPath(List<Offset> points) {
     if (points.isEmpty) return Path();
 
     final path = Path();
@@ -91,19 +83,16 @@ class _InkPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (isEraser) {
-      // 橡皮擦使用 BlendMode.clear 擦除已有内容
       canvas.save();
       final paint = Paint()
         ..blendMode = BlendMode.clear
-        ..style = PaintingStyle.fill
-        ..antiAlias = true;
+        ..style = PaintingStyle.fill;
       canvas.drawPath(path, paint);
       canvas.restore();
     } else {
       final paint = Paint()
         ..color = color
-        ..style = PaintingStyle.fill
-        ..antiAlias = true;
+        ..style = PaintingStyle.fill;
       canvas.drawPath(path, paint);
     }
   }

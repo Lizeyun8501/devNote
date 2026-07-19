@@ -8,6 +8,7 @@
 // 组织方式：按 feature 分组，每组注册该 feature 拥有的路由。
 // 需要 BlocProvider 的路由在此处创建，依赖 getIt 中已注册的服务。
 
+import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 

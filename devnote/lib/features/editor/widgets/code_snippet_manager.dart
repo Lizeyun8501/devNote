@@ -374,7 +374,7 @@ class _CodeSnippetManagerState extends State<CodeSnippetManager> {
   Future<void> _showExportDialog() async {
     // 使用文件选择器导出
     try {
-      final path = await FilePicker.platform.saveFile(
+      final path = await FilePicker.saveFile(
         dialogTitle: '导出代码片段',
         fileName: 'code_snippets.json',
         type: FileType.custom,
@@ -399,7 +399,7 @@ class _CodeSnippetManagerState extends State<CodeSnippetManager> {
 
   Future<void> _showImportDialog() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['json'],
       );

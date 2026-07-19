@@ -54,3 +54,28 @@ sync-server/tmp/
 # Generated files
 *.g.dart
 *.freezed.dart
+
+# IDE / Editor
+.vs/
+.vscode/
+
+# Build logs and analysis output
+analyze_output*.txt
+build_apk_log*.txt
+build_output.txt
+
+# Binary installers
+scripts/rustup-init.exe
+
+# Backup copies
+*.copy.bat
+scripts/*copy*.bat
+
+# CMake build cache (native plugins)
+.cxx/
+**/android/.cxx/
+build/intermediates/cxx/
+
+# Compiled object files
+*.o
+*.obj

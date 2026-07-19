@@ -283,13 +283,19 @@ class _CanvasViewState extends State<_CanvasView> {
   void _zoomIn() {
     final transform = _transformationController.value;
     final newScale = (transform.getMaxScaleOnAxis() * 1.2).clamp(0.1, 5.0);
-    _transformationController.value = Matrix4.identity()..scale(newScale);
+    final currentTranslation = transform.getTranslation();
+    _transformationController.value = Matrix4.identity()
+      ..translate(currentTranslation)
+      ..scale(newScale);
   }
 
   void _zoomOut() {
     final transform = _transformationController.value;
     final newScale = (transform.getMaxScaleOnAxis() / 1.2).clamp(0.1, 5.0);
-    _transformationController.value = Matrix4.identity()..scale(newScale);
+    final currentTranslation = transform.getTranslation();
+    _transformationController.value = Matrix4.identity()
+      ..translate(currentTranslation)
+      ..scale(newScale);
   }
 
   void _zoomReset() {

@@ -13,6 +13,7 @@ import 'package:devnote/core/persistence/note_repository.dart';
 import 'package:devnote/core/persistence/folder_repository.dart';
 import 'package:devnote/core/persistence/models/note_model.dart';
 import 'package:devnote/core/persistence/models/folder_model.dart';
+import 'package:devnote/core/services/note_block_creation_port.dart';
 
 // ── Mock 仓库（返回预置数据，无 SQLite 依赖） ────────────────────────────
 
@@ -36,6 +37,21 @@ class MockNoteRepository implements NoteRepository {
   @override
   Future<List<NoteModel>> listNotesPaged(String folderId, {int limit = 20, int offset = 0}) async =>
       _notes.where((n) => n.folderId == folderId).skip(offset).take(limit).toList();
+  @override
+  Future<List<NoteModel>> searchNotes(String query) async =>
+      _notes.where((n) => n.title.contains(query) || n.content.contains(query)).toList();
+  @override
+  Future<List<String>> getNoteIdsByTag(String tagId) async => [];
+}
+
+class _MockNoteBlockCreationPort implements NoteBlockCreationPort {
+  @override
+  Future<void> createBlockFromString({
+    required String noteId,
+    required String blockTypeName,
+    required String content,
+    required int position,
+  }) async {}
 }
 
 class MockFolderRepository implements FolderRepository {
@@ -87,7 +103,7 @@ Widget buildTestNotesList({
           BlocProvider(
             create: (_) => FolderBloc(folderRepo)..add(const LoadFolders()),
           ),
-          BlocProvider(create: (_) => NotesBloc(noteRepo)),
+          BlocProvider(create: (_) => NotesBloc(noteRepo, folderRepo, _MockNoteBlockCreationPort())),
         ],
         child: child!,
       );

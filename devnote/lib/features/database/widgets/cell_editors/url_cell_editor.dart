@@ -33,7 +33,7 @@ class UrlCellEditor extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ).whenComplete(controller.dispose);
   }
 
   @override

@@ -6,7 +6,7 @@ import 'package:devnote/core/observability/app_logger.dart';
 
 class DatabaseHelper {
   static const _databaseName = 'devnote.db';
-  static const _databaseVersion = 7;
+  static const _databaseVersion = 8;
 
   // P2 修复: FFI 模式下跳过 sqflite 初始化，避免重复打开数据库
   // 当 FFI 可用时，所有持久化操作由 Rust 端完成，sqflite 仅作为降级方案
@@ -112,6 +112,7 @@ class DatabaseHelper {
         content TEXT NOT NULL DEFAULT '',
         language TEXT,
         position INTEGER NOT NULL,
+        children TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
@@ -392,6 +393,12 @@ class DatabaseHelper {
             batch.execute(
                 'ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
             batch.execute('ALTER TABLE tags ADD COLUMN color TEXT');
+            break;
+          case 8:
+            // v8: 为 blocks 添加 children 列，持久化父子 block 关系
+            // 修复 BlockRepository 双向转换字段丢失问题
+            // children 存储 JSON 编码的 List<String>（子 block ID 列表）
+            batch.execute('ALTER TABLE blocks ADD COLUMN children TEXT');
             break;
           default:
             break;

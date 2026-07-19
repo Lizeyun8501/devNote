@@ -738,7 +738,7 @@ class _OnenoteImportPageState extends State<OnenoteImportPage> {
     });
 
     try {
-      final result = await FilePicker.platform.getDirectoryPath();
+      final result = await FilePicker.getDirectoryPath();
       if (result == null) {
         if (mounted) {
           setState(() {

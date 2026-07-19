@@ -90,6 +90,15 @@ class CacheManager {
       configure(type);
       cache = _caches[type]!;
     }
+    final maxBytes = _maxBytes[type] ?? 100 * 1024 * 1024;
+    final incomingBytes = _estimateBytes(value);
+    // 新插入项若自身已超过 maxBytes 限制，直接拒绝进入主缓存，避免持续触发淘汰
+    // 导致 _evictIfNeeded 反复清空其他条目仍无法满足阈值。
+    if (incomingBytes > maxBytes) {
+      print('[CacheManager] reject put: entry size=$incomingBytes > maxBytes=$maxBytes '
+          '(type=$type, key=$key)');
+      return;
+    }
     final ttl = _ttls[type];
     final existing = cache[key];
     if (existing != null) {
@@ -101,7 +110,7 @@ class CacheManager {
       ttl: ttl,
       lastAccess: DateTime.now(),
     );
-    _currentBytes[type] = (_currentBytes[type] ?? 0) + _estimateBytes(value);
+    _currentBytes[type] = (_currentBytes[type] ?? 0) + incomingBytes;
     _evictIfNeeded(type);
   }
 
@@ -125,30 +134,64 @@ class CacheManager {
     }
   }
 
+  /// LRU 淘汰时保护循环次数上限，避免极端情况下死循环（例如所有项的估算字节
+  /// 都被错误计算为 0 时，移除条目无法降低 _currentBytes 仍可能反复进入循环）。
+  static const int _maxEvictAttempts = 10;
+
   void _evictIfNeeded(CacheType type) {
     final cache = _caches[type];
     final maxSize = _maxSizes[type] ?? 100;
     final maxBytes = _maxBytes[type] ?? 100 * 1024 * 1024;
-    final currentBytes = _currentBytes[type] ?? 0;
     if (cache == null) return;
 
-    // Evict based on entry count
-    while (cache.length > maxSize) {
+    // 按条目数淘汰
+    int attempts = 0;
+    while (cache.length > maxSize && cache.isNotEmpty && attempts < _maxEvictAttempts) {
       final oldestKey = _findLruKey(cache);
       if (oldestKey == null) break;
       final removed = cache.remove(oldestKey);
       if (removed != null) {
         _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(removed.value);
       }
+      attempts++;
+    }
+    if (cache.length > maxSize) {
+      print('[CacheManager] evict-by-count exhausted attempts: type=$type, '
+          'size=${cache.length} > maxSize=$maxSize');
     }
 
-    // Evict based on memory usage (threshold at 80% of maxBytes)
-    while (currentBytes > (maxBytes * 0.8).toInt() && cache.isNotEmpty) {
+    // 按内存占用淘汰（阈值取 maxBytes 的 80%）
+    // 注意：每轮必须重新读取 _currentBytes[type]，避免使用进入循环前的快照
+    // 导致条件永远成立而过量淘汰。
+    attempts = 0;
+    while (cache.isNotEmpty && attempts < _maxEvictAttempts) {
+      final cur = _currentBytes[type] ?? 0;
+      if (cur <= (maxBytes * 0.8).toInt()) break;
       final oldestKey = _findLruKey(cache);
       if (oldestKey == null) break;
       final removed = cache.remove(oldestKey);
       if (removed != null) {
-        _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(removed.value);
+        final estimated = _estimateBytes(removed.value);
+        _currentBytes[type] = (_currentBytes[type] ?? 0) - estimated;
+        // 若被移除项的估算字节数为 0（例如未命中 String/List/Map 分支），
+        // 强制把当前字节数减 1，确保循环条件最终可以收敛退出。
+        if (estimated == 0) {
+          _currentBytes[type] = (_currentBytes[type] ?? 0) - 1;
+        }
+      }
+      attempts++;
+    }
+    final cur2 = _currentBytes[type] ?? 0;
+    if (cur2 > (maxBytes * 0.8).toInt() && cache.isNotEmpty) {
+      // 已达尝试上限但仍未降阈值，强制清空最旧项并告警。
+      print('[CacheManager] evict-by-bytes exhausted attempts: type=$type, '
+          'currentBytes=$cur2, threshold=${(maxBytes * 0.8).toInt()}');
+      final oldestKey = _findLruKey(cache);
+      if (oldestKey != null) {
+        final removed = cache.remove(oldestKey);
+        if (removed != null) {
+          _currentBytes[type] = (_currentBytes[type] ?? 0) - _estimateBytes(removed.value);
+        }
       }
     }
   }

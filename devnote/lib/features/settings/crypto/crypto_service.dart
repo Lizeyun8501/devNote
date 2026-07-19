@@ -54,7 +54,15 @@ class CryptoService {
 
   /// PBKDF2-HMAC-SHA256 迭代次数（OWASP 2023 建议 600,000 次）
   /// P0 修复 (ENC-07): 从 100,000 提升至 600,000，符合 OWASP 2023 最低标准
-  static const int _pbkdf2Iterations = 600000;
+  /// 根据 CryptoStrength 动态调整：standard=600000，highStrength=1200000
+  int get _pbkdf2Iterations {
+    switch (_state.strength) {
+      case CryptoStrength.standard:
+        return 600000;
+      case CryptoStrength.highStrength:
+        return 1200000;
+    }
+  }
 
   Uint8List? _currentKey;
 
@@ -77,7 +85,9 @@ class CryptoService {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_keyEnabled) ?? false;
     final strengthIndex = prefs.getInt(_keyStrength) ?? 0;
-    final strength = CryptoStrength.values[strengthIndex];
+    final strength = (strengthIndex >= 0 && strengthIndex < CryptoStrength.values.length)
+        ? CryptoStrength.values[strengthIndex]
+        : CryptoStrength.standard;
 
     _state = _state.copyWith(
       isEnabled: enabled,
@@ -87,6 +97,7 @@ class CryptoService {
   }
 
   Future<bool> enableEncryption(String password) async {
+    if (_state.isEnabled) return false;
     if (password.length < 6) return false;
 
     final prefs = await SharedPreferences.getInstance();
@@ -159,24 +170,9 @@ class CryptoService {
   }
 
   Future<bool> changePassword(String oldPassword, String newPassword) async {
-    final unlocked = await unlock(oldPassword);
-    if (!unlocked) return false;
-
-    if (newPassword.length < 6) return false;
-
-    final prefs = await SharedPreferences.getInstance();
-    final salt = _generateSalt();
-    final hash = _deriveKey(newPassword, salt);
-
-    final saltBase64 = base64Encode(salt);
-    // P0 修复: 新验证哈希存入 SecureKeyStorage
-    await _secureStorage.write(_keyHash, hash);
-
-    await prefs.setString(_keySalt, saltBase64);
-
-    _currentKey = hash;
-
-    return true;
+    // 警告：此方法会更改密钥派生参数，已加密的笔记数据将无法用新密码解密
+    // 完整的数据重新加密流程尚未实现，返回 false 表示需要手动迁移
+    return false;
   }
 
   Future<void> setStrength(CryptoStrength strength) async {
@@ -190,7 +186,7 @@ class CryptoService {
 
     final nonce = _generateNonce();
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(true, AEADParameters(KeyParameter(_currentKey!), 128, nonce, null));
+      ..init(true, AEADParameters(KeyParameter(_currentKey!), 128, nonce, Uint8List(0)));
     final ciphertextWithTag = cipher.process(plaintext);
 
     final result = BytesBuilder();
@@ -208,7 +204,7 @@ class CryptoService {
       final nonce = encryptedData.sublist(0, 12);
       final ciphertextWithTag = encryptedData.sublist(12);
       final cipher = GCMBlockCipher(AESEngine())
-        ..init(false, AEADParameters(KeyParameter(_currentKey!), 128, nonce, null));
+        ..init(false, AEADParameters(KeyParameter(_currentKey!), 128, nonce, Uint8List(0)));
       return cipher.process(ciphertextWithTag);
     } catch (_) {
       return null;

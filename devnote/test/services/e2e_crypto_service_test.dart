@@ -200,7 +200,7 @@ void main() {
 
     test('导入备份时密码错误返回 false', () async {
       await service.generateKeyPair('originalPassword123');
-      final backup = await service.exportKeyBackup('correctPassword123')!;
+      final backup = (await service.exportKeyBackup('correctPassword123'))!;
       await service.disable();
       final result = await service.importKeyBackup(backup, 'wrongPassword123');
       expect(result, isFalse);
@@ -208,7 +208,7 @@ void main() {
 
     test('导入备份时密码不足 6 位返回 false', () async {
       await service.generateKeyPair('originalPassword123');
-      final backup = await service.exportKeyBackup('correctPassword123')!;
+      final backup = (await service.exportKeyBackup('correctPassword123'))!;
       await service.disable();
       final result = await service.importKeyBackup(backup, '12345');
       expect(result, isFalse);

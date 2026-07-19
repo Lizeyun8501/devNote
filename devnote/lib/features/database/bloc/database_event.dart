@@ -183,3 +183,21 @@ class ApplySorts extends DatabaseEvent {
   @override
   List<Object?> get props => [databaseId, sorts];
 }
+
+class ClearFilters extends DatabaseEvent {
+  final String databaseId;
+
+  const ClearFilters({required this.databaseId});
+
+  @override
+  List<Object?> get props => [databaseId];
+}
+
+class ClearSorts extends DatabaseEvent {
+  final String databaseId;
+
+  const ClearSorts({required this.databaseId});
+
+  @override
+  List<Object?> get props => [databaseId];
+}

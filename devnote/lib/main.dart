@@ -14,10 +14,13 @@
 // 借鉴内容: 以对象(Object)为原语的数据建模方式
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:ui' show AppExitResponse;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:go_router/go_router.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:devnote/core/i18n/app_localizations.dart';
 import 'package:devnote/core/theme/app_theme.dart';
 import 'package:devnote/core/router/app_router.dart';
@@ -83,6 +86,19 @@ void main() {
 /// 应用初始化流程
 Future<void> _initializeApp() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 桌面端（Windows/Linux）SQLite FFI 初始化
+  // sqflite 默认仅支持 Android/iOS/macOS，桌面端必须通过 sqflite_common_ffi
+  // 避免 getDatabasesPath()/openDatabase() 抛 MissingPluginException
+  if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+    try {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+      AppLogger.i('SQLite', 'Initialized sqflite_common_ffi for desktop');
+    } catch (e) {
+      AppLogger.w('SQLite', 'Failed to init sqflite_common_ffi', error: e);
+    }
+  }
 
   // Initialize core dependency injection (core layer only)
   await setupDependencies();

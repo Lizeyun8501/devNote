@@ -79,7 +79,7 @@ class FilterPanel extends StatelessWidget {
   }
 }
 
-class _FilterRow extends StatelessWidget {
+class _FilterRow extends StatefulWidget {
   final List<DatabaseFieldModel> fields;
   final FilterModel filter;
   final ValueChanged<FilterModel> onChanged;
@@ -93,7 +93,48 @@ class _FilterRow extends StatelessWidget {
   });
 
   @override
+  State<_FilterRow> createState() => _FilterRowState();
+}
+
+class _FilterRowState extends State<_FilterRow> {
+  late final TextEditingController _valueController;
+
+  @override
+  void initState() {
+    super.initState();
+    _valueController = TextEditingController(
+      text: widget.filter.value?.toString() ?? '',
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _FilterRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 当外部 filter.value 变化（且与当前 controller 文本不同步）时同步到 controller，
+    // 避免在 build 中创建新 controller 造成内存泄漏与输入焦点丢失。
+    final newText = widget.filter.value?.toString() ?? '';
+    if (_valueController.text != newText) {
+      _valueController.text = newText;
+    }
+  }
+
+  @override
+  void dispose() {
+    _valueController.dispose();
+    super.dispose();
+  }
+
+  void _emitValue(String v) {
+    widget.onChanged(FilterModel(
+      fieldId: widget.filter.fieldId,
+      operator: widget.filter.operator,
+      value: v,
+    ));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final filter = widget.filter;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -102,9 +143,9 @@ class _FilterRow extends StatelessWidget {
             child: DropdownButtonFormField<String>(
               value: filter.fieldId,
               decoration: const InputDecoration(isDense: true, labelText: '字段'),
-              items: fields.map((f) => DropdownMenuItem(value: f.id, child: Text(f.name))).toList(),
+              items: widget.fields.map((f) => DropdownMenuItem(value: f.id, child: Text(f.name))).toList(),
               onChanged: (v) {
-                if (v != null) onChanged(FilterModel(fieldId: v, operator: filter.operator, value: filter.value));
+                if (v != null) widget.onChanged(FilterModel(fieldId: v, operator: filter.operator, value: filter.value));
               },
             ),
           ),
@@ -122,7 +163,7 @@ class _FilterRow extends StatelessWidget {
                 DropdownMenuItem(value: 'is_not_empty', child: Text('不为空')),
               ],
               onChanged: (v) {
-                if (v != null) onChanged(FilterModel(fieldId: filter.fieldId, operator: v, value: filter.value));
+                if (v != null) widget.onChanged(FilterModel(fieldId: filter.fieldId, operator: v, value: filter.value));
               },
             ),
           ),
@@ -130,11 +171,11 @@ class _FilterRow extends StatelessWidget {
           Expanded(
             child: TextField(
               decoration: const InputDecoration(isDense: true, labelText: '值'),
-              onChanged: (v) => onChanged(FilterModel(fieldId: filter.fieldId, operator: filter.operator, value: v)),
-              controller: TextEditingController(text: filter.value?.toString() ?? ''),
+              controller: _valueController,
+              onChanged: _emitValue,
             ),
           ),
-          IconButton(icon: const Icon(Icons.close), onPressed: onRemoved),
+          IconButton(icon: const Icon(Icons.close), onPressed: widget.onRemoved),
         ],
       ),
     );

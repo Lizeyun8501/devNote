@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:get_it/get_it.dart';
-import 'services/version_history_service.dart';
 import 'package:diff_match_patch/diff_match_patch.dart';
+import '../../../core/di/injection.dart';
+import 'services/version_history_service.dart';
 
 class VersionHistoryPage extends StatefulWidget {
   final String noteId;
@@ -170,7 +170,7 @@ class _VersionHistoryPageState extends State<VersionHistoryPage> {
 
   Widget _buildDiffViewer(String historicalContent) {
     // 使用 diff_match_patch 生成差异视图
-    final dmp = diff_match_patch();
+    final dmp = DiffMatchPatch();
     final diffs = dmp.diff(widget.currentContent, historicalContent);
 
     return SingleChildScrollView(

@@ -165,7 +165,7 @@ class GraphDataModel {
       nodes: (json['nodes'] as List<dynamic>)
           .map((e) => KnowledgeNodeModel.fromJson(e as Map<String, dynamic>))
           .toList(),
-      edges: (json['edges'] as List<dynamic>)
+      edges: (json['edges'] as List<dynamic>? ?? const [])
           .map((e) => KnowledgeEdgeModel.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
@@ -322,6 +322,8 @@ class GraphService {
     final decoded = jsonDecode(json);
     if (decoded is List) {
       return decoded.map((e) => e as String).toList();
+    } else if (decoded is Map && decoded['path'] is List) {
+      return (decoded['path'] as List).map((e) => e as String).toList();
     }
     return [];
   }
@@ -338,6 +340,10 @@ class GraphService {
     final decoded = jsonDecode(json);
     if (decoded is List) {
       return decoded
+          .map((e) => KnowledgeNodeModel.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } else if (decoded is Map && decoded['nodes'] is List) {
+      return (decoded['nodes'] as List)
           .map((e) => KnowledgeNodeModel.fromJson(e as Map<String, dynamic>))
           .toList();
     }

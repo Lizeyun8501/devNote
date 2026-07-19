@@ -32,7 +32,7 @@ class NumberCellEditor extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ).whenComplete(controller.dispose);
   }
 
   @override

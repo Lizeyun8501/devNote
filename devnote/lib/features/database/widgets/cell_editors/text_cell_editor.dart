@@ -28,7 +28,7 @@ class TextCellEditor extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ).whenComplete(controller.dispose);
   }
 
   @override

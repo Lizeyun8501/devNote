@@ -211,14 +211,14 @@ class _CryptoSettingsPageState extends State<CryptoSettingsPage> {
           const SizedBox(height: 8),
           RadioListTile<CryptoStrength>(
             title: const Text('标准'),
-            subtitle: const Text('Argon2id 3次迭代，适合日常使用'),
+            subtitle: const Text('PBKDF2-SHA256 600000次迭代，适合日常使用'),
             value: CryptoStrength.standard,
             groupValue: state.strength,
             onChanged: state.isEnabled ? null : _handleStrengthChange,
           ),
           RadioListTile<CryptoStrength>(
             title: const Text('高强度'),
-            subtitle: const Text('Argon2id 6次迭代，更高安全性'),
+            subtitle: const Text('PBKDF2-SHA256 1200000次迭代，更高安全性'),
             value: CryptoStrength.highStrength,
             groupValue: state.strength,
             onChanged: state.isEnabled ? null : _handleStrengthChange,
@@ -238,8 +238,8 @@ class _CryptoSettingsPageState extends State<CryptoSettingsPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '• 启用加密后，笔记内容将以 XChaCha20-Poly1305 算法加密存储\n'
-                    '• 密码使用 Argon2id 算法派生密钥\n'
+                    '• 启用加密后，笔记内容将以 AES-256-GCM 算法加密存储\n'
+                    '• 密码使用 PBKDF2-SHA256 算法派生密钥\n'
                     '• 请妥善保管密码，忘记密码将无法恢复数据\n'
                     '• 修改加密强度需要先禁用再重新启用加密',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(

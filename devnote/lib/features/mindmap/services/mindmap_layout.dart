@@ -190,7 +190,7 @@ class MindmapLayout {
           angle - childAngleSpan / 2,
           angle + childAngleSpan / 2,
           level + 1,
-          radius * 0.8, // 每层半径缩小
+          radius + 80, // 每层半径递增，避免深层节点重叠
         );
       }
     }

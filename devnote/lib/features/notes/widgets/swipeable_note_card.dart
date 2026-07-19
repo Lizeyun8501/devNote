@@ -20,36 +20,17 @@ class SwipeableNoteCard extends StatefulWidget {
   State<SwipeableNoteCard> createState() => _SwipeableNoteCardState();
 }
 
-class _SwipeableNoteCardState extends State<SwipeableNoteCard>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<Offset> _animation;
+class _SwipeableNoteCardState extends State<SwipeableNoteCard> {
   double _dragExtent = 0;
   static const double _actionThreshold = 80.0;
   static const double _maxDrag = 120.0;
 
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    _animation = Tween<Offset>(
-      begin: Offset.zero,
-      end: const Offset(0, 0),
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
   void _reset() {
-    _controller.reverse();
-    setState(() => _dragExtent = 0);
+    if (_dragExtent != 0) {
+      setState(() {
+        _dragExtent = 0;
+      });
+    }
   }
 
   @override

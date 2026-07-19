@@ -69,13 +69,23 @@ class EditorPage extends StatelessWidget {
         collabService: getIt<RealtimeCollabService>(),
         timelineRecorderService: getIt<TimelineRecorderService>(),
       )..add(LoadNote(noteId)),
-      child: const _EditorView(),
+      child: _EditorView(
+        onShowVersionHistory: onShowVersionHistory,
+        onShareNote: onShareNote,
+      ),
     );
   }
 }
 
 class _EditorView extends StatefulWidget {
-  const _EditorView();
+  const _EditorView({
+    this.onShowVersionHistory,
+    this.onShareNote,
+  });
+
+  // P1 修复 (P1-3): 通过回调注入 UI 依赖，打破 editor → notes 循环依赖
+  final ShowVersionHistoryCallback? onShowVersionHistory;
+  final ShareNoteCallback? onShareNote;
 
   @override
   State<_EditorView> createState() => _EditorViewState();
@@ -182,13 +192,13 @@ class _EditorViewState extends State<_EditorView> {
                   child: IconButton(
                     icon: const Icon(Icons.history),
                     tooltip: '版本历史',
-                    onPressed: onShowVersionHistory == null
+                    onPressed: widget.onShowVersionHistory == null
                         ? null
                         : () {
                             final currentContent =
                                 state.blocks.map((b) => b.content).join('\n\n');
                             // P1 修复 (P1-3): 通过回调注入而非直接构造 VersionHistoryPage
-                            onShowVersionHistory!(
+                            widget.onShowVersionHistory!(
                               context,
                               state.noteId,
                               currentContent,
@@ -434,7 +444,7 @@ class _EditorViewState extends State<_EditorView> {
   /// content JSON 结构：{url, page_count, current_page, annotations}
   Future<void> _insertPdfBlock(BuildContext context, EditorLoaded state) async {
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
       );
@@ -743,8 +753,8 @@ class _EditorViewState extends State<_EditorView> {
     final title = _titleController.text.trim().isEmpty
         ? '无标题'
         : _titleController.text.trim();
-    if (onShareNote != null) {
-      onShareNote!(context, state.noteId, title, content);
+    if (widget.onShareNote != null) {
+      widget.onShareNote!(context, state.noteId, title, content);
     }
   }
 

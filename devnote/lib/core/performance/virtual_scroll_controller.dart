@@ -53,6 +53,19 @@ class VirtualScrollController extends ChangeNotifier {
   /// 以避免快速滚动时出现"白边"。
   static const int _overscanCount = 5;
 
+  /// 安全 clamp：当 min > max（例如视口尺寸变化过程中
+  /// maxScrollExtent < minScrollExtent）时直接返回 min，避免触发断言错误。
+  static double safeClamp(double value, double min, double max) {
+    if (min > max) return min;
+    return value.clamp(min, max);
+  }
+
+  /// 整型版本的安全 clamp，用于索引计算（如 itemCount == 0 时 max=-1）。
+  static int safeClampInt(int value, int min, int max) {
+    if (min > max) return min;
+    return value.clamp(min, max);
+  }
+
   /// 当前滚动偏移（像素）
   double get scrollOffset => _scrollOffset;
   /// 视口高度（像素）
@@ -84,7 +97,9 @@ class VirtualScrollController extends ChangeNotifier {
 
   /// 滚动偏移变化时调用（通常由 `ScrollController` 触发）
   void updateScrollOffset(double offset) {
-    _scrollOffset = offset.clamp(0.0, _contentHeight - _viewportHeight);
+    // 当内容高度 < 视口高度时，maxScrollExtent 会变为负数，使用 safeClamp
+    // 避免触发 `min > max` 的断言错误。
+    _scrollOffset = safeClamp(offset, 0.0, _contentHeight - _viewportHeight);
     _updateVisibleRange();
     notifyListeners();
   }
@@ -94,10 +109,17 @@ class VirtualScrollController extends ChangeNotifier {
   /// 借鉴 react-virtual 中"根据滚动偏移 + 视口大小 + overscan 计算起止索引"的算法。
   void _updateVisibleRange() {
     if (_itemHeight <= 0 || _viewportHeight <= 0) return;
-    _firstVisibleIndex = (_scrollOffset / _itemHeight).floor() - _overscanCount;
-    _firstVisibleIndex = _firstVisibleIndex.clamp(0, _itemCount - 1);
-    _lastVisibleIndex = ((_scrollOffset + _viewportHeight) / _itemHeight).ceil() + _overscanCount;
-    _lastVisibleIndex = _lastVisibleIndex.clamp(0, _itemCount - 1);
+    // itemCount == 0 时 max = -1，使用 safeClampInt 防御。
+    _firstVisibleIndex = safeClampInt(
+      (_scrollOffset / _itemHeight).floor() - _overscanCount,
+      0,
+      _itemCount - 1,
+    );
+    _lastVisibleIndex = safeClampInt(
+      ((_scrollOffset + _viewportHeight) / _itemHeight).ceil() + _overscanCount,
+      0,
+      _itemCount - 1,
+    );
   }
 
   /// 第一个可见 item 的索引（含 overscan）
@@ -116,7 +138,8 @@ class VirtualScrollController extends ChangeNotifier {
   ///
   /// 借鉴 react-virtual `virtualizer.scrollToIndex(index)` API。
   void scrollToIndex(int index) {
-    final offset = (index * _itemHeight).clamp(0.0, (_contentHeight - _viewportHeight).clamp(0.0, double.infinity));
+    final maxScroll = safeClamp(_contentHeight - _viewportHeight, 0.0, double.infinity);
+    final offset = safeClamp(index * _itemHeight, 0.0, maxScroll);
     updateScrollOffset(offset);
   }
 
@@ -182,6 +205,8 @@ class _VirtualScrollViewState extends State<VirtualScrollView> {
   }
 
   void _onScroll() {
+    // 在 dispose 或 viewport 重建期间 position 可能不可用，访问 offset 会抛异常。
+    if (!_scrollController.hasClients) return;
     widget.controller.updateScrollOffset(_scrollController.offset);
   }
 

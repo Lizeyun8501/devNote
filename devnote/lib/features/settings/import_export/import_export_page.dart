@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:devnote/core/persistence/database_helper.dart';
@@ -580,6 +581,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
   }
 
   Future<void> _startImport() async {
+    final sourcePath = await FilePicker.getDirectoryPath();
+    if (sourcePath == null || !mounted) return;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -590,7 +594,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
 
     await _importService.import(
       source: _importSource,
-      sourcePath: '',
+      sourcePath: sourcePath,
       targetFolderId: '',
       conflictResolution: _conflictResolution,
     );
@@ -601,6 +605,9 @@ class _ImportExportPageState extends State<ImportExportPage> {
   }
 
   Future<void> _startExport() async {
+    final targetPath = await FilePicker.getDirectoryPath();
+    if (targetPath == null || !mounted) return;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -615,7 +622,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
     await _exportService.export(
       range: _exportRange,
       format: _exportFormat,
-      targetPath: '',
+      targetPath: targetPath,
     );
 
     if (mounted) {
@@ -630,7 +637,7 @@ class _ImportExportPageState extends State<ImportExportPage> {
             format: _exportFormat.name,
             range: _exportRange.name,
             noteCount: _exportNoteCount,
-            targetPath: '',
+            targetPath: targetPath,
           ),
         );
       });

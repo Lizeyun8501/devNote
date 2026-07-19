@@ -26,7 +26,11 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       // 初始化仓库，预置 3 条笔记
       repository = MockNoteRepository(createMockNotes(3, folderId: 'folder-1'));
-      bloc = NotesBloc(repository);
+      bloc = NotesBloc(
+        repository,
+        MockFolderRepository([]),
+        MockNoteBlockCreationPort(),
+      );
     });
 
     tearDown(() {
@@ -233,7 +237,11 @@ void main() {
     testWidgets('仓库异常时进入错误状态', (tester) async {
       SharedPreferences.setMockInitialValues({});
       final errorRepo = MockNoteRepository.withError(Exception('数据库连接失败'));
-      final errorBloc = NotesBloc(errorRepo);
+      final errorBloc = NotesBloc(
+        errorRepo,
+        MockFolderRepository([]),
+        MockNoteBlockCreationPort(),
+      );
 
       errorBloc.add(const LoadNotes('folder-1'));
       await tester.pumpAndSettle();
@@ -247,7 +255,11 @@ void main() {
     testWidgets('创建笔记失败时进入错误状态', (tester) async {
       SharedPreferences.setMockInitialValues({});
       final errorRepo = MockNoteRepository.withError(Exception('创建失败'));
-      final errorBloc = NotesBloc(errorRepo);
+      final errorBloc = NotesBloc(
+        errorRepo,
+        MockFolderRepository([]),
+        MockNoteBlockCreationPort(),
+      );
 
       errorBloc.add(const CreateNote(title: '测试', folderId: 'folder-1'));
       await tester.pumpAndSettle();

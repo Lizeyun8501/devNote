@@ -166,17 +166,12 @@ class Dispatch {
     required String noteId,
     required List<BlockModel> blocks,
   }) async {
-    final blockMaps = blocks.map((b) => {
-      'id': b.id,
-      'note_id': b.noteId,
-      'block_type': b.blockType,
-      'content': b.content,
-      'position': b.position,
-    }).toList();
+    // 使用 toJson 保留全部字段（language/children/createdAt/updatedAt），
+    // 避免 FFI 路径双向转换时字段丢失
+    final blockMaps = blocks.map((b) => b.toJson()).toList();
     final result = await _bridge.replaceBlocks(noteId: noteId, blocks: blockMaps);
     return result.map((map) => BlockModel.fromJson(map)).toList();
   }
-
   // ============================================================
   // 搜索操作 —— 替代原 SearchEvent.* 事件路由
   // ============================================================

@@ -197,11 +197,7 @@ class _PdfViewerWidgetState extends State<PdfViewerWidget> {
   void _goToPage(int page) {
     final maxPage = _totalPages > 0 ? _totalPages : 1;
     final target = page.clamp(1, maxPage);
-    _pdfController.animateToPage(
-      target,
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.ease,
-    );
+    _pdfController.jumpToPage(target);
   }
 
   List<Widget> _buildAnnotationOverlays() {

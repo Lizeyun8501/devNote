@@ -39,14 +39,14 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  go_router: ^14.8.1
+  go_router: ^17.3.0
   flutter_bloc: ^9.1.0
   bloc_concurrency: ^0.3.0
-  equatable: ^2.0.7
+  equatable: ^2.1.0
   provider: ^6.1.4
   freezed_annotation: ^3.0.0
   json_annotation: ^4.9.0
-  uuid: ^4.5.1
+  uuid: ^4.6.0
   path_provider: ^2.1.5
   path: ^1.9.0
   sqflite: ^2.4.1
@@ -54,21 +54,21 @@ dependencies:
   ffi: ^2.1.4
   web_socket_channel: ^3.0.1
   flutter_math_fork: ^0.7.2
-  google_fonts: ^6.2.1
+  google_fonts: ^8.2.0
   shared_preferences: ^2.3.4
   http: ^1.2.2
   # SHA-256 / HMAC-SHA256 等哈希算法 —— 用于 S3 AWS Signature V4 签名
   crypto: ^3.0.3
   diff_match_patch: ^0.4.1
-  get_it: ^8.0.0
+  get_it: ^9.2.1
   # 集成 Sentry 崩溃报告 —— 借鉴 AppFlowy 的 Sentry 集成方案
   # 来源: https://github.com/AppFlowy-IO/AppFlowy
-  sentry_flutter: ^8.0.0
+  sentry_flutter: ^9.24.0
   # 代码片段文件选择器（导入/导出功能）
-  file_picker: ^8.0.0
+  file_picker: ^11.0.2
   # PDF 导出 —— 借鉴 pdf.dart 库：https://github.com/DavBfr/dart_pdf
-  pdf: ^3.10.7
-  printing: ^5.12.0
+  pdf: ^3.13.0
+  printing: ^5.15.0
   # 知识图谱可视化 —— 替代自研 CustomPaint 渲染
   # 来源: https://pub.dev/packages/graphview
   graphview: ^1.2.0
@@ -101,7 +101,7 @@ dependencies:
   # 注意：encrypt 包不支持 GCM 模式，故直接使用 pointycastle
   # 来源: https://pub.dev/packages/pointycastle
   # ============================================================
-  pointycastle: ^3.7.0
+  pointycastle: ^4.0.0
   # ============================================================
   # perfect_freehand —— 压感手写笔触渲染
   # 来源: https://pub.dev/packages/perfect_freehand
@@ -115,9 +115,9 @@ dependencies:
   # audioplayers: 音频播放（支持本地文件播放、进度控制）
   # permission_handler: 运行时权限请求（麦克风）
   # ============================================================
-  record: ^5.1.0
-  audioplayers: ^6.1.0
-  permission_handler: ^11.3.1
+  record: ^7.1.1
+  audioplayers: ^6.8.1
+  permission_handler: ^12.0.3
   # ============================================================
   # PDF 查看 / 标注 —— 借鉴印象笔记和 Notion 的 PDF 标注能力
   # ------------------------------------------------------------
@@ -126,7 +126,7 @@ dependencies:
   # 注：syncfusion_flutter_pdfviewer 需注册社区许可证，故选用 pdfx
   # path_provider / file_picker 已在上方声明，复用即可
   # ============================================================
-  pdfx: ^2.6.0
+  pdfx: ^2.9.2
   # ============================================================
   # P2-8: OneNote 导入工具
   # ------------------------------------------------------------
@@ -144,8 +144,14 @@ dependencies:
   # timezone: 时区数据库，支持 zonedSchedule 按本地时区调度
   # 对标印象笔记、有道云笔记、Notesnook 的待办提醒功能
   # ============================================================
-  flutter_local_notifications: ^17.2.2
-  timezone: ^0.9.4
+  flutter_local_notifications: ^22.1.0
+  timezone: ^0.11.1
+  # ============================================================
+  # 桌面端 SQLite FFI 支持（Windows/Linux）
+  # sqflite 默认仅支持 Android/iOS/macOS，桌面端必须通过 sqflite_common_ffi
+  # 在 main.dart 中根据 Platform.isWindows/isLinux 初始化 databaseFactory
+  # ============================================================
+  sqflite_common_ffi: ^2.4.2
   # ============================================================
   # P2-9: OpenAPI 契约驱动 Dart 客户端
   # 由 openapi-generator 从 docs/api/*.yaml 自动生成
@@ -156,10 +162,16 @@ dependencies:
   devnote_business_api:
     path: lib/api/generated/business_server
 
+# record 7.x 已修复与 record_platform_interface 2.x 的兼容性，不再需要本地 override
+# jni 在 pub cache 中写入 .cxx 目录时 AGP 无法创建该目录，故使用本地副本绕过
+dependency_overrides:
+  jni:
+    path: plugins/jni
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
   build_runner: ^2.4.14
   freezed: ^3.0.0
   json_serializable: ^6.9.4

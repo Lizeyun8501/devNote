@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 class FlashcardWidget extends StatefulWidget {
@@ -64,7 +66,7 @@ class _FlashcardWidgetState extends State<FlashcardWidget>
       child: AnimatedBuilder(
         animation: _animation,
         builder: (context, child) {
-          final angle = _animation.value * 3.14159 / 2;
+          final angle = _animation.value * math.pi;
           final transform = Matrix4.identity()
             ..setEntry(3, 2, 0.001)
             ..rotateY(_showFront ? 0 : angle);

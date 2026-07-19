@@ -14,9 +14,54 @@ class PluginMarketplacePage extends StatefulWidget {
 
 class _PluginMarketplacePageState extends State<PluginMarketplacePage> {
   String _searchQuery = '';
-  String _selectedCategory = '全部';
+  // 内部统一使用英文 key 作为筛选标识，避免与数据源（MarketplacePlugin.category
+  // 全部为英文 key 如 'productivity'/'theme'）做字符串比较时不匹配。
+  // null 表示"全部"分类。
+  String? _selectedCategoryKey;
 
-  static const _categories = ['全部', '效率', '编辑器', '同步', '主题', '工具', '开发'];
+  /// 分类英文 key → 中文显示文本的映射。
+  /// 数据源（plugin_service.dart 中的 mock 数据）使用英文 key，因此筛选时
+  /// 必须使用同一份 key；UI 显示则统一查表，未命中的 key 退化为枚举字符串本身。
+  static const Map<String, String> _categoryLabels = {
+    'productivity': '效率',
+    'learning': '学习',
+    'workflow': '工作流',
+    'data': '数据',
+    'appearance': '美化',
+    'other': '其他',
+    // 以下分类对应现有 mock 数据源
+    'theme': '主题',
+    'tool': '工具',
+    'integration': '同步',
+    'export': '导出',
+    'visualization': '可视化',
+    'editor': '编辑器',
+    'development': '开发',
+  };
+
+  /// 用于展示的分类项：第一项为"全部"，后续按 _categoryLabels 顺序。
+  /// 第一个元素用 null 表示"全部"分类。
+  static const List<String?> _categoryKeys = [
+    null,
+    'productivity',
+    'learning',
+    'workflow',
+    'data',
+    'appearance',
+    'other',
+    'theme',
+    'tool',
+    'integration',
+    'export',
+    'visualization',
+    'editor',
+    'development',
+  ];
+
+  String _labelForKey(String? key) {
+    if (key == null) return '全部';
+    return _categoryLabels[key] ?? key;
+  }
 
   @override
   void initState() {
@@ -67,18 +112,18 @@ class _PluginMarketplacePageState extends State<PluginMarketplacePage> {
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: _categories.length,
+        itemCount: _categoryKeys.length,
         itemBuilder: (context, index) {
-          final category = _categories[index];
-          final isSelected = category == _selectedCategory;
+          final key = _categoryKeys[index];
+          final isSelected = key == _selectedCategoryKey;
           return Padding(
             padding: const EdgeInsets.only(right: 8),
             child: FilterChip(
-              label: Text(category),
+              label: Text(_labelForKey(key)),
               selected: isSelected,
               onSelected: (_) {
                 setState(() {
-                  _selectedCategory = category;
+                  _selectedCategoryKey = key;
                 });
               },
             ),
@@ -103,9 +148,10 @@ class _PluginMarketplacePageState extends State<PluginMarketplacePage> {
         if (state is PluginsLoaded) {
           var plugins = state.marketplacePlugins;
 
-          if (_selectedCategory != '全部') {
+          if (_selectedCategoryKey != null) {
+            final key = _selectedCategoryKey!;
             plugins = plugins
-                .where((p) => p.category == _selectedCategory)
+                .where((p) => p.category.toLowerCase() == key.toLowerCase())
                 .toList();
           }
 

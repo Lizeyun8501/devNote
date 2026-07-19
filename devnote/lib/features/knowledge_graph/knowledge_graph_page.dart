@@ -134,13 +134,18 @@ class _KnowledgeGraphViewState extends State<_KnowledgeGraphView> {
                   // graphview 内部已支持缩放与平移，但仍用 InteractiveViewer
                   // 提供更流畅的缩放体验
                   child: InteractiveViewer(
-                    minScale: 0.1,
-                    maxScale: 5.0,
+                    constrained: false,
+                    boundaryMargin: const EdgeInsets.all(double.infinity),
+                    minScale: 0.01,
+                    maxScale: 5.6,
                     child: GraphView(
                       graph: _graph,
                       algorithm: _algorithm,
-                      // 使用透明画笔，因为 graphview 的 EdgeRenderer 已接管边渲染
-                      paint: Paint()..color = Colors.transparent,
+                      // graphview 1.5.1 的 paint 即为 edgePaint，EdgeRenderer 使用它绘制边
+                      paint: Paint()
+                        ..color = Theme.of(context).colorScheme.outline
+                        ..strokeWidth = 1.5
+                        ..style = PaintingStyle.stroke,
                       builder: (node) {
                         // 自定义节点渲染：通过 node.key 查找对应的业务数据
                         final nodeId = node.key?.value as String?;

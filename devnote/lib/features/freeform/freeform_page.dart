@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'bloc/freeform_bloc.dart';
+import 'bloc/freeform_event.dart';
+import 'bloc/freeform_state.dart';
 import 'models/freeform_element.dart';
 import 'widgets/freeform_element_widget.dart';
 import 'widgets/freeform_toolbar.dart';
@@ -22,14 +24,13 @@ class FreeformPage extends StatelessWidget {
           FreeformBloc(pageId: pageId)..add(LoadFreeformPage(pageId)),
       child: BlocBuilder<FreeformBloc, FreeformState>(
         builder: (context, state) {
+          final loadedState = state as FreeformLoaded?;
           return Scaffold(
             appBar: AppBar(
               title: Text(pageTitle),
               actions: [
                 FreeformToolbar(
-                  currentTool: state is FreeformLoaded
-                      ? state.currentTool
-                      : FreeformTool.select,
+                  currentTool: loadedState?.currentTool ?? FreeformTool.select,
                   onToolChanged: (tool) =>
                       context.read<FreeformBloc>().add(ChangeTool(tool)),
                   onAddElement: (type) =>
@@ -41,11 +42,11 @@ class FreeformPage extends StatelessWidget {
                 ),
               ],
             ),
-            body: state is FreeformLoaded
+            body: loadedState != null
                 ? _FreeformCanvas(
-                    data: state.data,
-                    selectedElementId: state.selectedElementId,
-                    editingElementId: state.editingElementId,
+                    data: loadedState.data,
+                    selectedElementId: loadedState.selectedElementId,
+                    editingElementId: loadedState.editingElementId,
                     onElementTap: (id) =>
                         context.read<FreeformBloc>().add(SelectElement(id)),
                     onElementDoubleTap: (id) => context
