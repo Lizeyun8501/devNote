@@ -1,6 +1,6 @@
 FROM golang:1.25-alpine AS builder
 
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache build-base git
 
 WORKDIR /app
 
@@ -9,7 +9,8 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o /sync-server ./cmd/server
+# 使用静态链接构建以减少运行时依赖（CGO_DISABLED）
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /sync-server ./cmd/server
 
 FROM alpine:3.19
 
