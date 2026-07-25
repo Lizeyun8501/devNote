@@ -6,94 +6,133 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `extract_content`, `note_to_data`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DatabaseViewData`, `InkStrokeFfi`
+// These functions are ignored because they are not marked as `pub`: `alloc_handle`, `block_editor_mut`, `canvas_engine_mut`, `canvas_engine`, `database_engine`, `empty`, `extract_content`, `flashcard_engine_mut`, `flashcard_engine`, `graph_engine`, `insert_engine`, `note_repo_mut`, `note_repo`, `note_to_data`, `open_connection_with_pragmas`, `search_engine_mut`, `search_engine`, `sync_engine_mut`, `sync_engine`, `with_engine_read`, `with_engine`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DatabaseViewData`, `EngineRegistry`, `InkStrokeFfi`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
+/// 移除引擎实例（释放资源）
+Future<void> dropEngine({required BigInt handle}) =>
+    RustLib.instance.api.crateFrbApiDropEngine(handle: handle);
+
+/// 获取当前活跃引擎句柄的数量
+Future<BigInt> engineCount() => RustLib.instance.api.crateFrbApiEngineCount();
+
 /// 初始化所有引擎 —— 替代原 devnote_init + register_all_handlers
-/// FRB 自动生成 Dart: `Future<void> initEngines()`
+/// FRB 自动生成 Dart: `Future<int> initEngines()`
+///
+/// P0 架构修复: 返回 engine_handle (u64)，实现基于句柄的依赖注入。
+/// 支持多工作区 / 多用户场景，每个工作区拥有独立的引擎实例。
+/// Dart 端应保存返回的句柄，后续所有 API 调用均需传入该句柄。
 ///
 /// P0 修复: 原实现使用 `in_memory()`，FFI 模式下数据重启全部丢失。
 /// 现改为文件持久化，数据库路径通过参数传入，与 Dart 端共享 `devnote.db`。
 ///
 /// P0 修复: 原实现中 search/database/object/graph/flashcard 引擎初始化失败时
 /// 用 `if let Ok` 静默吞错，用户无法感知功能受限。现改为收集失败引擎名并记录
-/// 到 INIT_WARNINGS，通过 health_check() 暴露给 Dart 端，由 UI 提示用户
+/// 到 init_warnings，通过 health_check() 暴露给 Dart 端，由 UI 提示用户
 /// "核心引擎未加载，功能受限"。
-Future<void> initEngines({required String dbPath}) =>
+Future<BigInt> initEngines({required String dbPath}) =>
     RustLib.instance.api.crateFrbApiInitEngines(dbPath: dbPath);
 
 /// 版本协商 —— 替代原 SystemEvent.GetVersion
-Future<VersionInfo> getVersion() =>
-    RustLib.instance.api.crateFrbApiGetVersion();
+Future<VersionInfo> getVersion({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiGetVersion(engineHandle: engineHandle);
 
 /// 健康检查 —— 替代原 SystemEvent.HealthCheck
-///
-/// 返回各引擎状态及初始化警告。Dart 端应检查 warnings 非空时向用户提示
-/// "核心引擎未加载，功能受限"，并列出受影响的功能模块。
-Future<HealthCheckResult> healthCheck() =>
-    RustLib.instance.api.crateFrbApiHealthCheck();
+Future<HealthCheckResult> healthCheck({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiHealthCheck(engineHandle: engineHandle);
 
 /// 创建笔记 —— 替代原 NoteEvent.CreateNote
 Future<NoteData> createNote({
+  required BigInt engineHandle,
   required String title,
   required String content,
   required String folderId,
 }) => RustLib.instance.api.crateFrbApiCreateNote(
+  engineHandle: engineHandle,
   title: title,
   content: content,
   folderId: folderId,
 );
 
 /// 获取笔记 —— 替代原 NoteEvent.GetNote
-Future<NoteData?> getNote({required String id}) =>
-    RustLib.instance.api.crateFrbApiGetNote(id: id);
+Future<NoteData?> getNote({required BigInt engineHandle, required String id}) =>
+    RustLib.instance.api.crateFrbApiGetNote(engineHandle: engineHandle, id: id);
 
 /// 更新笔记 —— 替代原 NoteEvent.UpdateNote
 Future<NoteData> updateNote({
+  required BigInt engineHandle,
   required String id,
   required String title,
   required String content,
 }) => RustLib.instance.api.crateFrbApiUpdateNote(
+  engineHandle: engineHandle,
   id: id,
   title: title,
   content: content,
 );
 
 /// 删除笔记 —— 替代原 NoteEvent.DeleteNote
-Future<void> deleteNote({required String id}) =>
-    RustLib.instance.api.crateFrbApiDeleteNote(id: id);
-
-/// 列出笔记 —— 替代原 NoteEvent.ListNotes
-Future<List<NoteData>> listNotes({required String folderId}) =>
-    RustLib.instance.api.crateFrbApiListNotes(folderId: folderId);
-
-/// 创建文件夹 —— 替代原 FolderEvent.CreateFolder
-Future<FolderData> createFolder({required String name, String? parentId}) =>
-    RustLib.instance.api.crateFrbApiCreateFolder(
-      name: name,
-      parentId: parentId,
+Future<void> deleteNote({required BigInt engineHandle, required String id}) =>
+    RustLib.instance.api.crateFrbApiDeleteNote(
+      engineHandle: engineHandle,
+      id: id,
     );
 
+/// 列出笔记 —— 替代原 NoteEvent.ListNotes
+Future<List<NoteData>> listNotes({
+  required BigInt engineHandle,
+  required String folderId,
+}) => RustLib.instance.api.crateFrbApiListNotes(
+  engineHandle: engineHandle,
+  folderId: folderId,
+);
+
+/// 创建文件夹 —— 替代原 FolderEvent.CreateFolder
+Future<FolderData> createFolder({
+  required BigInt engineHandle,
+  required String name,
+  String? parentId,
+}) => RustLib.instance.api.crateFrbApiCreateFolder(
+  engineHandle: engineHandle,
+  name: name,
+  parentId: parentId,
+);
+
 /// 列出文件夹 —— 替代原 FolderEvent.ListFolders
-Future<List<FolderData>> listFolders({String? parentId}) =>
-    RustLib.instance.api.crateFrbApiListFolders(parentId: parentId);
+Future<List<FolderData>> listFolders({
+  required BigInt engineHandle,
+  String? parentId,
+}) => RustLib.instance.api.crateFrbApiListFolders(
+  engineHandle: engineHandle,
+  parentId: parentId,
+);
 
 /// 删除文件夹 —— 替代原 FolderEvent.DeleteFolder
-Future<void> deleteFolder({required String id}) =>
-    RustLib.instance.api.crateFrbApiDeleteFolder(id: id);
+Future<void> deleteFolder({required BigInt engineHandle, required String id}) =>
+    RustLib.instance.api.crateFrbApiDeleteFolder(
+      engineHandle: engineHandle,
+      id: id,
+    );
 
 /// 获取文件夹 —— 替代原 FolderEvent.GetFolder
-Future<FolderData?> getFolder({required String id}) =>
-    RustLib.instance.api.crateFrbApiGetFolder(id: id);
+Future<FolderData?> getFolder({
+  required BigInt engineHandle,
+  required String id,
+}) => RustLib.instance.api.crateFrbApiGetFolder(
+  engineHandle: engineHandle,
+  id: id,
+);
 
 /// 更新文件夹 —— 替代原 FolderEvent.UpdateFolder
 Future<FolderData> updateFolder({
+  required BigInt engineHandle,
   required String id,
   required String name,
   String? parentId,
   int? sortOrder,
 }) => RustLib.instance.api.crateFrbApiUpdateFolder(
+  engineHandle: engineHandle,
   id: id,
   name: name,
   parentId: parentId,
@@ -101,30 +140,46 @@ Future<FolderData> updateFolder({
 );
 
 /// 创建标签 —— 替代原 TagEvent.CreateTag
-Future<TagData> createTag({required String name}) =>
-    RustLib.instance.api.crateFrbApiCreateTag(name: name);
+Future<TagData> createTag({
+  required BigInt engineHandle,
+  required String name,
+}) => RustLib.instance.api.crateFrbApiCreateTag(
+  engineHandle: engineHandle,
+  name: name,
+);
 
 /// 列出标签 —— 替代原 TagEvent.ListTags
-Future<List<TagData>> listTags() => RustLib.instance.api.crateFrbApiListTags();
+Future<List<TagData>> listTags({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiListTags(engineHandle: engineHandle);
 
 /// 删除标签 —— 替代原 TagEvent.DeleteTag
-Future<void> deleteTag({required String id}) =>
-    RustLib.instance.api.crateFrbApiDeleteTag(id: id);
+Future<void> deleteTag({required BigInt engineHandle, required String id}) =>
+    RustLib.instance.api.crateFrbApiDeleteTag(
+      engineHandle: engineHandle,
+      id: id,
+    );
 
 /// 按标签查询笔记 ID —— P1-2 修复: 消除双重持久化
 ///
 /// 原实现: Flutter 端直接查询 Dart sqflite 的 note_tags 表，绕过 Rust FFI。
 /// 现改为: 通过 FFI 调用 Rust 持久化层，确保数据源唯一。
-Future<List<String>> getNoteIdsByTag({required String tagId}) =>
-    RustLib.instance.api.crateFrbApiGetNoteIdsByTag(tagId: tagId);
+Future<List<String>> getNoteIdsByTag({
+  required BigInt engineHandle,
+  required String tagId,
+}) => RustLib.instance.api.crateFrbApiGetNoteIdsByTag(
+  engineHandle: engineHandle,
+  tagId: tagId,
+);
 
 /// 插入块 —— 替代原 EditorEvent.InsertBlock
 Future<BlockData> insertBlock({
+  required BigInt engineHandle,
   required String noteId,
   required String blockType,
   required String content,
   BigInt? position,
 }) => RustLib.instance.api.crateFrbApiInsertBlock(
+  engineHandle: engineHandle,
   noteId: noteId,
   blockType: blockType,
   content: content,
@@ -132,23 +187,86 @@ Future<BlockData> insertBlock({
 );
 
 /// 更新块 —— 替代原 EditorEvent.UpdateBlock
-Future<void> updateBlock({required String id, required String content}) =>
-    RustLib.instance.api.crateFrbApiUpdateBlock(id: id, content: content);
+Future<void> updateBlock({
+  required BigInt engineHandle,
+  required String id,
+  required String content,
+}) => RustLib.instance.api.crateFrbApiUpdateBlock(
+  engineHandle: engineHandle,
+  id: id,
+  content: content,
+);
 
 /// 删除块 —— 替代原 EditorEvent.DeleteBlock
-Future<void> deleteBlock({required String id}) =>
-    RustLib.instance.api.crateFrbApiDeleteBlock(id: id);
+Future<void> deleteBlock({required BigInt engineHandle, required String id}) =>
+    RustLib.instance.api.crateFrbApiDeleteBlock(
+      engineHandle: engineHandle,
+      id: id,
+    );
 
 /// 获取笔记的所有块 —— 替代原 EditorEvent.GetBlocks
-Future<List<BlockData>> getBlocks({required String noteId}) =>
-    RustLib.instance.api.crateFrbApiGetBlocks(noteId: noteId);
+Future<List<BlockData>> getBlocks({
+  required BigInt engineHandle,
+  required String noteId,
+}) => RustLib.instance.api.crateFrbApiGetBlocks(
+  engineHandle: engineHandle,
+  noteId: noteId,
+);
+
+/// P1 架构修复 (3.3): 补齐 FFI block API
+/// 获取单个 block by ID
+Future<BlockData?> getBlock({
+  required BigInt engineHandle,
+  required String id,
+}) => RustLib.instance.api.crateFrbApiGetBlock(
+  engineHandle: engineHandle,
+  id: id,
+);
+
+/// P1 架构修复 (3.3): 补齐 FFI block API，完成双持久化迁移
+/// 移动块到新位置，自动重排其他块的 position
+Future<void> moveBlock({
+  required BigInt engineHandle,
+  required String id,
+  required BigInt newPosition,
+}) => RustLib.instance.api.crateFrbApiMoveBlock(
+  engineHandle: engineHandle,
+  id: id,
+  newPosition: newPosition,
+);
+
+/// P1 架构修复 (3.3): 补齐 FFI block API
+/// 更新块类型
+Future<void> updateBlockType({
+  required BigInt engineHandle,
+  required String id,
+  required String blockType,
+}) => RustLib.instance.api.crateFrbApiUpdateBlockType(
+  engineHandle: engineHandle,
+  id: id,
+  blockType: blockType,
+);
+
+/// P1 架构修复 (3.3): 补齐 FFI block API
+/// 批量替换指定笔记的所有块（原子替换）
+Future<List<BlockData>> replaceBlocks({
+  required BigInt engineHandle,
+  required String noteId,
+  required List<BlockData> blocks,
+}) => RustLib.instance.api.crateFrbApiReplaceBlocks(
+  engineHandle: engineHandle,
+  noteId: noteId,
+  blocks: blocks,
+);
 
 /// 搜索笔记 —— 替代原 SearchEvent.Search
 Future<List<SearchResult>> searchNotes({
+  required BigInt engineHandle,
   required String query,
   BigInt? limit,
   BigInt? offset,
 }) => RustLib.instance.api.crateFrbApiSearchNotes(
+  engineHandle: engineHandle,
   query: query,
   limit: limit,
   offset: offset,
@@ -156,95 +274,121 @@ Future<List<SearchResult>> searchNotes({
 
 /// 加密数据 —— 替代原 CryptoEvent.Encrypt
 Future<String> encrypt({
+  required BigInt engineHandle,
   required String plaintextBase64,
   required String keyBase64,
 }) => RustLib.instance.api.crateFrbApiEncrypt(
+  engineHandle: engineHandle,
   plaintextBase64: plaintextBase64,
   keyBase64: keyBase64,
 );
 
 /// 解密数据 —— 替代原 CryptoEvent.Decrypt
 Future<String> decrypt({
+  required BigInt engineHandle,
   required String ciphertextBase64,
   required String keyBase64,
 }) => RustLib.instance.api.crateFrbApiDecrypt(
+  engineHandle: engineHandle,
   ciphertextBase64: ciphertextBase64,
   keyBase64: keyBase64,
 );
 
 /// 派生密钥 —— 替代原 CryptoEvent.DeriveKey
 Future<String> deriveKey({
+  required BigInt engineHandle,
   required String password,
   required String saltBase64,
 }) => RustLib.instance.api.crateFrbApiDeriveKey(
+  engineHandle: engineHandle,
   password: password,
   saltBase64: saltBase64,
 );
 
 /// 推送变更 —— 替代原 SyncEvent.PushChanges
-Future<SyncStatusData> pushChanges() =>
-    RustLib.instance.api.crateFrbApiPushChanges();
+Future<SyncStatusData> pushChanges({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiPushChanges(engineHandle: engineHandle);
 
 /// 拉取变更 —— 替代原 SyncEvent.PullChanges
-Future<SyncStatusData> pullChanges() =>
-    RustLib.instance.api.crateFrbApiPullChanges();
+Future<SyncStatusData> pullChanges({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiPullChanges(engineHandle: engineHandle);
 
 /// 获取同步状态 —— 替代原 SyncEvent.GetStatus
-Future<SyncStatusData> getSyncStatus() =>
-    RustLib.instance.api.crateFrbApiGetSyncStatus();
+Future<SyncStatusData> getSyncStatus({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiGetSyncStatus(engineHandle: engineHandle);
 
 /// 添加画布节点 —— 替代原 CanvasEvent.AddNode
 Future<void> canvasAddNode({
+  required BigInt engineHandle,
   required String canvasId,
   required String nodeJson,
 }) => RustLib.instance.api.crateFrbApiCanvasAddNode(
+  engineHandle: engineHandle,
   canvasId: canvasId,
   nodeJson: nodeJson,
 );
 
 /// 移除画布节点 —— 替代原 CanvasEvent.RemoveNode
 Future<void> canvasRemoveNode({
+  required BigInt engineHandle,
   required String canvasId,
   required String nodeId,
 }) => RustLib.instance.api.crateFrbApiCanvasRemoveNode(
+  engineHandle: engineHandle,
   canvasId: canvasId,
   nodeId: nodeId,
 );
 
 /// 画布自动布局 —— 替代原 CanvasEvent.AutoLayout
 Future<void> canvasAutoLayout({
+  required BigInt engineHandle,
   required String canvasId,
   required String layoutType,
 }) => RustLib.instance.api.crateFrbApiCanvasAutoLayout(
+  engineHandle: engineHandle,
   canvasId: canvasId,
   layoutType: layoutType,
 );
 
 /// 添加画布边 —— 替代原 CanvasEvent.AddEdge
 Future<void> canvasAddEdge({
+  required BigInt engineHandle,
   required String canvasId,
   required String edgeJson,
 }) => RustLib.instance.api.crateFrbApiCanvasAddEdge(
+  engineHandle: engineHandle,
   canvasId: canvasId,
   edgeJson: edgeJson,
 );
 
 /// 保存画布为 JSON —— 替代原 CanvasEvent.SaveJson
 Future<void> canvasSaveCanvas({
+  required BigInt engineHandle,
   required String canvasId,
   required String path,
 }) => RustLib.instance.api.crateFrbApiCanvasSaveCanvas(
+  engineHandle: engineHandle,
   canvasId: canvasId,
   path: path,
 );
 
 /// 从 JSON 加载画布 —— 替代原 CanvasEvent.LoadJson
-Future<String> canvasLoadCanvas({required String path}) =>
-    RustLib.instance.api.crateFrbApiCanvasLoadCanvas(path: path);
+Future<String> canvasLoadCanvas({
+  required BigInt engineHandle,
+  required String path,
+}) => RustLib.instance.api.crateFrbApiCanvasLoadCanvas(
+  engineHandle: engineHandle,
+  path: path,
+);
 
 /// 创建数据库 —— 替代原 DatabaseEvent.CreateDatabase
-Future<String> createDatabase({required String name}) =>
-    RustLib.instance.api.crateFrbApiCreateDatabase(name: name);
+Future<String> createDatabase({
+  required BigInt engineHandle,
+  required String name,
+}) => RustLib.instance.api.crateFrbApiCreateDatabase(
+  engineHandle: engineHandle,
+  name: name,
+);
 
 /// 评估公式 —— 替代原 DatabaseEvent.EvaluateFormula
 ///
@@ -262,55 +406,77 @@ Future<String> evaluateFormula({
 
 /// 添加数据库视图 —— 替代原 DatabaseEvent.AddView
 Future<String> databaseAddView({
+  required BigInt engineHandle,
   required String dbId,
   required String name,
   required String viewType,
 }) => RustLib.instance.api.crateFrbApiDatabaseAddView(
+  engineHandle: engineHandle,
   dbId: dbId,
   name: name,
   viewType: viewType,
 );
 
 /// 查询数据库行 —— 替代原 DatabaseEvent.QueryRows
-Future<String> databaseQueryRows({required String dbId}) =>
-    RustLib.instance.api.crateFrbApiDatabaseQueryRows(dbId: dbId);
+Future<String> databaseQueryRows({
+  required BigInt engineHandle,
+  required String dbId,
+}) => RustLib.instance.api.crateFrbApiDatabaseQueryRows(
+  engineHandle: engineHandle,
+  dbId: dbId,
+);
 
 /// 计算中心性 —— 替代原 GraphEvent.CalculateCentrality
-Future<String> calculateCentrality() =>
-    RustLib.instance.api.crateFrbApiCalculateCentrality();
+Future<String> calculateCentrality({required BigInt engineHandle}) => RustLib
+    .instance
+    .api
+    .crateFrbApiCalculateCentrality(engineHandle: engineHandle);
 
 /// 检测聚类 —— 替代原 GraphEvent.DetectClusters
-Future<String> detectClusters() =>
-    RustLib.instance.api.crateFrbApiDetectClusters();
+Future<String> detectClusters({required BigInt engineHandle}) =>
+    RustLib.instance.api.crateFrbApiDetectClusters(engineHandle: engineHandle);
 
 /// 创建卡组 —— 替代原 FlashcardEvent.CreateDeck
 Future<String> createDeck({
+  required BigInt engineHandle,
   required String name,
   required String description,
 }) => RustLib.instance.api.crateFrbApiCreateDeck(
+  engineHandle: engineHandle,
   name: name,
   description: description,
 );
 
 /// 复习卡片 —— 替代原 FlashcardEvent.ReviewCard
 Future<String> reviewFlashcard({
+  required BigInt engineHandle,
   required String flashcardId,
   required int quality,
 }) => RustLib.instance.api.crateFrbApiReviewFlashcard(
+  engineHandle: engineHandle,
   flashcardId: flashcardId,
   quality: quality,
 );
 
 /// 获取待复习卡片 —— 替代原 FlashcardEvent.GetDueCards
-Future<String> getDueCards({required String deckId, BigInt? limit}) =>
-    RustLib.instance.api.crateFrbApiGetDueCards(deckId: deckId, limit: limit);
+Future<String> getDueCards({
+  required BigInt engineHandle,
+  required String deckId,
+  BigInt? limit,
+}) => RustLib.instance.api.crateFrbApiGetDueCards(
+  engineHandle: engineHandle,
+  deckId: deckId,
+  limit: limit,
+);
 
 /// CRDT 合并 —— 替代原 CRDTEvent.Merge
 Future<MergeResult> crdtMerge({
+  required BigInt engineHandle,
   required String docId,
   required String deviceId,
   required String remoteOpsJson,
 }) => RustLib.instance.api.crateFrbApiCrdtMerge(
+  engineHandle: engineHandle,
   docId: docId,
   deviceId: deviceId,
   remoteOpsJson: remoteOpsJson,
@@ -355,11 +521,15 @@ Future<OcrResultFfi> ocrRecognizeImageDetailed({required String imageBase64}) =>
 
 /// 将 OCR 识别文本纳入笔记的全文搜索索引 —— 替代原 OcrEvent.IndexImage
 /// 将 OCR 文本追加到笔记现有内容后重新索引，使图片中的文字可被全文检索
-Future<void> indexOcrText({required String noteId, required String ocrText}) =>
-    RustLib.instance.api.crateFrbApiIndexOcrText(
-      noteId: noteId,
-      ocrText: ocrText,
-    );
+Future<void> indexOcrText({
+  required BigInt engineHandle,
+  required String noteId,
+  required String ocrText,
+}) => RustLib.instance.api.crateFrbApiIndexOcrText(
+  engineHandle: engineHandle,
+  noteId: noteId,
+  ocrText: ocrText,
+);
 
 /// Vault 加密 —— 使用用户密码对明文进行加密
 /// 采用 Argon2id 密钥派生 + XChaCha20-Poly1305 加密

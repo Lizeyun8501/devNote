@@ -99,7 +99,6 @@ func main() {
 	// P0 架构修复 (P3): WebSocket CRDT 实时协同编辑
 	// CRDTHub 管理所有文档的实时协作房间，支持多用户同时编辑同一笔记
 	crdtHub := handler.NewCRDTHub(logger)
-	r.GET("/api/v1/ws/crdt/:doc_id", handler.HandleCRDTWebSocket(crdtHub))
 	healthHandler := handler.NewHealthHandler()
 	realtimeHandler := handler.NewRealtimeHandler(authService, stateStore, logger)
 	// P1 修复 (SEC-04): 注入 Origin 白名单到 WebSocket upgrader
@@ -141,6 +140,12 @@ func main() {
 	// 不经过 JWTAuth 中间件：WebSocket 升级时无法使用标准 Bearer header，
 	// 改为在 handler 内部从 query param 校验 JWT。
 	r.GET("/realtime", realtimeHandler.Connect)
+
+	// P0 架构修复 (P3): WebSocket CRDT 实时协同编辑
+	// 修复: 原注册点在 r := gin.New() 之前（use before declaration），编译失败。
+	// 与 /realtime 同为 WebSocket 端点，在 handler 内部从 query param 校验 JWT，
+	// 故注册在根级别而非经过 JWTAuth 中间件的 api 组下。
+	r.GET("/api/v1/ws/crdt/:doc_id", handler.HandleCRDTWebSocket(crdtHub))
 
 	// API v1 routes
 	api := r.Group("/api/v1")
@@ -225,11 +230,17 @@ func main() {
 	}
 
 	// Setup HTTP server with optional TLS/HTTP2
+	// P2 修复: 设置读写/空闲超时，防止 Slowloris 慢速连接耗尽连接池/Goroutine 造成 DoS。
+	// ReadHeaderTimeout 尤为关键 —— 它是防 Slowloris 的最有效手段（在读完请求头前就超时断开）。
 	var srv *http.Server
 	if cfg.EnableTLS {
 		srv = &http.Server{
-			Addr:    fmt.Sprintf(":%s", cfg.Port),
-			Handler: r,
+			Addr:              fmt.Sprintf(":%s", cfg.Port),
+			Handler:           r,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		}
 
 		// Enable HTTP/2
@@ -254,6 +265,10 @@ func main() {
 					}),
 					&http2.Server{},
 				),
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       15 * time.Second,
+				WriteTimeout:      15 * time.Second,
+				IdleTimeout:       60 * time.Second,
 			}
 			logger.Info("starting HTTP redirect server", zap.String("addr", redirectServer.Addr))
 			if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -262,8 +277,12 @@ func main() {
 		}()
 	} else {
 		srv = &http.Server{
-			Addr:    fmt.Sprintf(":%s", cfg.Port),
-			Handler: r,
+			Addr:              fmt.Sprintf(":%s", cfg.Port),
+			Handler:           r,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		}
 		// Enable h2c (HTTP/2 cleartext) if HTTP2 is enabled without TLS
 		if cfg.HTTP2Enabled {

@@ -206,9 +206,15 @@ func main() {
 	addr := fmt.Sprintf(":%s", cfg.Port)
 
 	// P0 修复 (R1.9): 使用 http.Server 包装 gin engine，支持优雅关闭
+	// P2 修复: 设置读写/空闲超时，防止 Slowloris 慢速连接耗尽连接池/Goroutine 造成 DoS。
+	// ReadHeaderTimeout 尤为关键 —— 它是防 Slowloris 的最有效手段（在读完请求头前就超时断开）。
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Graceful shutdown

@@ -17,22 +17,26 @@ mixin FlashcardMixin {
   /// 宿主类提供：检查 FFI 是否可用，不可用则抛 StateError
   void ffiCheckAvailable();
 
+  /// 宿主类提供：P0 架构修复 —— 引擎句柄，所有 FRB API 调用均需传入
+  BigInt get engineHandle;
+
   // ── 有 FRB 绑定的方法 ───────────────────────────────────
 
   Future<String> createDeck({required String name, required String description}) async {
     ffiCheckAvailable();
-    return rust.createDeck(name: name, description: description);
+    return rust.createDeck(engineHandle: engineHandle, name: name, description: description);
   }
 
   Future<String> reviewFlashcard({required String flashcardId, required int quality}) async {
     ffiCheckAvailable();
-    return rust.reviewFlashcard(flashcardId: flashcardId, quality: quality);
+    return rust.reviewFlashcard(engineHandle: engineHandle, flashcardId: flashcardId, quality: quality);
   }
 
   Future<String> getDueCards({required String deckId, int? limit}) async {
     ffiCheckAvailable();
     // FRB 生成的 getDueCards 期望 BigInt? 类型，需将 int? 转换
     return rust.getDueCards(
+      engineHandle: engineHandle,
       deckId: deckId,
       limit: limit != null ? BigInt.from(limit) : null,
     );

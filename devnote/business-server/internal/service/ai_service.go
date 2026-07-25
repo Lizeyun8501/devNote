@@ -154,40 +154,52 @@ func (p *OllamaProvider) Embeddings(model string, texts []string) ([]EmbeddingRe
 	results := make([]EmbeddingResponse, 0, len(texts))
 
 	for _, text := range texts {
-		reqBody := ollamaEmbedRequest{
-			Model: model,
-			Input: text,
-		}
-
-		data, err := json.Marshal(reqBody)
+		// P2 修复: 抽取为子函数，确保每次迭代的 resp.Body 在下一次迭代前被关闭，
+		// 避免循环内 defer 导致所有响应体堆积到函数结束才释放，造成连接池/文件描述符耗尽。
+		emb, err := p.embedOne(model, text)
 		if err != nil {
-			return nil, fmt.Errorf("marshal embed request: %w", err)
+			return nil, err
 		}
-
-		resp, err := p.httpClient.Post(
-			p.baseURL+"/api/embeddings",
-			"application/json",
-			bytes.NewReader(data),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("ollama embed request: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("ollama embed error %d: %s", resp.StatusCode, string(body))
-		}
-
-		var embedResp ollamaEmbedResponse
-		if err := json.NewDecoder(resp.Body).Decode(&embedResp); err != nil {
-			return nil, fmt.Errorf("decode embed response: %w", err)
-		}
-
-		results = append(results, EmbeddingResponse{Embedding: embedResp.Embedding})
+		results = append(results, emb)
 	}
 
 	return results, nil
+}
+
+// embedOne 对单条文本生成嵌入向量。
+// P2 修复: 独立函数使 defer resp.Body.Close() 在每次调用返回时立即执行。
+func (p *OllamaProvider) embedOne(model, text string) (EmbeddingResponse, error) {
+	reqBody := ollamaEmbedRequest{
+		Model: model,
+		Input: text,
+	}
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return EmbeddingResponse{}, fmt.Errorf("marshal embed request: %w", err)
+	}
+
+	resp, err := p.httpClient.Post(
+		p.baseURL+"/api/embeddings",
+		"application/json",
+		bytes.NewReader(data),
+	)
+	if err != nil {
+		return EmbeddingResponse{}, fmt.Errorf("ollama embed request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return EmbeddingResponse{}, fmt.Errorf("ollama embed error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var embedResp ollamaEmbedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&embedResp); err != nil {
+		return EmbeddingResponse{}, fmt.Errorf("decode embed response: %w", err)
+	}
+
+	return EmbeddingResponse{Embedding: embedResp.Embedding}, nil
 }
 
 // ListModels 列出可用模型

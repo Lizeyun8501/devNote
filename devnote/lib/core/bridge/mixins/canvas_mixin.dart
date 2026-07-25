@@ -18,36 +18,39 @@ mixin CanvasMixin {
   /// 宿主类提供：检查 FFI 是否可用，不可用则抛 StateError
   void ffiCheckAvailable();
 
+  /// 宿主类提供：P0 架构修复 —— 引擎句柄，所有 FRB API 调用均需传入
+  BigInt get engineHandle;
+
   // ── 有 FRB 绑定的方法 ───────────────────────────────────
 
   Future<void> canvasAddNode({required String canvasId, required String nodeJson}) async {
     ffiCheckAvailable();
-    await rust.canvasAddNode(canvasId: canvasId, nodeJson: nodeJson);
+    await rust.canvasAddNode(engineHandle: engineHandle, canvasId: canvasId, nodeJson: nodeJson);
   }
 
   Future<void> canvasRemoveNode({required String canvasId, required String nodeId}) async {
     ffiCheckAvailable();
-    await rust.canvasRemoveNode(canvasId: canvasId, nodeId: nodeId);
+    await rust.canvasRemoveNode(engineHandle: engineHandle, canvasId: canvasId, nodeId: nodeId);
   }
 
   Future<void> canvasAutoLayout({required String canvasId, required String layoutType}) async {
     ffiCheckAvailable();
-    await rust.canvasAutoLayout(canvasId: canvasId, layoutType: layoutType);
+    await rust.canvasAutoLayout(engineHandle: engineHandle, canvasId: canvasId, layoutType: layoutType);
   }
 
   Future<void> canvasAddEdge({required String canvasId, required String edgeJson}) async {
     ffiCheckAvailable();
-    await rust.canvasAddEdge(canvasId: canvasId, edgeJson: edgeJson);
+    await rust.canvasAddEdge(engineHandle: engineHandle, canvasId: canvasId, edgeJson: edgeJson);
   }
 
   Future<void> canvasSaveCanvas({required String canvasId, required String path}) async {
     ffiCheckAvailable();
-    await rust.canvasSaveCanvas(canvasId: canvasId, path: path);
+    await rust.canvasSaveCanvas(engineHandle: engineHandle, canvasId: canvasId, path: path);
   }
 
   Future<String> canvasLoadCanvas({required String path}) async {
     ffiCheckAvailable();
-    return rust.canvasLoadCanvas(path: path);
+    return rust.canvasLoadCanvas(engineHandle: engineHandle, path: path);
   }
 
   // ── 无 FRB 绑定的 stub 方法（返回降级结果）──────────

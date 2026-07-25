@@ -7,7 +7,9 @@ package handler
 
 import (
 	"encoding/json"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -29,6 +31,24 @@ type CRDTMessage struct {
 	Clock uint64 `json:"clock"`
 }
 
+// crdtConn 包装 websocket.Conn，附加独立写锁与心跳状态。
+//
+// P2 修复: gorilla/websocket 要求同一连接同时只能有一个 writer。
+// 原实现 BroadcastUpdate（遍历房间写）与 SendSyncResponse（读循环内写）
+// 可能并发写同一 conn，产生损坏的 WebSocket 帧。
+// 现为每个 conn 配备写锁，所有写操作经 writeMsg 串行化。
+type crdtConn struct {
+	conn *websocket.Conn
+	wmu  sync.Mutex
+}
+
+// writeMsg 串行化写入，防止并发写损坏 WebSocket 帧。
+func (c *crdtConn) writeMsg(messageType int, data []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	return c.conn.WriteMessage(messageType, data)
+}
+
 // CRDTHub 管理所有活跃 WebSocket 连接的 CRDT 同步中心
 //
 // 每个文档 (docID) 维护一个房间 (room)，房间内所有客户端通过 broadcast 接收更新。
@@ -36,11 +56,11 @@ type CRDTMessage struct {
 // 服务端同时持久化最新的 CRDT 状态快照，供新客户端接入时同步。
 type CRDTHub struct {
 	// rooms 文档 → 客户端连接集合
-	rooms map[string]map[*websocket.Conn]bool
+	rooms map[string]map[*crdtConn]bool
 	// docStates 文档 → 最新 CRDT 状态（base64 编码的二进制）
 	docStates map[string]string
 	// clientClocks 客户端 → 逻辑时钟
-	clientClocks map[*websocket.Conn]uint64
+	clientClocks map[*crdtConn]uint64
 	mu           sync.RWMutex
 	logger       *zap.Logger
 }
@@ -48,20 +68,20 @@ type CRDTHub struct {
 // NewCRDTHub 创建 CRDT 同步中心
 func NewCRDTHub(logger *zap.Logger) *CRDTHub {
 	return &CRDTHub{
-		rooms:        make(map[string]map[*websocket.Conn]bool),
+		rooms:        make(map[string]map[*crdtConn]bool),
 		docStates:    make(map[string]string),
-		clientClocks: make(map[*websocket.Conn]uint64),
+		clientClocks: make(map[*crdtConn]uint64),
 		logger:       logger,
 	}
 }
 
 // JoinRoom 客户端加入文档协作房间
-func (h *CRDTHub) JoinRoom(docID string, conn *websocket.Conn) {
+func (h *CRDTHub) JoinRoom(docID string, conn *crdtConn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.rooms[docID] == nil {
-		h.rooms[docID] = make(map[*websocket.Conn]bool)
+		h.rooms[docID] = make(map[*crdtConn]bool)
 	}
 	h.rooms[docID][conn] = true
 	h.logger.Info("client joined CRDT room",
@@ -70,7 +90,7 @@ func (h *CRDTHub) JoinRoom(docID string, conn *websocket.Conn) {
 }
 
 // LeaveRoom 客户端离开文档协作房间
-func (h *CRDTHub) LeaveRoom(docID string, conn *websocket.Conn) {
+func (h *CRDTHub) LeaveRoom(docID string, conn *crdtConn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -85,7 +105,7 @@ func (h *CRDTHub) LeaveRoom(docID string, conn *websocket.Conn) {
 }
 
 // BroadcastUpdate 向房间内除发送者外的所有客户端广播 CRDT 更新
-func (h *CRDTHub) BroadcastUpdate(docID string, sender *websocket.Conn, msg *CRDTMessage) {
+func (h *CRDTHub) BroadcastUpdate(docID string, sender *crdtConn, msg *CRDTMessage) {
 	h.mu.RLock()
 	room, exists := h.rooms[docID]
 	h.mu.RUnlock()
@@ -102,7 +122,7 @@ func (h *CRDTHub) BroadcastUpdate(docID string, sender *websocket.Conn, msg *CRD
 	}
 
 	h.mu.RLock()
-	clients := make([]*websocket.Conn, 0, len(room))
+	clients := make([]*crdtConn, 0, len(room))
 	for conn := range room {
 		if conn != sender {
 			clients = append(clients, conn)
@@ -110,24 +130,25 @@ func (h *CRDTHub) BroadcastUpdate(docID string, sender *websocket.Conn, msg *CRD
 	}
 	h.mu.RUnlock()
 
+	// P2 修复: 通过 crdtConn.writeMsg 串行化写入，避免并发写同一连接。
 	for _, conn := range clients {
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		if err := conn.writeMsg(websocket.TextMessage, data); err != nil {
 			h.logger.Warn("failed to broadcast CRDT update", zap.Error(err))
 		}
 	}
 }
 
 // SendSyncResponse 向新客户端发送当前文档的完整 CRDT 状态
-func (h *CRDTHub) SendSyncResponse(docID string, conn *websocket.Conn) {
+func (h *CRDTHub) SendSyncResponse(docID string, conn *crdtConn) {
 	h.mu.RLock()
 	state, hasState := h.docStates[docID]
 	h.mu.RUnlock()
 
 	msg := CRDTMessage{
-		Type:   "sync2",
-		DocID:  docID,
-		Data:   state,
-		Clock:  0,
+		Type:  "sync2",
+		DocID: docID,
+		Data:  state,
+		Clock: 0,
 	}
 
 	if !hasState {
@@ -141,7 +162,8 @@ func (h *CRDTHub) SendSyncResponse(docID string, conn *websocket.Conn) {
 		return
 	}
 
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	// P2 修复: 通过 writeMsg 串行化写入
+	if err := conn.writeMsg(websocket.TextMessage, data); err != nil {
 		h.logger.Warn("failed to send sync response", zap.Error(err))
 	}
 }
@@ -172,15 +194,37 @@ func (h *CRDTHub) RoomSize(docID string) int {
 
 // ── WebSocket 升级器 ──────────────────────────────────────────────────
 
-var upgrader = websocket.Upgrader{
+// crdtUpgrader CRDT 专用升级器。
+// P2 修复: 原实现 CheckOrigin 恒返回 true，存在 CSRF 风险。
+// 现复用 realtime_handler.go 的 allowedOrigins 白名单（由 main.go 通过
+// SetupCheckOrigin 注入配置），保持两个 WebSocket 端点 Origin 策略一致。
+var crdtUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// 允许所有来源（生产环境应限制为白名单域名）
-	CheckOrigin: func(r *gin.Context) bool {
-		// 生产环境应从配置读取允许的来源
-		return true
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		// 无 Origin 头（非浏览器客户端，如 curl）允许通过
+		if origin == "" {
+			return true
+		}
+		allowedOriginsMu.RLock()
+		defer allowedOriginsMu.RUnlock()
+		for _, allowed := range allowedOrigins {
+			if allowed == "*" || allowed == origin {
+				return true
+			}
+		}
+		return false
 	},
 }
+
+// CRDT 心跳常量。P2 修复: 原实现无 ReadDeadline，客户端静默断开时连接永久泄漏。
+// 借鉴 realtime_handler.go 的 pongWait/pingPeriod 模式。
+const (
+	crdtPongWait   = 60 * time.Second
+	crdtPingPeriod = 50 * time.Second
+	crdtWriteWait  = 10 * time.Second
+)
 
 // HandleCRDTWebSocket 处理 WebSocket CRDT 连接
 //
@@ -208,25 +252,52 @@ func HandleCRDTWebSocket(hub *CRDTHub) gin.HandlerFunc {
 			clientID = userID
 		}
 
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		conn, err := crdtUpgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			hub.logger.Error("failed to upgrade WebSocket", zap.Error(err))
 			return
 		}
-		defer conn.Close()
+		// P2 修复: 包装为 crdtConn 以获得 per-conn 写锁
+		cc := &crdtConn{conn: conn}
+		defer cc.conn.Close()
 
-		hub.JoinRoom(docID, conn)
-		defer hub.LeaveRoom(docID, conn)
+		hub.JoinRoom(docID, cc)
+		defer hub.LeaveRoom(docID, cc)
 
 		hub.logger.Info("CRDT WebSocket connection established",
-				zap.String("doc_id", docID),
-				zap.String("client_id", clientID))
+			zap.String("doc_id", docID),
+			zap.String("client_id", clientID))
 
 		// 发送初始同步状态
-		hub.SendSyncResponse(docID, conn)
+		hub.SendSyncResponse(docID, cc)
+
+		// P2 修复: 启动心跳 —— pong reader 设置 deadline，ping writer 周期发 ping。
+		// 客户端静默断开（Wi-Fi 掉线、进程被杀）时 ReadMessage 会因 deadline 超时而返回错误，
+		// 读循环退出，连接与 goroutine 被正确释放。
+		cc.conn.SetReadDeadline(time.Now().Add(crdtPongWait))
+		cc.conn.SetPongHandler(func(string) error {
+			cc.conn.SetReadDeadline(time.Now().Add(crdtPongWait))
+			return nil
+		})
+
+		// ping ticker
+		pingTicker := time.NewTicker(crdtPingPeriod)
+		defer pingTicker.Stop()
+		go func() {
+			for range pingTicker.C {
+				// ping 也需经写锁，避免与业务写并发
+				cc.wmu.Lock()
+				cc.conn.SetWriteDeadline(time.Now().Add(crdtWriteWait))
+				err := cc.conn.WriteMessage(websocket.PingMessage, nil)
+				cc.wmu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}()
 
 		for {
-			_, message, err := conn.ReadMessage()
+			_, message, err := cc.conn.ReadMessage()
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 					hub.logger.Warn("WebSocket read error", zap.Error(err))
@@ -245,11 +316,11 @@ func HandleCRDTWebSocket(hub *CRDTHub) gin.HandlerFunc {
 			switch msg.Type {
 			case "sync1":
 				// 客户端请求同步 → 发送完整状态
-				hub.SendSyncResponse(docID, conn)
+				hub.SendSyncResponse(docID, cc)
 
 			case "update":
 				// 客户端发送增量更新 → 广播给其他客户端
-				hub.BroadcastUpdate(docID, conn, &msg)
+				hub.BroadcastUpdate(docID, cc, &msg)
 				// 定期保存状态快照（每 N 次更新保存一次）
 				hub.SaveDocState(docID, msg.Data)
 

@@ -306,16 +306,16 @@ mod integration_tests {
         let mut doc = CRDTDocument::new("doc-1".to_string(), "device-a".to_string());
 
         // Insert
-        doc.insert_block("block-1".to_string(), 0, "Hello".to_string());
+        doc.insert_block("block-1".to_string(), 0, "Hello".to_string()).unwrap();
         assert_eq!(doc.active_blocks().len(), 1);
 
         // Replace
-        doc.replace_block("block-1".to_string(), "Hello".to_string(), "World".to_string());
+        doc.replace_block("block-1".to_string(), "Hello".to_string(), "World".to_string()).unwrap();
         let blocks = doc.active_blocks();
         assert_eq!(blocks[0].content, "World");
 
         // Delete (tombstone)
-        doc.delete_block("block-1".to_string());
+        doc.delete_block("block-1".to_string()).unwrap();
         assert_eq!(doc.active_blocks().len(), 0);
         assert!(doc.blocks.iter().any(|b| b.id == "block-1" && b.tombstone));
     }
@@ -325,10 +325,10 @@ mod integration_tests {
         use devnote_crdt::CRDTDocument;
 
         let mut doc1 = CRDTDocument::new("doc-merge".to_string(), "device-a".to_string());
-        doc1.insert_block("block-a".to_string(), 0, "Hello from A".to_string());
+        doc1.insert_block("block-a".to_string(), 0, "Hello from A".to_string()).unwrap();
 
         let mut doc2 = CRDTDocument::new("doc-merge".to_string(), "device-b".to_string());
-        let op = doc2.insert_block("block-b".to_string(), 0, "Hello from B".to_string());
+        let op = doc2.insert_block("block-b".to_string(), 0, "Hello from B".to_string()).unwrap();
 
         let result = doc1.merge(vec![op]);
         assert!(result.is_ok(), "merge should succeed");

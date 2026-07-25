@@ -136,7 +136,9 @@ func (s *EmailService) ProcessIncomingEmail(to, from, subject, textBody, htmlBod
 		},
 	}
 
-	if _, err := s.syncService.Push(alias.UserID, pushReq); err != nil {
+	// 修复: Push 在 P1 分页改造后新增 limit 参数（默认 100，最大 1000），
+	// 邮件创建笔记仅推送单条记录，传默认 100 不会截断。
+	if _, err := s.syncService.Push(alias.UserID, pushReq, 100); err != nil {
 		return fmt.Errorf("create note from email: %w", err)
 	}
 
