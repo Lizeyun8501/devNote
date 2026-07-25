@@ -130,23 +130,25 @@ $env:ORG_GRADLE_JAVA_HOME = $JavaHome  # Gradle 优先使用此变量
 
 # 清理 PATH 中所有其他 JDK 路径（避免 CMake 调用 Java 工具时找到错误的 JDK）
 # 已知冲突路径：D:\Software\002_DevelopmentTool\001_Java\jdk-16.0.2\bin
-$pathEntries = $env:PATH -split ';' | Where-Object { $_ }
+$javaHomeBin = "$JavaHome\bin"
 $cleanedPath = @()
-foreach ($entry in $pathEntries) {
-    $entryTrimmed = $entry.TrimEnd('\')
-    # 跳过非目标 JDK 的 bin 路径（保留 $JavaHome\bin）
-    if ($entryTrimmed -match '\\bin$' -and $entryTrimmed -notmatch [regex]::Escape("$JavaHome\bin")) {
-        # 检查该路径下是否有 java.exe（确认是 JDK bin）
-        if (Test-Path (Join-Path $entry 'java.exe')) {
-            Write-Host "      [PATH] Removing conflicting JDK: $entry" -ForegroundColor DarkGray
+foreach ($entry in ($env:PATH -split ';')) {
+    # 跳过空和空白条目
+    $trimmed = "$entry".Trim()
+    if (-not $trimmed) { continue }
+    # 跳过非目标 JDK 的 bin 路径（保留 $javaHomeBin）
+    if ($trimmed -match '\\bin$' -and $trimmed -ne $javaHomeBin) {
+        $javaCandidate = "$trimmed\java.exe"
+        if (Test-Path -LiteralPath $javaCandidate) {
+            Write-Host "      [PATH] Removing conflicting JDK: $trimmed" -ForegroundColor DarkGray
             continue
         }
     }
-    $cleanedPath += $entry
+    $cleanedPath += $trimmed
 }
 # 前置 JDK 21 bin（确保优先级最高）
-if ($cleanedPath -notcontains "$JavaHome\bin") {
-    $cleanedPath = @("$JavaHome\bin") + $cleanedPath
+if ($cleanedPath -notcontains $javaHomeBin) {
+    $cleanedPath = @($javaHomeBin) + $cleanedPath
 }
 $env:PATH = $cleanedPath -join ';'
 
