@@ -10,3 +10,19 @@ swapfile
 # 临时文件
 *.tmp
 *.bak
+
+# IDE / Editor 工作区产物
+.vs/
+.vscode/
+.idea/
+
+# TRAE IDE 工作产物（一次性 spec / 任务清单，非源码）
+.trae/
+
+# 本地插件副本（devnote/pubspec.yaml 的 dependency_overrides 指向本地 jni，
+# 此目录是构建期临时副本，不应纳入版本控制）
+devNote/plugins/
+
+# 一次性研究报告 / 架构对比文档（已删除，防止再次提交）
+devnote-architecture-comparison-report.md
+
