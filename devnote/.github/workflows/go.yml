@@ -6,23 +6,23 @@
 # - govulncheck: 已知漏洞扫描（Go Vulnerability Database）
 #
 # 覆盖两个 Go 服务:
-#   - sync-server/      同步服务
-#   - business-server/  业务服务
+#   - devnote/sync-server/      同步服务
+#   - devnote/business-server/  业务服务
 #
-# 触发条件: sync-server/、business-server/ 或本工作流文件变更时
+# 触发条件: devnote/sync-server/、devnote/business-server/ 或本工作流文件变更时
 name: Go CI
 
 on:
   push:
     branches: [main, develop]
     paths:
-      - 'sync-server/**'
-      - 'business-server/**'
+      - 'devnote/sync-server/**'
+      - 'devnote/business-server/**'
       - '.github/workflows/go.yml'
   pull_request:
     paths:
-      - 'sync-server/**'
-      - 'business-server/**'
+      - 'devnote/sync-server/**'
+      - 'devnote/business-server/**'
       - '.github/workflows/go.yml'
 
 jobs:
@@ -31,15 +31,15 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: sync-server
+        working-directory: devnote/sync-server
     steps:
       - uses: actions/checkout@v5
 
       - name: 安装 Go 工具链
         uses: actions/setup-go@v5
         with:
-          go-version-file: sync-server/go.mod
-          cache-dependency-path: sync-server/go.sum
+          go-version-file: devnote/sync-server/go.mod
+          cache-dependency-path: devnote/sync-server/go.sum
 
       - name: 下载依赖
         run: go mod download
@@ -55,22 +55,22 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: sync-server-coverage
-          path: sync-server/coverage.out
+          path: devnote/sync-server/coverage.out
 
   test-business:
     name: Test & Vet (business-server)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: business-server
+        working-directory: devnote/business-server
     steps:
       - uses: actions/checkout@v5
 
       - name: 安装 Go 工具链
         uses: actions/setup-go@v5
         with:
-          go-version-file: business-server/go.mod
-          cache-dependency-path: business-server/go.sum
+          go-version-file: devnote/business-server/go.mod
+          cache-dependency-path: devnote/business-server/go.sum
 
       - name: 下载依赖
         run: go mod download
@@ -86,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: business-server-coverage
-          path: business-server/coverage.out
+          path: devnote/business-server/coverage.out
 
   vulncheck:
     name: 漏洞扫描 (govulncheck)
@@ -95,7 +95,7 @@ jobs:
     # 已知漏洞可能被合入主干。现移除该设置，安全扫描失败将阻断 PR 合并。
     strategy:
       matrix:
-        server: [sync-server, business-server]
+        server: [devnote/sync-server, devnote/business-server]
     steps:
       - uses: actions/checkout@v5
 
