@@ -14,6 +14,7 @@ import 'package:devnote/features/notes/bloc/notes_event.dart';
 import 'package:devnote/features/notes/bloc/folder_bloc.dart';
 import 'package:devnote/features/notes/bloc/folder_event.dart';
 import 'package:devnote/features/notes/bloc/folder_state.dart';
+import 'package:devnote/features/notes/widgets/app_drawer.dart';
 import 'package:devnote/features/notes/widgets/folder_tree.dart';
 import 'package:devnote/features/notes/widgets/note_list.dart';
 import 'package:devnote/features/sync/bloc/sync_bloc.dart';
@@ -53,12 +54,24 @@ class NotesPage extends StatelessWidget {
         ),
       ],
       child: Scaffold(
-        body: Row(
-          children: [
-            const _DirectoryTreePanel(),
-            const VerticalDivider(width: 1),
-            Expanded(child: child),
-          ],
+        // 移动端通过 Scaffold.drawer 提供抽屉
+        drawer: const AppDrawer(),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final isMobile = constraints.maxWidth < AppConstants.mobileBreakpoint;
+            if (isMobile) {
+              // 移动端：仅显示右侧内容，左侧功能由抽屉承载
+              return child;
+            }
+            // 桌面端：双栏布局（左侧固定 + 右侧内容）
+            return Row(
+              children: [
+                const _DirectoryTreePanel(),
+                const VerticalDivider(width: 1),
+                Expanded(child: child),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -183,6 +196,9 @@ class NotesListPlaceholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 此处 context 的最近祖先 Scaffold 是外层 NotesPage 的 Scaffold
+    // （内层 Scaffold 尚未创建），故 Scaffold.of(context) 可用于打开外层 drawer
+    final isMobile = MediaQuery.sizeOf(context).width < AppConstants.mobileBreakpoint;
     return BlocListener<FolderBloc, FolderState>(
       listener: (context, folderState) {
         if (folderState is FolderLoaded && folderState.selectedFolderId != null) {
@@ -192,42 +208,56 @@ class NotesListPlaceholder extends StatelessWidget {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('笔记列表'),
-          actions: [
-            const SyncStatusWidget(),
-            Semantics(
-              label: 'Daily Notes',
-              hint: '打开每日笔记',
-              child: IconButton(
-                icon: const Icon(Icons.calendar_today),
-                onPressed: () => context.go('/daily-notes'),
-              ),
-            ),
-            Semantics(
-              label: '搜索笔记',
-              hint: '搜索你的笔记',
-              child: IconButton(
-                icon: const Icon(Icons.search),
-                onPressed: () => context.go('/search'),
-              ),
-            ),
-            // P2-5: 全局待办/提醒系统入口
-            Semantics(
-              label: '待办',
-              hint: '打开全局待办列表',
-              child: IconButton(
-                icon: const Icon(Icons.checklist),
-                onPressed: () => context.go('/todo'),
-              ),
-            ),
-            Semantics(
-              label: '设置',
-              hint: '打开设置页面',
-              child: IconButton(
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: () => context.go('/settings'),
-              ),
-            ),
-          ],
+          // 移动端：菜单按钮触发外层 Scaffold 的 drawer
+          leading: isMobile
+              ? Semantics(
+                  label: '打开导航抽屉',
+                  hint: '打开左侧导航菜单',
+                  child: IconButton(
+                    icon: const Icon(Icons.menu),
+                    onPressed: () => Scaffold.of(context).openDrawer(),
+                  ),
+                )
+              : null,
+          // 移动端：Daily Notes/Search/Todo/Settings 已迁移到抽屉，仅保留同步状态
+          actions: isMobile
+              ? const [SyncStatusWidget()]
+              : [
+                  const SyncStatusWidget(),
+                  Semantics(
+                    label: 'Daily Notes',
+                    hint: '打开每日笔记',
+                    child: IconButton(
+                      icon: const Icon(Icons.calendar_today),
+                      onPressed: () => context.go('/daily-notes'),
+                    ),
+                  ),
+                  Semantics(
+                    label: '搜索笔记',
+                    hint: '搜索你的笔记',
+                    child: IconButton(
+                      icon: const Icon(Icons.search),
+                      onPressed: () => context.go('/search'),
+                    ),
+                  ),
+                  // P2-5: 全局待办/提醒系统入口
+                  Semantics(
+                    label: '待办',
+                    hint: '打开全局待办列表',
+                    child: IconButton(
+                      icon: const Icon(Icons.checklist),
+                      onPressed: () => context.go('/todo'),
+                    ),
+                  ),
+                  Semantics(
+                    label: '设置',
+                    hint: '打开设置页面',
+                    child: IconButton(
+                      icon: const Icon(Icons.settings_outlined),
+                      onPressed: () => context.go('/settings'),
+                    ),
+                  ),
+                ],
         ),
         body: const NoteList(),
         floatingActionButton: Semantics(

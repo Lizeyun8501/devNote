@@ -17,6 +17,11 @@ class AppConstants {
   static const double sidebarMaxWidth = 400.0;
   static const double editorMinWidth = 400.0;
 
+  // 响应式布局断点：< 600 走移动端抽屉模式，>= 600 走桌面双栏模式
+  static const double mobileBreakpoint = 600.0;
+  // 移动端抽屉宽度：屏幕宽 80%，上限 304dp（Material 规范）
+  static const double drawerWidthMobile = 304.0;
+
   static const int maxRecentNotes = 10;
   static const int maxAutoSaveInterval = 30;
 }
